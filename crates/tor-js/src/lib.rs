@@ -23,7 +23,7 @@
 //!
 //! // Make a fetch request through Tor
 //! const response = await client.fetch('https://check.torproject.org/api/ip');
-//! console.log(response.text());
+//! console.log(await response.text());
 //!
 //! // Clean up
 //! await client.close();
@@ -38,7 +38,6 @@ mod storage;
 pub use storage::{JsStorage, JsStorageInterface, CachedJsStorage};
 
 use error::JsTorError;
-use fetch::HttpResponse;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -560,12 +559,12 @@ async fn fetch_impl(
 
     debug!("Connected, making HTTP request...");
 
-    // Perform the HTTP request
-    let response = fetch::fetch(stream, &url, method, headers, body, is_https, host, ca_bundle_wait)
+    // Perform the HTTP request — resolves as soon as headers arrive
+    let result = fetch::fetch_headers(stream, &url, method, headers, body, is_https, host, ca_bundle_wait)
         .await
         .map_err(|e| e.into_js_value())?;
 
-    Ok(JsHttpResponse::from(response))
+    Ok(JsHttpResponse::from_headers(result))
 }
 
 /// Extract body from JavaScript FetchInit object
@@ -606,34 +605,109 @@ fn extract_body_from_js(init: &JsValue) -> Result<Option<Vec<u8>>, JsValue> {
 // JsHttpResponse
 // ============================================================================
 
-/// HTTP response exposed to JavaScript
-#[wasm_bindgen]
-pub struct JsHttpResponse {
-    status: u16,
-    headers: JsValue,
-    body: Vec<u8>,
-    url: String,
+/// Body state for deferred body reading.
+enum BodyState {
+    /// Body not yet read; reader is available.
+    Unread(fetch::BodyReader),
+    /// Body is currently being read by an in-progress call.
+    Reading,
+    /// Body has been read and cached.
+    Read(Vec<u8>),
+    /// Body reading failed.
+    Error(String),
 }
 
-impl From<HttpResponse> for JsHttpResponse {
-    fn from(response: HttpResponse) -> Self {
-        let headers = serde_wasm_bindgen::to_value(&response.headers)
-            .unwrap_or_else(|_| JsValue::from(js_sys::Object::new()));
-        Self {
-            status: response.status,
-            headers,
-            body: response.body,
-            url: response.url.to_string(),
+/// Read the body, transitioning the state machine.
+/// Second calls return the cached result. Concurrent calls error.
+async fn read_body(state: &Rc<RefCell<BodyState>>) -> Result<Vec<u8>, JsValue> {
+    // Check current state
+    {
+        let borrow = state.borrow();
+        match &*borrow {
+            BodyState::Read(bytes) => return Ok(bytes.clone()),
+            BodyState::Reading => {
+                return Err(JsTorError::new(
+                    "BODY_IN_USE",
+                    "state",
+                    "Body is already being read",
+                    false,
+                )
+                .into_js_value());
+            }
+            BodyState::Error(msg) => {
+                return Err(JsTorError::new(
+                    "BODY_READ_ERROR",
+                    "network",
+                    msg.clone(),
+                    false,
+                )
+                .into_js_value());
+            }
+            BodyState::Unread(_) => {} // proceed below
+        }
+    }
+
+    // Take the reader out, transition to Reading
+    let mut reader = {
+        let mut borrow = state.borrow_mut();
+        let old = std::mem::replace(&mut *borrow, BodyState::Reading);
+        match old {
+            BodyState::Unread(r) => r,
+            _ => unreachable!(),
+        }
+    };
+
+    // Read body (this is the async part)
+    match reader.read_all().await {
+        Ok(bytes) => {
+            *state.borrow_mut() = BodyState::Read(bytes.clone());
+            Ok(bytes)
+        }
+        Err(e) => {
+            *state.borrow_mut() = BodyState::Error(e.to_string());
+            Err(e.into_js_value())
         }
     }
 }
 
+/// HTTP response exposed to JavaScript.
+///
+/// Matches the standard fetch() Response API:
+/// - `status`, `ok`, `headers`, `url` are available immediately
+/// - `text()`, `json()`, `arrayBuffer()` return Promises that read the body
 #[wasm_bindgen]
+pub struct JsHttpResponse {
+    status: u16,
+    headers: JsValue,
+    url: String,
+    body_state: Rc<RefCell<BodyState>>,
+}
+
+impl JsHttpResponse {
+    fn from_headers(result: fetch::FetchHeadersResult) -> Self {
+        let headers = serde_wasm_bindgen::to_value(&result.headers)
+            .unwrap_or_else(|_| JsValue::from(js_sys::Object::new()));
+        Self {
+            status: result.status,
+            headers,
+            url: result.url.to_string(),
+            body_state: Rc::new(RefCell::new(BodyState::Unread(result.body_reader))),
+        }
+    }
+}
+
+#[wasm_bindgen(skip_typescript)]
 impl JsHttpResponse {
     /// HTTP status code
     #[wasm_bindgen(getter)]
     pub fn status(&self) -> u16 {
         self.status
+    }
+
+    /// True if status is 200-299
+    #[wasm_bindgen(getter)]
+    pub fn ok(&self) -> bool {
+        (200..300).contains(&self.status)
     }
 
     /// Response headers as an object
@@ -642,31 +716,62 @@ impl JsHttpResponse {
         self.headers.clone()
     }
 
-    /// Response body as Uint8Array
-    #[wasm_bindgen(getter)]
-    pub fn body(&self) -> Vec<u8> {
-        self.body.clone()
-    }
-
     /// Final URL (after any redirects)
     #[wasm_bindgen(getter)]
     pub fn url(&self) -> String {
         self.url.clone()
     }
 
-    /// Get response body as text (UTF-8)
-    #[wasm_bindgen(js_name = text)]
-    pub fn text(&self) -> Result<String, JsValue> {
-        String::from_utf8(self.body.clone())
-            .map_err(|e| JsTorError::new("INVALID_UTF8", "parse", e.to_string(), false).into_js_value())
+    /// Whether the body has been consumed
+    #[wasm_bindgen(getter, js_name = bodyUsed)]
+    pub fn body_used(&self) -> bool {
+        matches!(
+            &*self.body_state.borrow(),
+            BodyState::Read(_) | BodyState::Error(_)
+        )
     }
 
-    /// Get response body as parsed JSON
+    /// Get response body as text (UTF-8). Returns a Promise<string>.
+    #[wasm_bindgen(js_name = text)]
+    pub fn text(&self) -> js_sys::Promise {
+        let state = Rc::clone(&self.body_state);
+        wasm_bindgen_futures::future_to_promise(async move {
+            let bytes = read_body(&state).await?;
+            String::from_utf8(bytes)
+                .map(|s| JsValue::from_str(&s))
+                .map_err(|e| {
+                    JsTorError::new("INVALID_UTF8", "parse", e.to_string(), false)
+                        .into_js_value()
+                })
+        })
+    }
+
+    /// Get response body as parsed JSON. Returns a Promise<any>.
     #[wasm_bindgen(js_name = json)]
-    pub fn json(&self) -> Result<JsValue, JsValue> {
-        let text = self.text()?;
-        js_sys::JSON::parse(&text)
-            .map_err(|e| JsTorError::new("INVALID_JSON", "parse", format!("{:?}", e), false).into_js_value())
+    pub fn json(&self) -> js_sys::Promise {
+        let state = Rc::clone(&self.body_state);
+        wasm_bindgen_futures::future_to_promise(async move {
+            let bytes = read_body(&state).await?;
+            let text = String::from_utf8(bytes).map_err(|e| {
+                JsTorError::new("INVALID_UTF8", "parse", e.to_string(), false)
+                    .into_js_value()
+            })?;
+            js_sys::JSON::parse(&text).map_err(|e| {
+                JsTorError::new("INVALID_JSON", "parse", format!("{:?}", e), false)
+                    .into_js_value()
+            })
+        })
+    }
+
+    /// Get response body as Uint8Array. Returns a Promise<Uint8Array>.
+    #[wasm_bindgen(js_name = arrayBuffer)]
+    pub fn array_buffer(&self) -> js_sys::Promise {
+        let state = Rc::clone(&self.body_state);
+        wasm_bindgen_futures::future_to_promise(async move {
+            let bytes = read_body(&state).await?;
+            let arr = js_sys::Uint8Array::from(&bytes[..]);
+            Ok(arr.into())
+        })
     }
 }
 
@@ -761,6 +866,25 @@ export interface FetchInit {
     headers?: Record<string, string>;
     body?: string | Uint8Array | ArrayBuffer;
     // TODO: signal?: AbortSignal;
+}
+
+export interface JsHttpResponse {
+    /** HTTP status code */
+    readonly status: number;
+    /** True if status is 200-299 */
+    readonly ok: boolean;
+    /** Response headers as an object */
+    readonly headers: Record<string, string>;
+    /** Final URL (after any redirects) */
+    readonly url: string;
+    /** Whether the body has been consumed */
+    readonly bodyUsed: boolean;
+    /** Get response body as text (UTF-8) */
+    text(): Promise<string>;
+    /** Get response body as parsed JSON */
+    json(): Promise<any>;
+    /** Get response body as Uint8Array */
+    arrayBuffer(): Promise<Uint8Array>;
 }
 
 export interface TorClient {

@@ -81,7 +81,7 @@ async function main() {
   console.log(`Connect time: ${connectTime}s`);
   console.log(`Fetch time: ${fetchTime}s`);
   console.log('Response:');
-  console.log(response.text());
+  console.log(await response.text());
 }
 
 async function setup() {

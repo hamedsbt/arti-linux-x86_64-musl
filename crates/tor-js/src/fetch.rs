@@ -2,6 +2,9 @@
 //!
 //! This module implements HTTP/1.1 requests over Tor streams,
 //! with TLS support via subtle-tls for HTTPS.
+//!
+//! The fetch resolves as soon as response headers are received.
+//! Body reading is deferred to async methods on the response object.
 
 use crate::error::JsTorError;
 use futures::io::{AsyncReadExt, AsyncWriteExt};
@@ -10,19 +13,253 @@ use std::collections::HashMap;
 use tracing::{debug, info, warn};
 use url::Url;
 
-/// HTTP response from a fetch request
-#[derive(Debug, Clone)]
-pub struct HttpResponse {
-    pub status: u16,
-    pub headers: HashMap<String, String>,
-    pub body: Vec<u8>,
-    pub url: Url,
+/// Maximum response header size (64KB)
+const MAX_HEADER_SIZE: usize = 64 * 1024;
+
+/// Maximum response body size (1MB)
+const MAX_BODY_SIZE: usize = 64 * 1024 * 1024;
+
+/// Type-erased async reader for the response body stream.
+pub type BoxedReader = Box<dyn futures::io::AsyncRead + Unpin>;
+
+/// How the response body is framed.
+pub enum BodyFraming {
+    /// Content-Length header present: read exactly N bytes.
+    ContentLength(usize),
+    /// Transfer-Encoding: chunked.
+    Chunked,
+    /// No framing info: read until EOF (Connection: close).
+    UntilEof,
+    /// No body expected (HEAD response, 204, 304, 1xx).
+    None,
 }
 
-impl HttpResponse {
-    pub fn text(&self) -> Result<String, JsTorError> {
-        String::from_utf8(self.body.clone())
-            .map_err(|e| JsTorError::new("INVALID_UTF8", "parse", e.to_string(), false))
+/// Result of the header phase of a fetch request.
+pub struct FetchHeadersResult {
+    pub status: u16,
+    pub headers: HashMap<String, String>,
+    pub url: Url,
+    pub body_reader: BodyReader,
+}
+
+/// Reads the HTTP response body from a stream.
+///
+/// Created after headers are parsed, holds the stream and any overflow
+/// bytes that were read past the header separator.
+pub struct BodyReader {
+    stream: BoxedReader,
+    framing: BodyFraming,
+    /// Bytes already read past \r\n\r\n during header parsing.
+    buffer: Vec<u8>,
+    done: bool,
+}
+
+impl BodyReader {
+    pub fn new(stream: BoxedReader, framing: BodyFraming, overflow: Vec<u8>) -> Self {
+        Self {
+            stream,
+            framing,
+            buffer: overflow,
+            done: false,
+        }
+    }
+
+    /// Read the entire remaining body. Enforces the 1MB size limit.
+    pub async fn read_all(&mut self) -> Result<Vec<u8>, JsTorError> {
+        if self.done {
+            return Ok(Vec::new());
+        }
+        self.done = true;
+
+        match &self.framing {
+            BodyFraming::None => Ok(Vec::new()),
+            BodyFraming::ContentLength(len) => self.read_content_length(*len).await,
+            BodyFraming::Chunked => self.read_chunked().await,
+            BodyFraming::UntilEof => self.read_until_eof().await,
+        }
+    }
+
+    /// Read exactly `len` bytes of body (Content-Length framing).
+    async fn read_content_length(&mut self, len: usize) -> Result<Vec<u8>, JsTorError> {
+        if len > MAX_BODY_SIZE {
+            return Err(JsTorError::http_request(format!(
+                "Content-Length {} exceeds {}MB limit",
+                len,
+                MAX_BODY_SIZE / (1024 * 1024)
+            )));
+        }
+
+        let mut body = std::mem::take(&mut self.buffer);
+
+        // Already have enough from overflow?
+        if body.len() >= len {
+            body.truncate(len);
+            return Ok(body);
+        }
+
+        body.reserve(len - body.len());
+        let mut buf = [0u8; 8192];
+
+        while body.len() < len {
+            match self.stream.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    let take = std::cmp::min(n, len - body.len());
+                    body.extend_from_slice(&buf[..take]);
+                }
+                Err(e) => {
+                    if body.is_empty() {
+                        return Err(JsTorError::http_request(format!(
+                            "Failed to read body: {}",
+                            e
+                        )));
+                    }
+                    debug!("Read ended with error (may be normal close): {}", e);
+                    break;
+                }
+            }
+        }
+
+        Ok(body)
+    }
+
+    /// Read body until EOF (no Content-Length or chunked framing).
+    async fn read_until_eof(&mut self) -> Result<Vec<u8>, JsTorError> {
+        let mut body = std::mem::take(&mut self.buffer);
+        let mut buf = [0u8; 8192];
+
+        loop {
+            match self.stream.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    body.extend_from_slice(&buf[..n]);
+                    if body.len() > MAX_BODY_SIZE {
+                        warn!("Response exceeds {}MB limit, truncating", MAX_BODY_SIZE / (1024 * 1024));
+                        body.truncate(MAX_BODY_SIZE);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if body.is_empty() {
+                        return Err(JsTorError::http_request(format!(
+                            "Failed to read body: {}",
+                            e
+                        )));
+                    }
+                    debug!("Read ended with error (may be normal close): {}", e);
+                    break;
+                }
+            }
+        }
+
+        Ok(body)
+    }
+
+    /// Read chunked transfer-encoded body incrementally from the stream.
+    async fn read_chunked(&mut self) -> Result<Vec<u8>, JsTorError> {
+        let mut input = std::mem::take(&mut self.buffer);
+        let mut output = Vec::new();
+        let mut buf = [0u8; 8192];
+
+        // State machine for chunked decoding
+        enum State {
+            ReadingSize,
+            ReadingData { remaining: usize },
+            ReadingTrailingCrlf,
+        }
+
+        let mut state = State::ReadingSize;
+
+        loop {
+            match state {
+                State::ReadingSize => {
+                    // Look for \r\n to get chunk size line
+                    if let Some(pos) = find_crlf(&input) {
+                        let size_str = std::str::from_utf8(&input[..pos])
+                            .map_err(|_| {
+                                JsTorError::http_request("Chunk size line is not valid UTF-8")
+                            })?;
+                        let size_str = size_str.split(';').next().unwrap_or("").trim();
+
+                        if size_str.is_empty() {
+                            // Skip empty lines
+                            input.drain(..pos + 2);
+                            continue;
+                        }
+
+                        let size = usize::from_str_radix(size_str, 16).map_err(|e| {
+                            JsTorError::http_request(format!(
+                                "Invalid chunk size '{}': {}",
+                                size_str, e
+                            ))
+                        })?;
+
+                        input.drain(..pos + 2);
+
+                        if size == 0 {
+                            break; // Terminal chunk
+                        }
+
+                        state = State::ReadingData { remaining: size };
+                    } else {
+                        // Need more data
+                        let n = self.read_more(&mut buf).await?;
+                        if n == 0 {
+                            break; // EOF
+                        }
+                        input.extend_from_slice(&buf[..n]);
+                    }
+                }
+                State::ReadingData { remaining } => {
+                    if !input.is_empty() {
+                        let take = std::cmp::min(input.len(), remaining);
+                        output.extend_from_slice(&input[..take]);
+                        input.drain(..take);
+                        let new_remaining = remaining - take;
+                        if new_remaining == 0 {
+                            state = State::ReadingTrailingCrlf;
+                        } else {
+                            state = State::ReadingData {
+                                remaining: new_remaining,
+                            };
+                        }
+                    } else {
+                        let n = self.read_more(&mut buf).await?;
+                        if n == 0 {
+                            break; // Unexpected EOF
+                        }
+                        input.extend_from_slice(&buf[..n]);
+                    }
+
+                    if output.len() > MAX_BODY_SIZE {
+                        warn!("Chunked response exceeds {}MB limit", MAX_BODY_SIZE / (1024 * 1024));
+                        output.truncate(MAX_BODY_SIZE);
+                        break;
+                    }
+                }
+                State::ReadingTrailingCrlf => {
+                    if input.len() >= 2 {
+                        input.drain(..2);
+                        state = State::ReadingSize;
+                    } else {
+                        let n = self.read_more(&mut buf).await?;
+                        if n == 0 {
+                            break; // EOF
+                        }
+                        input.extend_from_slice(&buf[..n]);
+                    }
+                }
+            }
+        }
+
+        Ok(output)
+    }
+
+    /// Read more bytes from the stream into the buffer.
+    async fn read_more(&mut self, buf: &mut [u8]) -> Result<usize, JsTorError> {
+        self.stream.read(buf).await.map_err(|e| {
+            JsTorError::http_request(format!("Failed to read response: {}", e))
+        })
     }
 }
 
@@ -84,8 +321,16 @@ pub fn build_http_request(
     bytes
 }
 
-/// Execute an HTTP request over a stream and return the response bytes
-pub async fn execute_http_request<S>(mut stream: S, request_bytes: &[u8]) -> Result<Vec<u8>, JsTorError>
+/// Write the HTTP request and read response headers.
+///
+/// Returns the parsed status/headers, the body framing mode, and any overflow
+/// bytes read past the `\r\n\r\n` header separator. The stream is borrowed
+/// mutably so the caller retains ownership for body reading.
+async fn send_request_and_read_headers<S>(
+    stream: &mut S,
+    request_bytes: &[u8],
+    method: &Method,
+) -> Result<(u16, HashMap<String, String>, BodyFraming, Vec<u8>), JsTorError>
 where
     S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin,
 {
@@ -99,49 +344,47 @@ where
         .await
         .map_err(|e| JsTorError::http_request(format!("Failed to flush request: {}", e)))?;
 
-    // Read the response
-    let mut response_bytes = Vec::new();
+    // Read until we find \r\n\r\n (header/body separator)
+    let mut header_buf = Vec::new();
     let mut buf = [0u8; 8192];
+    let header_end;
 
     loop {
         match stream.read(&mut buf).await {
-            Ok(0) => break, // EOF
+            Ok(0) => {
+                return Err(JsTorError::http_request(
+                    "Connection closed before headers received",
+                ));
+            }
             Ok(n) => {
-                response_bytes.extend_from_slice(&buf[..n]);
-                debug!("Read {} bytes (total: {})", n, response_bytes.len());
+                header_buf.extend_from_slice(&buf[..n]);
 
-                // Limit response size to 1MB for safety
-                if response_bytes.len() > 1024 * 1024 {
-                    warn!("Response exceeds 1MB limit, truncating");
+                if let Some(pos) = find_subsequence(&header_buf, b"\r\n\r\n") {
+                    header_end = pos;
                     break;
+                }
+
+                if header_buf.len() > MAX_HEADER_SIZE {
+                    return Err(JsTorError::http_request(format!(
+                        "Response headers exceed {}KB limit",
+                        MAX_HEADER_SIZE / 1024
+                    )));
                 }
             }
             Err(e) => {
-                if response_bytes.is_empty() {
-                    return Err(JsTorError::http_request(format!(
-                        "Failed to read response: {}",
-                        e
-                    )));
-                }
-                // We have some data, maybe connection was closed
-                debug!("Read ended with error (may be normal close): {}", e);
-                break;
+                return Err(JsTorError::http_request(format!(
+                    "Failed to read response headers: {}",
+                    e
+                )));
             }
         }
     }
 
-    Ok(response_bytes)
-}
+    // Split headers from overflow body bytes
+    let header_bytes = &header_buf[..header_end];
+    let overflow = header_buf[header_end + 4..].to_vec();
 
-/// Parse raw HTTP response bytes into HttpResponse
-pub fn parse_http_response(data: &[u8], url: Url) -> Result<HttpResponse, JsTorError> {
-    // Find the header/body separator
-    let header_end = find_subsequence(data, b"\r\n\r\n")
-        .ok_or_else(|| JsTorError::http_request("Invalid HTTP response: no header separator"))?;
-
-    let header_bytes = &data[..header_end];
-    let body = data[header_end + 4..].to_vec();
-
+    // Parse headers
     let header_str = std::str::from_utf8(header_bytes)
         .map_err(|e| JsTorError::http_request(format!("Invalid HTTP headers: {}", e)))?;
 
@@ -161,7 +404,6 @@ pub fn parse_http_response(data: &[u8], url: Url) -> Result<HttpResponse, JsTorE
         .parse()
         .map_err(|e| JsTorError::http_request(format!("Invalid status code: {}", e)))?;
 
-    // Parse headers
     let mut headers = HashMap::new();
     for line in lines {
         if let Some((key, value)) = line.split_once(':') {
@@ -169,150 +411,46 @@ pub fn parse_http_response(data: &[u8], url: Url) -> Result<HttpResponse, JsTorE
         }
     }
 
-    // Decode body based on Transfer-Encoding or Content-Length
-    let mut decoded_body = body;
-
-    let is_chunked = headers
+    // Determine body framing
+    let framing = if *method == Method::HEAD
+        || status == 204
+        || status == 304
+        || (100..200).contains(&status)
+    {
+        BodyFraming::None
+    } else if headers
         .get("transfer-encoding")
         .map(|te| te.to_ascii_lowercase().contains("chunked"))
-        .unwrap_or(false);
-
-    if is_chunked {
-        debug!("Decoding chunked transfer-encoding");
-        decoded_body = decode_chunked_body(&decoded_body)
-            .map_err(|e| JsTorError::http_request(format!("Failed to decode chunked body: {}", e)))?;
+        .unwrap_or(false)
+    {
+        debug!("Body framing: chunked");
+        BodyFraming::Chunked
     } else if let Some(cl) = headers.get("content-length") {
-        if let Ok(len) = cl.parse::<usize>() {
-            if decoded_body.len() > len {
-                debug!(
-                    "Body longer than Content-Length ({} > {}), truncating",
-                    decoded_body.len(),
-                    len
-                );
-                decoded_body.truncate(len);
-            }
-        }
-    }
+        let len: usize = cl
+            .parse()
+            .map_err(|e| JsTorError::http_request(format!("Invalid content-length: {}", e)))?;
+        debug!("Body framing: content-length {}", len);
+        BodyFraming::ContentLength(len)
+    } else {
+        debug!("Body framing: read until EOF");
+        BodyFraming::UntilEof
+    };
 
     debug!(
-        "Parsed response: status={}, headers={}, body_len={}",
+        "Parsed response headers: status={}, headers={}, overflow_bytes={}",
         status,
         headers.len(),
-        decoded_body.len()
+        overflow.len()
     );
 
-    Ok(HttpResponse {
-        status,
-        headers,
-        body: decoded_body,
-        url,
-    })
+    Ok((status, headers, framing, overflow))
 }
 
-/// Find the position of a subsequence in a byte slice
-fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-/// Decode a chunked transfer-encoded body into plain bytes
-fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>, String> {
-    let mut result = Vec::new();
-    let mut i = 0;
-
-    loop {
-        // Skip any leading whitespace/CRLF
-        while i < body.len() && (body[i] == b'\r' || body[i] == b'\n' || body[i] == b' ') {
-            i += 1;
-        }
-
-        if i >= body.len() {
-            break;
-        }
-
-        // Find end of chunk-size line
-        let line_start = i;
-        let mut line_end_opt = None;
-        while i + 1 < body.len() {
-            if body[i] == b'\r' && body[i + 1] == b'\n' {
-                line_end_opt = Some(i);
-                break;
-            }
-            i += 1;
-        }
-        let line_end = match line_end_opt {
-            Some(end) => end,
-            None => {
-                if !result.is_empty() {
-                    debug!("Incomplete chunk size line, returning partial result");
-                    break;
-                }
-                return Err("Incomplete chunk size line".into());
-            }
-        };
-
-        let line = &body[line_start..line_end];
-
-        // Parse hex size, ignoring any ";extensions"
-        let size_str = match std::str::from_utf8(line) {
-            Ok(s) => s.split(';').next().unwrap_or("").trim(),
-            Err(_) => return Err("Chunk size line is not valid UTF-8".into()),
-        };
-
-        if size_str.is_empty() {
-            i = line_end + 2;
-            continue;
-        }
-
-        let size = match usize::from_str_radix(size_str, 16) {
-            Ok(s) => s,
-            Err(e) => {
-                if !result.is_empty() {
-                    debug!(
-                        "Failed to parse chunk size '{}', returning partial result: {}",
-                        size_str, e
-                    );
-                    break;
-                }
-                return Err(format!("Invalid chunk size '{}': {}", size_str, e));
-            }
-        };
-
-        // Move past "\r\n"
-        i = line_end + 2;
-
-        // Size 0 means end of chunks
-        if size == 0 {
-            break;
-        }
-
-        // Ensure enough bytes for this chunk
-        if i + size > body.len() {
-            let available = body.len() - i;
-            debug!(
-                "Chunk extends beyond body length (need {}, have {}), taking available",
-                size, available
-            );
-            result.extend_from_slice(&body[i..]);
-            break;
-        }
-
-        // Copy chunk bytes
-        result.extend_from_slice(&body[i..i + size]);
-        i += size;
-
-        // Each chunk is followed by "\r\n"
-        if i + 1 < body.len() && body[i] == b'\r' && body[i + 1] == b'\n' {
-            i += 2;
-        }
-    }
-
-    Ok(result)
-}
-
-/// Perform an HTTP fetch over a Tor DataStream
-pub async fn fetch<S>(
+/// Perform an HTTP fetch over a Tor stream, resolving as soon as headers arrive.
+///
+/// The returned `FetchHeadersResult` contains parsed headers and a `BodyReader`
+/// that can be used to read the body asynchronously.
+pub async fn fetch_headers<S>(
     stream: S,
     url: &Url,
     method: Method,
@@ -321,14 +459,14 @@ pub async fn fetch<S>(
     is_https: bool,
     host: &str,
     ca_bundle_wait: Option<std::rc::Rc<subtle_tls::ReadySignal>>,
-) -> Result<HttpResponse, JsTorError>
+) -> Result<FetchHeadersResult, JsTorError>
 where
-    S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin + Send + 'static,
+    S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin + 'static,
 {
     let request_bytes = build_http_request(url, &method, &headers, body.as_deref());
     debug!("Sending {} bytes of HTTP request", request_bytes.len());
 
-    let response_bytes = if is_https {
+    if is_https {
         use subtle_tls::{TlsConfig, TlsStream};
 
         let config = TlsConfig {
@@ -342,14 +480,49 @@ where
             .map_err(|e| {
                 JsTorError::tls(format!("TLS handshake failed with {}: {}", host, e))
             })?;
-        info!("TLS 1.3 connection established with {} (WASM/SubtleCrypto)", host);
+        info!(
+            "TLS 1.3 connection established with {} (WASM/SubtleCrypto)",
+            host
+        );
 
-        execute_http_request(&mut tls_stream, &request_bytes).await?
+        let (status, resp_headers, framing, overflow) =
+            send_request_and_read_headers(&mut tls_stream, &request_bytes, &method).await?;
+
+        info!("Received response headers: status={}", status);
+
+        let reader: BoxedReader = Box::new(tls_stream);
+        Ok(FetchHeadersResult {
+            status,
+            headers: resp_headers,
+            url: url.clone(),
+            body_reader: BodyReader::new(reader, framing, overflow),
+        })
     } else {
-        execute_http_request(stream, &request_bytes).await?
-    };
+        let mut stream = stream;
 
-    info!("Received {} bytes of HTTP response", response_bytes.len());
+        let (status, resp_headers, framing, overflow) =
+            send_request_and_read_headers(&mut stream, &request_bytes, &method).await?;
 
-    parse_http_response(&response_bytes, url.clone())
+        info!("Received response headers: status={}", status);
+
+        let reader: BoxedReader = Box::new(stream);
+        Ok(FetchHeadersResult {
+            status,
+            headers: resp_headers,
+            url: url.clone(),
+            body_reader: BodyReader::new(reader, framing, overflow),
+        })
+    }
+}
+
+/// Find the position of a subsequence in a byte slice
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// Find the position of \r\n in a byte slice
+fn find_crlf(data: &[u8]) -> Option<usize> {
+    find_subsequence(data, b"\r\n")
 }

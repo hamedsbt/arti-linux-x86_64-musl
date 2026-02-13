@@ -781,7 +781,7 @@
                         const response = await torClient.fetch(url);
                         const fetchTime = ((performance.now() - startTime) / 1000).toFixed(1);
 
-                        const text = response.text();
+                        const text = await response.text();
                         fetchOutput.className = 'output-box success';
                         fetchOutput.textContent = `Status: ${response.status} (${fetchTime}s)\n\n${text.substring(0, 2000)}`;
                         log('INFO', `Fetch complete: ${response.status} (${fetchTime}s, ${text.length} bytes)`);
