@@ -285,7 +285,7 @@ pub fn build_http_request(
     method: &Method,
     headers: &HashMap<String, String>,
     body: Option<&[u8]>,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, JsTorError> {
     let host = url.host_str().unwrap_or("localhost");
     let path = if url.path().is_empty() {
         "/"
@@ -314,8 +314,17 @@ pub fn build_http_request(
         request.push_str("Connection: close\r\n");
     }
 
-    // Add custom headers
+    // Add custom headers (reject any with CR/LF to prevent header injection)
     for (key, value) in headers {
+        if key.contains('\r') || key.contains('\n') || value.contains('\r') || value.contains('\n')
+        {
+            return Err(JsTorError::new(
+                "INVALID_HEADER",
+                "validation",
+                format!("Header contains invalid CR/LF characters: {}", key),
+                false,
+            ));
+        }
         request.push_str(&format!("{}: {}\r\n", key, value));
     }
 
@@ -334,7 +343,7 @@ pub fn build_http_request(
         bytes.extend_from_slice(body);
     }
 
-    bytes
+    Ok(bytes)
 }
 
 /// Write the HTTP request and read response headers.
@@ -479,7 +488,7 @@ pub async fn fetch_headers<S>(
 where
     S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin + 'static,
 {
-    let request_bytes = build_http_request(url, &method, &headers, body.as_deref());
+    let request_bytes = build_http_request(url, &method, &headers, body.as_deref())?;
     debug!("Sending {} bytes of HTTP request", request_bytes.len());
 
     if is_https {

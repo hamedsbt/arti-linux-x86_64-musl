@@ -44,6 +44,8 @@ wrap with a timeout.
 
 ### H3. Header injection in tor-js fetch
 
+**Status:** DONE
+
 `crates/tor-js/src/fetch.rs:65-67`
 
 User-supplied header names/values are inserted into raw HTTP without any CR/LF
