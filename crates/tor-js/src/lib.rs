@@ -76,9 +76,10 @@ pub fn init() -> Result<(), JsValue> {
     let js_layer = JsLogLayer;
     let filter = tracing_subscriber::filter::LevelFilter::DEBUG;
 
-    tracing_subscriber::registry()
+    // Use try_init() to avoid panicking if init() is called more than once
+    let _ = tracing_subscriber::registry()
         .with(js_layer.with_filter(filter))
-        .init();
+        .try_init();
 
     info!("tor-js WASM module initialized");
     Ok(())

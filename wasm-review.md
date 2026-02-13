@@ -102,7 +102,9 @@ The default User-Agent makes it trivial for exit nodes or destinations to
 identify traffic from this library. The Tor Browser uses a specific Firefox
 User-Agent for anonymity.
 
-### M5. `init()` panics on double-call
+### M7. `init()` panics on double-call
+
+**Status:** DONE
 
 `crates/tor-js/src/lib.rs:73-87`
 
