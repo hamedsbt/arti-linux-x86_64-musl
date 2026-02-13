@@ -4,20 +4,17 @@
 //! with TLS support via subtle-tls for HTTPS.
 //!
 //! The fetch resolves as soon as response headers are received.
-//! Body reading is deferred to async methods on the response object.
+//! Body reading is deferred — chunks are read incrementally via `read_chunk()`.
 
 use crate::error::JsTorError;
 use futures::io::{AsyncReadExt, AsyncWriteExt};
 use http::Method;
 use std::collections::HashMap;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use url::Url;
 
 /// Maximum response header size (64KB)
 const MAX_HEADER_SIZE: usize = 64 * 1024;
-
-/// Maximum response body size (1MB)
-const MAX_BODY_SIZE: usize = 64 * 1024 * 1024;
 
 /// Type-erased async reader for the response body stream.
 pub type BoxedReader = Box<dyn futures::io::AsyncRead + Unpin>;
@@ -38,20 +35,25 @@ pub enum BodyFraming {
 pub struct FetchHeadersResult {
     pub status: u16,
     pub headers: HashMap<String, String>,
-    pub url: Url,
     pub body_reader: BodyReader,
 }
 
 /// Reads the HTTP response body from a stream.
 ///
 /// Created after headers are parsed, holds the stream and any overflow
-/// bytes that were read past the header separator.
+/// bytes that were read past the header separator. Supports both
+/// chunk-by-chunk reading (`read_chunk()`) and full body reading (`read_all()`).
 pub struct BodyReader {
     stream: BoxedReader,
     framing: BodyFraming,
     /// Bytes already read past \r\n\r\n during header parsing.
     buffer: Vec<u8>,
     done: bool,
+    total_read: usize,
+    /// Chunked decoder: bytes remaining in the current HTTP chunk.
+    chunk_remaining: usize,
+    /// Chunked decoder: whether we're waiting for the trailing \r\n after chunk data.
+    awaiting_chunk_crlf: bool,
 }
 
 impl BodyReader {
@@ -61,205 +63,219 @@ impl BodyReader {
             framing,
             buffer: overflow,
             done: false,
+            total_read: 0,
+            chunk_remaining: 0,
+            awaiting_chunk_crlf: false,
         }
     }
 
-    /// Read the entire remaining body. Enforces the 1MB size limit.
-    pub async fn read_all(&mut self) -> Result<Vec<u8>, JsTorError> {
+    /// Read the next chunk of decoded body bytes. Returns `None` at EOF.
+    pub async fn read_chunk(&mut self) -> Result<Option<Vec<u8>>, JsTorError> {
         if self.done {
-            return Ok(Vec::new());
+            return Ok(None);
         }
-        self.done = true;
 
         match &self.framing {
-            BodyFraming::None => Ok(Vec::new()),
-            BodyFraming::ContentLength(len) => self.read_content_length(*len).await,
-            BodyFraming::Chunked => self.read_chunked().await,
-            BodyFraming::UntilEof => self.read_until_eof().await,
+            BodyFraming::None => {
+                self.done = true;
+                Ok(None)
+            }
+            BodyFraming::ContentLength(len) => {
+                let len = *len;
+                self.read_chunk_content_length(len).await
+            }
+            BodyFraming::Chunked => self.read_chunk_chunked().await,
+            BodyFraming::UntilEof => self.read_chunk_eof().await,
         }
     }
 
-    /// Read exactly `len` bytes of body (Content-Length framing).
-    async fn read_content_length(&mut self, len: usize) -> Result<Vec<u8>, JsTorError> {
-        if len > MAX_BODY_SIZE {
-            return Err(JsTorError::http_request(format!(
-                "Content-Length {} exceeds {}MB limit",
-                len,
-                MAX_BODY_SIZE / (1024 * 1024)
-            )));
+    /// Read the entire remaining body by calling `read_chunk()` in a loop.
+    #[allow(dead_code)]
+    pub async fn read_all(&mut self) -> Result<Vec<u8>, JsTorError> {
+        let mut body = Vec::new();
+        while let Some(chunk) = self.read_chunk().await? {
+            body.extend_from_slice(&chunk);
         }
-
-        let mut body = std::mem::take(&mut self.buffer);
-
-        // Already have enough from overflow?
-        if body.len() >= len {
-            body.truncate(len);
-            return Ok(body);
-        }
-
-        body.reserve(len - body.len());
-        let mut buf = [0u8; 8192];
-
-        while body.len() < len {
-            match self.stream.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    let take = std::cmp::min(n, len - body.len());
-                    body.extend_from_slice(&buf[..take]);
-                }
-                Err(e) => {
-                    if body.is_empty() {
-                        return Err(JsTorError::http_request(format!(
-                            "Failed to read body: {}",
-                            e
-                        )));
-                    }
-                    debug!("Read ended with error (may be normal close): {}", e);
-                    break;
-                }
-            }
-        }
-
         Ok(body)
     }
 
-    /// Read body until EOF (no Content-Length or chunked framing).
-    async fn read_until_eof(&mut self) -> Result<Vec<u8>, JsTorError> {
-        let mut body = std::mem::take(&mut self.buffer);
-        let mut buf = [0u8; 8192];
+    /// Read the next chunk for Content-Length framing.
+    async fn read_chunk_content_length(&mut self, total_len: usize) -> Result<Option<Vec<u8>>, JsTorError> {
+        let remaining = total_len.saturating_sub(self.total_read);
+        if remaining == 0 {
+            self.done = true;
+            return Ok(None);
+        }
 
-        loop {
-            match self.stream.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    body.extend_from_slice(&buf[..n]);
-                    if body.len() > MAX_BODY_SIZE {
-                        warn!("Response exceeds {}MB limit, truncating", MAX_BODY_SIZE / (1024 * 1024));
-                        body.truncate(MAX_BODY_SIZE);
-                        break;
-                    }
+        // Drain overflow buffer first
+        if !self.buffer.is_empty() {
+            let take = std::cmp::min(self.buffer.len(), remaining);
+            let chunk: Vec<u8> = self.buffer.drain(..take).collect();
+            self.total_read += chunk.len();
+            if self.total_read >= total_len {
+                self.done = true;
+            }
+            return Ok(Some(chunk));
+        }
+
+        let read_size = std::cmp::min(8192, remaining);
+        let mut buf = vec![0u8; read_size];
+        match self.stream.read(&mut buf).await {
+            Ok(0) => {
+                self.done = true;
+                Ok(None)
+            }
+            Ok(n) => {
+                let take = std::cmp::min(n, remaining);
+                buf.truncate(take);
+                self.total_read += take;
+                if self.total_read >= total_len {
+                    self.done = true;
                 }
-                Err(e) => {
-                    if body.is_empty() {
-                        return Err(JsTorError::http_request(format!(
-                            "Failed to read body: {}",
-                            e
-                        )));
-                    }
+                Ok(Some(buf))
+            }
+            Err(e) => {
+                self.done = true;
+                Err(JsTorError::http_request(format!("Failed to read body: {}", e)))
+            }
+        }
+    }
+
+    /// Read the next chunk for EOF-terminated framing.
+    async fn read_chunk_eof(&mut self) -> Result<Option<Vec<u8>>, JsTorError> {
+        // Drain overflow buffer first
+        if !self.buffer.is_empty() {
+            let chunk = std::mem::take(&mut self.buffer);
+            return Ok(Some(chunk));
+        }
+
+        let mut buf = [0u8; 8192];
+        match self.stream.read(&mut buf).await {
+            Ok(0) => {
+                self.done = true;
+                Ok(None)
+            }
+            Ok(n) => {
+                self.total_read += n;
+                Ok(Some(buf[..n].to_vec()))
+            }
+            Err(e) => {
+                self.done = true;
+                if self.total_read > 0 {
+                    // Had some data, treat error as EOF
                     debug!("Read ended with error (may be normal close): {}", e);
-                    break;
+                    Ok(None)
+                } else {
+                    Err(JsTorError::http_request(format!("Failed to read body: {}", e)))
                 }
             }
         }
-
-        Ok(body)
     }
 
-    /// Read chunked transfer-encoded body incrementally from the stream.
-    async fn read_chunked(&mut self) -> Result<Vec<u8>, JsTorError> {
-        let mut input = std::mem::take(&mut self.buffer);
-        let mut output = Vec::new();
-        let mut buf = [0u8; 8192];
-
-        // State machine for chunked decoding
-        enum State {
-            ReadingSize,
-            ReadingData { remaining: usize },
-            ReadingTrailingCrlf,
-        }
-
-        let mut state = State::ReadingSize;
-
+    /// Read the next chunk for chunked transfer-encoding.
+    ///
+    /// Uses persistent state fields (`chunk_remaining`, `awaiting_chunk_crlf`)
+    /// to decode HTTP chunks incrementally across calls.
+    async fn read_chunk_chunked(&mut self) -> Result<Option<Vec<u8>>, JsTorError> {
         loop {
-            match state {
-                State::ReadingSize => {
-                    // Look for \r\n to get chunk size line
-                    if let Some(pos) = find_crlf(&input) {
-                        let size_str = std::str::from_utf8(&input[..pos])
-                            .map_err(|_| {
-                                JsTorError::http_request("Chunk size line is not valid UTF-8")
-                            })?;
-                        let size_str = size_str.split(';').next().unwrap_or("").trim();
+            // Step 1: If we have data remaining in the current HTTP chunk, return it
+            if self.chunk_remaining > 0 {
+                let available = if !self.buffer.is_empty() {
+                    let take = std::cmp::min(self.buffer.len(), self.chunk_remaining);
+                    let chunk: Vec<u8> = self.buffer.drain(..take).collect();
+                    self.chunk_remaining -= chunk.len();
+        
+                    if self.chunk_remaining == 0 {
+                        self.awaiting_chunk_crlf = true;
+                    }
+                    chunk
+                } else {
+                    let read_size = std::cmp::min(8192, self.chunk_remaining);
+                    let mut buf = vec![0u8; read_size];
+                    let n = self.fill_buf(&mut buf).await?;
+                    if n == 0 {
+                        self.done = true;
+                        return Ok(None);
+                    }
+                    buf.truncate(n);
+                    self.chunk_remaining -= n;
 
-                        if size_str.is_empty() {
-                            // Skip empty lines
-                            input.drain(..pos + 2);
-                            continue;
-                        }
+                    if self.chunk_remaining == 0 {
+                        self.awaiting_chunk_crlf = true;
+                    }
+                    buf
+                };
 
-                        let size = usize::from_str_radix(size_str, 16).map_err(|e| {
-                            JsTorError::http_request(format!(
-                                "Invalid chunk size '{}': {}",
-                                size_str, e
-                            ))
-                        })?;
+                return Ok(Some(available));
+            }
 
-                        input.drain(..pos + 2);
-
-                        if size == 0 {
-                            break; // Terminal chunk
-                        }
-
-                        state = State::ReadingData { remaining: size };
-                    } else {
-                        // Need more data
-                        let n = self.read_more(&mut buf).await?;
-                        if n == 0 {
-                            break; // EOF
-                        }
-                        input.extend_from_slice(&buf[..n]);
+            // Step 2: Consume trailing \r\n after chunk data
+            if self.awaiting_chunk_crlf {
+                // Ensure we have at least 2 bytes in buffer
+                while self.buffer.len() < 2 {
+                    let n = self.fill_buffer_from_stream().await?;
+                    if n == 0 {
+                        self.done = true;
+                        return Ok(None);
                     }
                 }
-                State::ReadingData { remaining } => {
-                    if !input.is_empty() {
-                        let take = std::cmp::min(input.len(), remaining);
-                        output.extend_from_slice(&input[..take]);
-                        input.drain(..take);
-                        let new_remaining = remaining - take;
-                        if new_remaining == 0 {
-                            state = State::ReadingTrailingCrlf;
-                        } else {
-                            state = State::ReadingData {
-                                remaining: new_remaining,
-                            };
-                        }
-                    } else {
-                        let n = self.read_more(&mut buf).await?;
-                        if n == 0 {
-                            break; // Unexpected EOF
-                        }
-                        input.extend_from_slice(&buf[..n]);
+                self.buffer.drain(..2);
+                self.awaiting_chunk_crlf = false;
+            }
+
+            // Step 3: Read chunk size line
+            loop {
+                if let Some(pos) = find_crlf(&self.buffer) {
+                    let size_str = std::str::from_utf8(&self.buffer[..pos])
+                        .map_err(|_| JsTorError::http_request("Chunk size not UTF-8"))?;
+                    let size_str = size_str.split(';').next().unwrap_or("").trim();
+
+                    if size_str.is_empty() {
+                        self.buffer.drain(..pos + 2);
+                        continue;
                     }
 
-                    if output.len() > MAX_BODY_SIZE {
-                        warn!("Chunked response exceeds {}MB limit", MAX_BODY_SIZE / (1024 * 1024));
-                        output.truncate(MAX_BODY_SIZE);
-                        break;
+                    let size = usize::from_str_radix(size_str, 16).map_err(|e| {
+                        JsTorError::http_request(format!("Invalid chunk size '{}': {}", size_str, e))
+                    })?;
+
+                    self.buffer.drain(..pos + 2);
+
+                    if size == 0 {
+                        // Terminal chunk
+                        self.done = true;
+                        return Ok(None);
                     }
-                }
-                State::ReadingTrailingCrlf => {
-                    if input.len() >= 2 {
-                        input.drain(..2);
-                        state = State::ReadingSize;
-                    } else {
-                        let n = self.read_more(&mut buf).await?;
-                        if n == 0 {
-                            break; // EOF
-                        }
-                        input.extend_from_slice(&buf[..n]);
+
+                    self.chunk_remaining = size;
+                    break; // Go back to step 1 to read chunk data
+                } else {
+                    // Need more data for the size line
+                    let n = self.fill_buffer_from_stream().await?;
+                    if n == 0 {
+                        self.done = true;
+                        return Ok(None);
                     }
                 }
             }
         }
-
-        Ok(output)
     }
 
-    /// Read more bytes from the stream into the buffer.
-    async fn read_more(&mut self, buf: &mut [u8]) -> Result<usize, JsTorError> {
+    /// Read from stream into provided buffer, returning bytes read.
+    async fn fill_buf(&mut self, buf: &mut [u8]) -> Result<usize, JsTorError> {
         self.stream.read(buf).await.map_err(|e| {
             JsTorError::http_request(format!("Failed to read response: {}", e))
         })
+    }
+
+    /// Read from stream and append to self.buffer.
+    async fn fill_buffer_from_stream(&mut self) -> Result<usize, JsTorError> {
+        let mut buf = [0u8; 8192];
+        let n = self.fill_buf(&mut buf).await?;
+        if n > 0 {
+            self.buffer.extend_from_slice(&buf[..n]);
+        }
+        Ok(n)
     }
 }
 
@@ -494,7 +510,6 @@ where
         Ok(FetchHeadersResult {
             status,
             headers: resp_headers,
-            url: url.clone(),
             body_reader: BodyReader::new(reader, framing, overflow),
         })
     } else {
@@ -509,7 +524,6 @@ where
         Ok(FetchHeadersResult {
             status,
             headers: resp_headers,
-            url: url.clone(),
             body_reader: BodyReader::new(reader, framing, overflow),
         })
     }
