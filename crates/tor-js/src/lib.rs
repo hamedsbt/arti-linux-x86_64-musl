@@ -389,7 +389,7 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
     let client_for_ca = tor_client.clone();
     wasm_bindgen_futures::spawn_local(async move {
         if let Err(e) = fetch_ca_bundle(&client_for_ca).await {
-            tracing::warn!("Failed to fetch CA bundle: {}. Only embedded roots available.", e);
+            tracing::error!("Failed to fetch CA bundle: {}. Only embedded roots available.", e);
         } else {
             tracing::info!("Fetched CA bundle");
         }
