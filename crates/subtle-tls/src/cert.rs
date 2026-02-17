@@ -203,137 +203,175 @@ impl CertificateVerifier {
         Ok(())
     }
 
-    /// Verify signatures in the certificate chain and check against trust store
+    /// Verify signatures in the certificate chain and check against trust store.
+    ///
+    /// Builds the chain by matching each cert's issuer to a candidate's subject,
+    /// rather than assuming the server sent them in order. Servers commonly send
+    /// extra cross-signed certs or out-of-order intermediates.
     async fn verify_chain_signatures(&self, cert_chain: &[Vec<u8>]) -> Result<()> {
-        // Verify each certificate is signed by the next one in the chain
-        for i in 0..cert_chain.len() - 1 {
-            let cert_der = &cert_chain[i];
-            let issuer_der = &cert_chain[i + 1];
-
-            let (_, cert) = X509Certificate::from_der(cert_der).map_err(|e| {
-                TlsError::certificate(format!("Failed to parse certificate {}: {}", i, e))
-            })?;
-            let (_, issuer) = X509Certificate::from_der(issuer_der).map_err(|e| {
-                TlsError::certificate(format!("Failed to parse issuer {}: {}", i + 1, e))
-            })?;
-
-            // Verify the certificate's issuer matches the issuer's subject
-            if cert.issuer() != issuer.subject() {
-                return Err(TlsError::certificate(format!(
-                    "Certificate {} issuer does not match certificate {} subject",
-                    i,
-                    i + 1
-                )));
-            }
-
-            // Verify the signature
-            self.verify_signature(&cert, &issuer).await?;
-
-            debug!(
-                "Certificate {} signature verified by certificate {}",
-                i,
-                i + 1
-            );
+        if cert_chain.is_empty() {
+            return Err(TlsError::certificate("Empty certificate chain"));
         }
 
-        // Check the last certificate against trust store
-        let last_cert_der = cert_chain
-            .last()
-            .ok_or_else(|| TlsError::certificate("Empty certificate chain"))?;
+        // Build an ordered chain starting from the leaf (cert_chain[0]).
+        // For each cert, find its issuer from the remaining pool of server-sent certs.
+        let mut ordered_chain: Vec<&Vec<u8>> = vec![&cert_chain[0]];
+        let mut used = vec![false; cert_chain.len()];
+        used[0] = true;
 
-        let (_, last_cert) = X509Certificate::from_der(last_cert_der).map_err(|e| {
-            TlsError::certificate(format!("Failed to parse last certificate: {}", e))
-        })?;
+        loop {
+            let current_der = ordered_chain.last().unwrap();
+            let (_, current) = X509Certificate::from_der(current_der).map_err(|e| {
+                TlsError::certificate(format!("Failed to parse certificate: {}", e))
+            })?;
 
-        // Check if the last cert is in our trust store
-        if let Some(ref trust_store) = self.trust_store {
-            if trust_store.is_trusted_root(last_cert_der) {
-                info!(
-                    "Certificate chain terminates at trusted root: {}",
-                    last_cert.subject()
-                );
-                return Ok(());
+            debug!(
+                "Building chain: cert subject={}, issuer={}",
+                current.subject(),
+                current.issuer()
+            );
+
+            // Self-signed? We've reached the top of the server-sent chain.
+            if current.issuer() == current.subject() {
+                break;
             }
 
-            // Check if the last cert was issued by a trusted root
-            if let Some(root_der) = trust_store.find_issuing_trusted_root(last_cert_der) {
-                let (_, root_cert) = X509Certificate::from_der(&root_der).map_err(|e| {
-                    TlsError::certificate(format!("Failed to parse trusted root: {}", e))
+            // Find the issuer from the remaining pool
+            let mut found = false;
+            for (j, candidate_der) in cert_chain.iter().enumerate() {
+                if used[j] {
+                    continue;
+                }
+                let (_, candidate) = X509Certificate::from_der(candidate_der).map_err(|e| {
+                    TlsError::certificate(format!("Failed to parse certificate {}: {}", j, e))
                 })?;
-
-                self.verify_signature(&last_cert, &root_cert).await?;
-
-                info!(
-                    "Certificate chain verified: issued by trusted root (issuer: {})",
-                    last_cert.issuer()
-                );
-                return Ok(());
-            }
-
-            // Check for cross-signed root: the server sent a cross-signed version
-            // of a root we trust (same subject, different DER bytes). Verify the
-            // penultimate cert against the self-signed version from our trust store.
-            if let Some(result) = self
-                .try_cross_signed_root(trust_store, cert_chain, &last_cert)
-                .await
-            {
-                return result;
-            }
-
-            // Not in embedded roots — wait for CA bundle if it's still loading
-            if let Some(ref signal) = self.ca_bundle_wait {
-                if !trust_store.has_extended_roots() {
-                    info!("Root not in embedded CAs, waiting for CA bundle...");
-                    signal.wait().await;
-
-                    // Re-check with the (now hopefully loaded) extended roots
-                    if trust_store.is_trusted_root(last_cert_der) {
-                        info!(
-                            "Certificate chain terminates at extended root: {}",
-                            last_cert.subject()
-                        );
-                        return Ok(());
-                    }
-                    if let Some(root_der) =
-                        trust_store.find_issuing_trusted_root(last_cert_der)
-                    {
-                        let (_, root_cert) =
-                            X509Certificate::from_der(&root_der).map_err(|e| {
-                                TlsError::certificate(format!(
-                                    "Failed to parse trusted root: {}",
-                                    e
-                                ))
-                            })?;
-                        self.verify_signature(&last_cert, &root_cert).await?;
-                        info!(
-                            "Certificate chain verified: issued by extended root (issuer: {})",
-                            last_cert.issuer()
-                        );
-                        return Ok(());
-                    }
-
-                    // Re-check cross-signed root with extended roots
-                    if let Some(result) = self
-                        .try_cross_signed_root(trust_store, cert_chain, &last_cert)
-                        .await
-                    {
-                        return result;
-                    }
+                if current.issuer() == candidate.subject() {
+                    ordered_chain.push(candidate_der);
+                    used[j] = true;
+                    found = true;
+                    break;
                 }
             }
 
-            return Err(TlsError::certificate(format!(
-                "Certificate chain does not terminate at a trusted root. \
-                 Last cert subject: {}, issuer: {}",
-                last_cert.subject(),
-                last_cert.issuer()
-            )));
-        } else {
-            // No trust store available but verification was requested -- reject
-            return Err(TlsError::certificate(
-                "Certificate verification required but no trust store is available",
-            ));
+            if !found {
+                // Issuer not in the server-sent chain — that's normal,
+                // it should be in the trust store. Stop building.
+                break;
+            }
         }
+
+        // Verify signatures along the ordered chain
+        for i in 0..ordered_chain.len() - 1 {
+            let (_, cert) = X509Certificate::from_der(ordered_chain[i]).map_err(|e| {
+                TlsError::certificate(format!("Failed to parse certificate: {}", e))
+            })?;
+            let (_, issuer) = X509Certificate::from_der(ordered_chain[i + 1]).map_err(|e| {
+                TlsError::certificate(format!("Failed to parse issuer certificate: {}", e))
+            })?;
+
+            self.verify_signature(&cert, &issuer).await?;
+
+            debug!(
+                "Verified: {} signed by {}",
+                cert.subject(),
+                issuer.subject()
+            );
+        }
+
+        // Ensure the CA bundle is loaded before trying to anchor
+        if let Some(ref trust_store) = self.trust_store {
+            if !trust_store.has_extended_roots() {
+                if let Some(ref signal) = self.ca_bundle_wait {
+                    info!("Waiting for CA bundle before anchoring chain...");
+                    signal.wait().await;
+                }
+            }
+        }
+
+        // Try to anchor the chain at any point, starting from the top.
+        // Servers may send extra certs beyond what's needed (e.g., a removed root),
+        // so we try each cert from the top down until one anchors to our trust store.
+        for i in (1..ordered_chain.len()).rev() {
+            let cert_der = ordered_chain[i];
+            let (_, cert) = X509Certificate::from_der(cert_der).map_err(|e| {
+                TlsError::certificate(format!("Failed to parse certificate: {}", e))
+            })?;
+
+            match self
+                .anchor_to_trust_store(cert_der, &cert, &ordered_chain[..=i])
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(_) => {
+                    debug!(
+                        "Could not anchor at chain position {} ({}), trying lower...",
+                        i,
+                        cert.subject()
+                    );
+                    continue;
+                }
+            }
+        }
+
+        // None of the certs anchored
+        let (_, leaf) = X509Certificate::from_der(ordered_chain[0]).map_err(|e| {
+            TlsError::certificate(format!("Failed to parse certificate: {}", e))
+        })?;
+        Err(TlsError::certificate(format!(
+            "Certificate chain does not terminate at a trusted root. \
+             Leaf subject: {}, issuer: {}",
+            leaf.subject(),
+            leaf.issuer()
+        )))
+    }
+
+    /// Try to anchor the top of the built chain to a trusted root.
+    async fn anchor_to_trust_store(
+        &self,
+        top_der: &[u8],
+        top_cert: &X509Certificate<'_>,
+        ordered_chain: &[&Vec<u8>],
+    ) -> Result<()> {
+        let trust_store = self.trust_store.as_ref().ok_or_else(|| {
+            TlsError::certificate(
+                "Certificate verification required but no trust store is available",
+            )
+        })?;
+
+        // 1. Top cert is itself a trusted root
+        if trust_store.is_trusted_root(top_der) {
+            info!(
+                "Certificate chain terminates at trusted root: {}",
+                top_cert.subject()
+            );
+            return Ok(());
+        }
+
+        // 2. Top cert was issued by a trusted root
+        if let Some(root_der) = trust_store.find_issuing_trusted_root(top_der) {
+            let (_, root_cert) = X509Certificate::from_der(&root_der).map_err(|e| {
+                TlsError::certificate(format!("Failed to parse trusted root: {}", e))
+            })?;
+            self.verify_signature(top_cert, &root_cert).await?;
+            info!(
+                "Certificate chain verified: issued by trusted root (issuer: {})",
+                top_cert.issuer()
+            );
+            return Ok(());
+        }
+
+        // 3. Cross-signed root: top cert's subject matches a trusted root
+        if let Some(result) = self
+            .try_cross_signed_root(trust_store, ordered_chain, top_cert)
+            .await
+        {
+            return result;
+        }
+
+        Err(TlsError::certificate(format!(
+            "Not a trusted root: {}",
+            top_cert.subject()
+        )))
     }
 
     /// Check if the last cert is a cross-signed version of a trusted root.
@@ -348,7 +386,7 @@ impl CertificateVerifier {
     async fn try_cross_signed_root(
         &self,
         trust_store: &TrustStore,
-        cert_chain: &[Vec<u8>],
+        cert_chain: &[&Vec<u8>],
         last_cert: &X509Certificate<'_>,
     ) -> Option<Result<()>> {
         if cert_chain.len() < 2 {
@@ -368,7 +406,7 @@ impl CertificateVerifier {
             }
         };
 
-        let penultimate_der = &cert_chain[cert_chain.len() - 2];
+        let penultimate_der = cert_chain[cert_chain.len() - 2];
         let (_, penultimate_cert) = match X509Certificate::from_der(penultimate_der) {
             Ok(parsed) => parsed,
             Err(e) => {
