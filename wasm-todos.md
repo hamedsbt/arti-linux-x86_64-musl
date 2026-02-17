@@ -7,6 +7,7 @@
 - [x] fix pre-existing tests (`cargo test`)
 - [ ] automated testing
 - [ ] check/clean ai code
+- [ ] warn about RustCrypto? (see warnings: https://github.com/RustCrypto/rustls-rustcrypto/blob/master/README.md)
 - [ ] improve js storage handling
   - [x] remove rust inmemory storage
 - [ ] make tor-js API same/similar to https://www.npmjs.com/package/tor-js
