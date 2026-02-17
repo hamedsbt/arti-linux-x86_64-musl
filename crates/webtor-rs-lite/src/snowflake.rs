@@ -24,6 +24,7 @@ use crate::smux::SmuxStream;
 use crate::snowflake_broker::{BROKER_URL, DEFAULT_BRIDGE_FINGERPRINT};
 use crate::turbo::TurboStream;
 use futures::{AsyncRead, AsyncWrite};
+use futures::io::AsyncWriteExt;
 use std::borrow::Cow;
 use std::io;
 use std::pin::Pin;
@@ -33,7 +34,8 @@ use tracing::{info, warn};
 
 use crate::webrtc_stream::WebRtcStream;
 
-use subtle_tls::{TlsConfig, TlsConnector, TlsStream};
+use futures_rustls::rustls;
+use std::sync::Arc;
 
 /// Snowflake bridge configuration
 #[derive(Debug, Clone)]
@@ -186,19 +188,14 @@ impl SnowflakeBridge {
         smux.initialize().await?;
         info!("SMUX layer initialized");
 
-        // 5. Wrap with TLS for Tor link encryption
-        // Tor relays use self-signed certificates, so skip verification
-        // (authentication happens via CERTS cells in the Tor protocol)
+        // 5. Wrap with TLS for Tor link encryption (using rustls with skip-verification)
         info!("Establishing TLS over SMUX...");
-        let tls_config = TlsConfig {
-            skip_verification: true, // Tor uses self-signed certs, validated via CERTS cells
-            alpn_protocols: vec![],
-            ..Default::default()
-        };
-        let connector = TlsConnector::with_config(tls_config);
+        let connector = make_tor_tls_connector();
         // Use a placeholder server name since Tor doesn't use SNI
+        let server_name = rustls_pki_types::ServerName::try_from("www.example.com".to_string())
+            .map_err(|e| crate::error::TorError::tls(format!("Invalid server name: {}", e)))?;
         let tls_stream = connector
-            .connect(smux, "www.example.com")
+            .connect(server_name, smux)
             .await
             .map_err(|e| crate::error::TorError::tls(format!("TLS handshake failed: {}", e)))?;
         info!("TLS layer established over SMUX");
@@ -221,7 +218,7 @@ impl Default for SnowflakeBridge {
 type SnowflakeSmuxStack = SmuxStream<KcpStream<TurboStream<WebRtcStream>>>;
 
 enum SnowflakeInner {
-    WebRtc(TlsStream<SnowflakeSmuxStack>),
+    WebRtc(futures_rustls::client::TlsStream<SnowflakeSmuxStack>),
 }
 
 /// Snowflake stream for Tor communication
@@ -239,12 +236,12 @@ impl tor_rtcompat::StreamOps for SnowflakeStream {
 impl tor_rtcompat::CertifiedConn for SnowflakeStream {
     fn peer_certificate(&self) -> io::Result<Option<Cow<'_, [u8]>>> {
         match &self.inner {
-            #[cfg(target_arch = "wasm32")]
             SnowflakeInner::WebRtc(tls) => {
-                Ok(tls.peer_certificate().map(Cow::Borrowed))
+                let (_, session) = tls.get_ref();
+                Ok(session
+                    .peer_certificates()
+                    .and_then(|certs| certs.first().map(|c| Cow::from(c.as_ref()))))
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            SnowflakeInner::Placeholder => unreachable!("Snowflake not available on native"),
         }
     }
 
@@ -255,20 +252,16 @@ impl tor_rtcompat::CertifiedConn for SnowflakeStream {
     fn export_keying_material(
         &self,
         len: usize,
-        _label: &[u8],
-        _context: Option<&[u8]>,
+        label: &[u8],
+        context: Option<&[u8]>,
     ) -> io::Result<Vec<u8>> {
         match &self.inner {
-            #[cfg(target_arch = "wasm32")]
-            SnowflakeInner::WebRtc(_tls) => {
-                // TLS 1.3 keying material export is complex
-                // For now, return zeros as a placeholder
-                // TODO: Implement proper RFC 5705 key export
-                tracing::warn!("export_keying_material called but not fully implemented");
-                Ok(vec![0u8; len])
+            SnowflakeInner::WebRtc(tls) => {
+                let (_, session) = tls.get_ref();
+                session
+                    .export_keying_material(Vec::with_capacity(len), label, context)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            SnowflakeInner::Placeholder => unreachable!("Snowflake not available on native"),
         }
     }
 }
@@ -278,10 +271,7 @@ impl SnowflakeStream {
     pub async fn close(&mut self) -> io::Result<()> {
         info!("Closing Snowflake stream");
         match &mut self.inner {
-            SnowflakeInner::WebRtc(tls) => tls
-                .close()
-                .await
-                .map_err(|e| io::Error::other(e.to_string())),
+            SnowflakeInner::WebRtc(tls) => AsyncWriteExt::close(tls).await,
         }
     }
 }
@@ -330,6 +320,24 @@ pub async fn create_snowflake_stream(
     // Use default config with WebRTC
     let bridge = SnowflakeBridge::new();
     bridge.connect().await
+}
+
+/// Create a TLS connector for Tor relay connections.
+///
+/// Skips certificate verification (Tor validates via CERTS cells) but
+/// verifies TLS handshake signatures.
+fn make_tor_tls_connector() -> futures_rustls::TlsConnector {
+    let provider = rustls_rustcrypto::provider();
+    let algorithms = provider.signature_verification_algorithms.clone();
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(
+            tor_rtcompat::wasm::TorCertVerifier::new(algorithms),
+        ))
+        .with_no_client_auth();
+    futures_rustls::TlsConnector::from(Arc::new(config))
 }
 
 /// Create a Snowflake stream with full configuration

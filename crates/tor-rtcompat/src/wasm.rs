@@ -5,7 +5,7 @@
 //!
 //! - **Blocking operations**: Stubbed - will panic if called. WASM has no threads.
 //! - **Networking**: Requires external transport (WebSocket/WebRTC)
-//! - **TLS**: Uses subtle-tls for TLS 1.3 via browser SubtleCrypto API
+//! - **TLS**: Uses rustls with rustls-rustcrypto (pure-Rust crypto for WASM)
 
 use crate::traits::{
     Blocking, CertifiedConn, NetStreamListener, NetStreamProvider, NoOpStreamOpsHandle,
@@ -21,6 +21,7 @@ use std::fmt::Debug;
 use std::io::{self, Result as IoResult};
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tor_time::{Instant, SystemTime, UNIX_EPOCH};
@@ -342,17 +343,16 @@ impl NetStreamProvider<unix::SocketAddr> for WasmRuntime {
 }
 
 // ============================================================================
-// TlsProvider implementation using subtle-tls
+// TlsProvider implementation using rustls (with rustls-rustcrypto for WASM)
 // ============================================================================
 
-/// TLS connector for WASM using subtle-tls.
+/// TLS connector for WASM using rustls with a pure-Rust crypto provider.
 ///
-/// This wraps subtle-tls's TlsConnector and configures it for Tor's requirements:
+/// Configured for Tor's requirements:
 /// - Skips certificate verification (Tor validates via CERTS cells instead)
-/// - Uses TLS 1.3
+/// - Verifies TLS handshake signatures (proves key possession)
 pub struct WasmTlsConnector {
-    /// The underlying subtle-tls connector.
-    inner: subtle_tls::TlsConnector,
+    connector: futures_rustls::TlsConnector,
 }
 
 impl WasmTlsConnector {
@@ -361,14 +361,19 @@ impl WasmTlsConnector {
     /// This connector skips certificate verification since Tor uses its own
     /// certificate validation via CERTS cells in the Tor protocol.
     pub fn new() -> Self {
-        let config = subtle_tls::TlsConfig {
-            // Skip WebPKI validation - Tor validates via CERTS cells
-            skip_verification: true,
-            alpn_protocols: vec![],
-            version: subtle_tls::TlsVersion::Tls13,
-        };
+        use futures_rustls::rustls;
+
+        let provider = rustls_rustcrypto::provider();
+        let algorithms = provider.signature_verification_algorithms.clone();
+        let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(TorCertVerifier(algorithms)))
+            .with_no_client_auth();
+
         Self {
-            inner: subtle_tls::TlsConnector::with_config(config),
+            connector: futures_rustls::TlsConnector::from(Arc::new(config)),
         }
     }
 }
@@ -379,22 +384,77 @@ impl Default for WasmTlsConnector {
     }
 }
 
+/// A certificate verifier that skips WebPKI validation.
+///
+/// Tor relays use self-signed certificates; authentication happens via CERTS
+/// cells in the Tor protocol. We still verify TLS handshake signatures to
+/// prove the server possesses the key in its certificate.
+#[derive(Debug)]
+pub struct TorCertVerifier(futures_rustls::rustls::crypto::WebPkiSupportedAlgorithms);
+
+impl TorCertVerifier {
+    /// Create a new verifier with the given signature verification algorithms.
+    pub fn new(algorithms: futures_rustls::rustls::crypto::WebPkiSupportedAlgorithms) -> Self {
+        Self(algorithms)
+    }
+}
+
+impl futures_rustls::rustls::client::danger::ServerCertVerifier for TorCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls_pki_types::CertificateDer,
+        _intermediates: &[rustls_pki_types::CertificateDer],
+        _server_name: &rustls_pki_types::ServerName,
+        _ocsp_response: &[u8],
+        _now: rustls_pki_types::UnixTime,
+    ) -> Result<futures_rustls::rustls::client::danger::ServerCertVerified, futures_rustls::rustls::Error> {
+        // Skip cert validation — Tor validates via CERTS cells
+        Ok(futures_rustls::rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls_pki_types::CertificateDer,
+        dss: &futures_rustls::rustls::DigitallySignedStruct,
+    ) -> Result<futures_rustls::rustls::client::danger::HandshakeSignatureValid, futures_rustls::rustls::Error> {
+        futures_rustls::rustls::crypto::verify_tls12_signature(message, cert, dss, &self.0)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls_pki_types::CertificateDer,
+        dss: &futures_rustls::rustls::DigitallySignedStruct,
+    ) -> Result<futures_rustls::rustls::client::danger::HandshakeSignatureValid, futures_rustls::rustls::Error> {
+        futures_rustls::rustls::crypto::verify_tls13_signature(message, cert, dss, &self.0)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<futures_rustls::rustls::SignatureScheme> {
+        self.0.supported_schemes()
+    }
+
+    fn root_hint_subjects(&self) -> Option<&[futures_rustls::rustls::DistinguishedName]> {
+        None
+    }
+}
+
 #[async_trait]
 impl<S> TlsConnector<S> for WasmTlsConnector
 where
     S: AsyncRead + AsyncWrite + StreamOps + Unpin + Send + 'static,
 {
-    type Conn = subtle_tls::TlsStream<S>;
+    type Conn = futures_rustls::client::TlsStream<S>;
 
     async fn negotiate_unvalidated(
         &self,
         stream: S,
         sni_hostname: &str,
     ) -> IoResult<Self::Conn> {
-        self.inner
-            .connect(stream, sni_hostname)
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+        let name: rustls_pki_types::ServerName<'_> = sni_hostname
+            .try_into()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        self.connector.connect(name.to_owned(), stream).await
     }
 }
 
@@ -471,7 +531,7 @@ where
     S: AsyncRead + AsyncWrite + StreamOps + Unpin + Send + 'static,
 {
     type Connector = WasmTlsConnector;
-    type TlsStream = subtle_tls::TlsStream<S>;
+    type TlsStream = futures_rustls::client::TlsStream<S>;
     type Acceptor = WasmUnimplementedTls;
     type TlsServerStream = WasmUnimplementedTls;
 
@@ -484,32 +544,32 @@ where
     }
 
     fn supports_keying_material_export(&self) -> bool {
-        // subtle-tls implements RFC 8446 keying material export
         true
     }
 }
 
-// Implement tor-rtcompat traits for subtle_tls::TlsStream
-// (These were previously in subtle-tls but moved here to avoid circular dependency)
+// CertifiedConn and StreamOps for futures_rustls::client::TlsStream on WASM.
+// (The native impls are in impls/rustls.rs, gated behind cfg(not(wasm32)).)
 
-impl<S> StreamOps for subtle_tls::TlsStream<S>
+impl<S> StreamOps for futures_rustls::client::TlsStream<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     // Use default implementation
 }
 
-impl<S> CertifiedConn for subtle_tls::TlsStream<S>
+impl<S> CertifiedConn for futures_rustls::client::TlsStream<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     fn peer_certificate(&self) -> IoResult<Option<Cow<'_, [u8]>>> {
-        // subtle_tls::TlsStream::peer_certificate returns Option<&[u8]>
-        Ok(self.peer_certificate().map(Cow::Borrowed))
+        let (_, session) = self.get_ref();
+        Ok(session
+            .peer_certificates()
+            .and_then(|certs| certs.first().map(|c| Cow::from(c.as_ref()))))
     }
 
     fn own_certificate(&self) -> IoResult<Option<Cow<'_, [u8]>>> {
-        // Client connections don't have their own certificate
         Ok(None)
     }
 
@@ -519,8 +579,10 @@ where
         label: &[u8],
         context: Option<&[u8]>,
     ) -> IoResult<Vec<u8>> {
-        // Delegate to subtle_tls's implementation
-        subtle_tls::TlsStream::export_keying_material(self, len, label, context)
+        let (_, session) = self.get_ref();
+        session
+            .export_keying_material(Vec::with_capacity(len), label, context)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 }
 

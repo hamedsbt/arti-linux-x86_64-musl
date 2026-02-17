@@ -1,7 +1,7 @@
 //! HTTP fetch implementation over arti-client DataStream
 //!
 //! This module implements HTTP/1.1 requests over Tor streams,
-//! with TLS support via subtle-tls for HTTPS.
+//! with TLS support via rustls for HTTPS.
 //!
 //! The fetch resolves as soon as response headers are received.
 //! Body reading is deferred — chunks are read incrementally via `read_chunk()`.
@@ -474,7 +474,7 @@ pub async fn fetch_headers<S>(
     body: Option<Vec<u8>>,
     is_https: bool,
     host: &str,
-    ca_bundle_wait: Option<std::rc::Rc<subtle_tls::ReadySignal>>,
+    tls_config: Option<std::sync::Arc<futures_rustls::rustls::ClientConfig>>,
 ) -> Result<FetchHeadersResult, JsTorError>
 where
     S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin + 'static,
@@ -483,23 +483,21 @@ where
     debug!("Sending {} bytes of HTTP request", request_bytes.len());
 
     if is_https {
-        use subtle_tls::{TlsConfig, TlsStream};
+        let tls_config = tls_config.ok_or_else(|| {
+            JsTorError::tls("HTTPS requested but no TLS config provided")
+        })?;
 
-        let config = TlsConfig {
-            skip_verification: false,
-            alpn_protocols: vec!["http/1.1".to_string()],
-            ..Default::default()
-        };
+        let connector = futures_rustls::TlsConnector::from(tls_config);
+        let server_name = rustls_pki_types::ServerName::try_from(host.to_string())
+            .map_err(|e| JsTorError::tls(format!("Invalid server name '{}': {}", host, e)))?;
 
-        let mut tls_stream = TlsStream::connect(stream, host, config, ca_bundle_wait)
+        let mut tls_stream = connector
+            .connect(server_name, stream)
             .await
             .map_err(|e| {
                 JsTorError::tls(format!("TLS handshake failed with {}: {}", host, e))
             })?;
-        info!(
-            "TLS 1.3 connection established with {} (WASM/SubtleCrypto)",
-            host
-        );
+        info!("TLS connection established with {}", host);
 
         let (status, resp_headers, framing, overflow) =
             send_request_and_read_headers(&mut tls_stream, &request_bytes, &method).await?;

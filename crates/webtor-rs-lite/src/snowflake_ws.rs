@@ -31,7 +31,8 @@ use tracing::info;
 use crate::kcp_stream::{KcpConfig, KcpStream};
 use crate::smux::SmuxStream;
 use crate::turbo::TurboStream;
-use subtle_tls::{TlsConfig, TlsConnector, TlsStream};
+use futures_rustls::rustls;
+use std::sync::Arc;
 
 /// WebSocket Snowflake endpoints
 pub const SNOWFLAKE_WS_URL: &str = "wss://snowflake.torproject.net/";
@@ -83,7 +84,7 @@ impl SnowflakeWsConfig {
 type SnowflakeWsStack = SmuxStream<KcpStream<TurboStream<WebSocketStream>>>;
 
 enum SnowflakeWsInner {
-    Connected(TlsStream<SnowflakeWsStack>),
+    Connected(futures_rustls::client::TlsStream<SnowflakeWsStack>),
 }
 
 /// WebSocket-based Snowflake stream
@@ -127,16 +128,13 @@ impl SnowflakeWsStream {
         smux.initialize().await?;
         info!("SMUX layer initialized");
 
-        // 5. Wrap with TLS
+        // 5. Wrap with TLS (using rustls with skip-verification for Tor)
         info!("Establishing TLS...");
-        let tls_config = TlsConfig {
-            skip_verification: true, // Tor uses self-signed certs
-            alpn_protocols: vec![],
-            ..Default::default()
-        };
-        let connector = TlsConnector::with_config(tls_config);
+        let connector = make_tor_tls_connector();
+        let server_name = rustls_pki_types::ServerName::try_from("www.example.com".to_string())
+            .map_err(|e| TorError::tls(format!("Invalid server name: {}", e)))?;
         info!("Snowflake: calling TLS connect...");
-        let tls_result = connector.connect(smux, "www.example.com").await;
+        let tls_result = connector.connect(server_name, smux).await;
         info!("Snowflake: TLS connect returned");
         let tls_stream =
             tls_result.map_err(|e| TorError::tls(format!("TLS handshake failed: {}", e)))?;
@@ -156,7 +154,10 @@ impl tor_rtcompat::CertifiedConn for SnowflakeWsStream {
     fn peer_certificate(&self) -> io::Result<Option<Cow<'_, [u8]>>> {
         match &self.inner {
             SnowflakeWsInner::Connected(tls) => {
-                Ok(tls.peer_certificate().map(Cow::Borrowed))
+                let (_, session) = tls.get_ref();
+                Ok(session
+                    .peer_certificates()
+                    .and_then(|certs| certs.first().map(|c| Cow::from(c.as_ref()))))
             }
         }
     }
@@ -168,13 +169,15 @@ impl tor_rtcompat::CertifiedConn for SnowflakeWsStream {
     fn export_keying_material(
         &self,
         len: usize,
-        _label: &[u8],
-        _context: Option<&[u8]>,
+        label: &[u8],
+        context: Option<&[u8]>,
     ) -> io::Result<Vec<u8>> {
         match &self.inner {
-            SnowflakeWsInner::Connected(_tls) => {
-                tracing::warn!("export_keying_material not fully implemented");
-                Ok(vec![0u8; len])
+            SnowflakeWsInner::Connected(tls) => {
+                let (_, session) = tls.get_ref();
+                session
+                    .export_keying_material(Vec::with_capacity(len), label, context)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
             }
         }
     }
@@ -214,6 +217,24 @@ impl AsyncWrite for SnowflakeWsStream {
             SnowflakeWsInner::Connected(tls) => Pin::new(tls).poll_close(cx),
         }
     }
+}
+
+/// Create a TLS connector for Tor relay connections.
+///
+/// Skips certificate verification (Tor validates via CERTS cells) but
+/// verifies TLS handshake signatures.
+fn make_tor_tls_connector() -> futures_rustls::TlsConnector {
+    let provider = rustls_rustcrypto::provider();
+    let algorithms = provider.signature_verification_algorithms.clone();
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(
+            tor_rtcompat::wasm::TorCertVerifier::new(algorithms),
+        ))
+        .with_no_client_auth();
+    futures_rustls::TlsConnector::from(Arc::new(config))
 }
 
 /// Convenience function to create a WebSocket Snowflake stream

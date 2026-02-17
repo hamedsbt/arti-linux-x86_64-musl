@@ -23,8 +23,11 @@ tor-dirmgr = { path = "../tor-dirmgr", default-features = false }
 # Snowflake transport
 webtor-rs-lite = { path = "../webtor-rs-lite" }
 
-# TLS for HTTPS over DataStream
-subtle-tls = { path = "../subtle-tls" }
+# TLS for HTTPS over DataStream (rustls with pure-Rust crypto for WASM)
+futures-rustls = { version = "0.26", default-features = false, features = ["tls12", "logging"] }
+rustls-rustcrypto = "0.0.2-alpha"
+webpki-roots = "1"
+rustls-pki-types = { version = "1", features = ["web"] }
 
 # HTTP support
 http = "1.1"

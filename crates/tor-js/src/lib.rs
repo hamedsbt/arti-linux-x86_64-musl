@@ -41,7 +41,6 @@ use error::JsTorError;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use arti_client::config::{BridgeConfigBuilder, CfgPath, pt::TransportConfigBuilder};
@@ -235,10 +234,7 @@ impl TorClientOptions {
 #[wasm_bindgen]
 pub struct TorClient {
     inner: Option<Arc<ArtiTorClient<WasmRuntime>>>,
-    /// Signal that fires when the background CA bundle fetch completes.
-    /// Passed to TLS cert verification so it can wait for extended roots
-    /// before rejecting an untrusted root CA.
-    ca_bundle_ready: Rc<subtle_tls::ReadySignal>,
+    tls_config: Arc<futures_rustls::rustls::ClientConfig>,
 }
 
 #[wasm_bindgen]
@@ -271,9 +267,9 @@ impl TorClient {
             }
         };
 
-        let ca_ready = Rc::clone(&self.ca_bundle_ready);
+        let tls_config = Arc::clone(&self.tls_config);
         wasm_bindgen_futures::future_to_promise(async move {
-            fetch_impl(&client, &url, init, Some(ca_ready)).await
+            fetch_impl(&client, &url, init, tls_config).await
         })
     }
 
@@ -379,27 +375,29 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
         .map_err(|e| JsTorError::bootstrap(format!("Bootstrap failed: {}", e)).into_js_value())?;
     info!("Bootstrap complete!");
 
-    // 6. Fetch the full Mozilla CA bundle through Tor in the background.
-    // The embedded roots (Let's Encrypt) are sufficient for bootstrap;
-    // the full bundle enables HTTPS to arbitrary sites (Google, etc.).
-    // The signal is passed to TLS cert verification via fetch_impl, so it can
-    // wait for extended roots before rejecting an untrusted root CA.
-    let ca_ready = subtle_tls::ReadySignal::new();
-    let ca_signal = Rc::clone(&ca_ready);
-    let client_for_ca = tor_client.clone();
-    wasm_bindgen_futures::spawn_local(async move {
-        if let Err(e) = fetch_ca_bundle(&client_for_ca).await {
-            tracing::error!("Failed to fetch CA bundle: {}. Only embedded roots available.", e);
-        } else {
-            tracing::info!("Fetched CA bundle");
-        }
-        ca_signal.set();
-    });
-
     Ok(TorClient {
         inner: Some(Arc::new(tor_client)),
-        ca_bundle_ready: ca_ready,
+        tls_config: make_tls_config(),
     })
+}
+
+/// Build a rustls ClientConfig with the Mozilla CA bundle (compiled in via webpki-roots)
+/// and the pure-Rust crypto provider (rustls-rustcrypto) for WASM compatibility.
+fn make_tls_config() -> Arc<futures_rustls::rustls::ClientConfig> {
+    use futures_rustls::rustls;
+
+    let provider = rustls_rustcrypto::provider();
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    let mut config = rustls::ClientConfig::builder_with_provider(provider.into())
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Arc::new(config)
 }
 
 // ============================================================================
@@ -416,78 +414,6 @@ struct FetchInit {
     // TODO: support AbortSignal-style cancellation via a `signal` option
 }
 
-/// Fetch the Mozilla CA bundle through Tor and load it into the global trust store.
-///
-/// Uses the embedded roots (Let's Encrypt) to TLS-connect to curl.se, which hosts
-/// the Mozilla-derived CA bundle. Once loaded, all subsequent TLS connections can
-/// verify certificates from any CA in the bundle.
-async fn fetch_ca_bundle(client: &ArtiTorClient<WasmRuntime>) -> Result<(), String> {
-    use subtle_tls::{TlsConfig, TlsConnector};
-
-    let ca_url = "https://curl.se/ca/cacert.pem";
-    let host = "curl.se";
-    let port = 443u16;
-
-    info!("Fetching Mozilla CA bundle from {} via Tor...", ca_url);
-
-    let stream = client
-        .connect((host, port))
-        .await
-        .map_err(|e| format!("connect to {}: {}", host, e))?;
-
-    let config = TlsConfig {
-        skip_verification: false,
-        alpn_protocols: vec!["http/1.1".to_string()],
-        ..Default::default()
-    };
-    let connector = TlsConnector::with_config(config);
-    let mut tls_stream = connector
-        .connect(stream, host)
-        .await
-        .map_err(|e| format!("TLS to {}: {}", host, e))?;
-
-    let request = format!(
-        "GET /ca/cacert.pem HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        host
-    );
-    use futures::io::{AsyncReadExt, AsyncWriteExt};
-    tls_stream
-        .write_all(request.as_bytes())
-        .await
-        .map_err(|e| format!("write: {}", e))?;
-    tls_stream
-        .flush()
-        .await
-        .map_err(|e| format!("flush: {}", e))?;
-
-    let mut response = Vec::new();
-    tls_stream
-        .read_to_end(&mut response)
-        .await
-        .map_err(|e| format!("read: {}", e))?;
-
-    // Parse HTTP response: find the body after \r\n\r\n
-    let response_str =
-        String::from_utf8(response).map_err(|e| format!("response not UTF-8: {}", e))?;
-    let body_start = response_str
-        .find("\r\n\r\n")
-        .ok_or_else(|| "no HTTP body delimiter found".to_string())?;
-    let pem_body = &response_str[body_start + 4..];
-
-    if !pem_body.contains("-----BEGIN CERTIFICATE-----") {
-        return Err(format!(
-            "response does not contain PEM certificates (first 100 bytes: {:?})",
-            &pem_body[..pem_body.len().min(100)]
-        ));
-    }
-
-    let count = subtle_tls::load_global_ca_bundle(pem_body)
-        .map_err(|e| format!("load CA bundle: {}", e))?;
-    info!("Loaded {} CA roots from Mozilla bundle", count);
-
-    Ok(())
-}
-
 /// Perform a fetch request, returning a real browser `Response` object.
 ///
 /// The Response is created as soon as headers arrive. Its body is a
@@ -497,7 +423,7 @@ async fn fetch_impl(
     client: &ArtiTorClient<WasmRuntime>,
     url_str: &str,
     init: JsValue,
-    ca_bundle_wait: Option<Rc<subtle_tls::ReadySignal>>,
+    tls_config: Arc<futures_rustls::rustls::ClientConfig>,
 ) -> Result<JsValue, JsValue> {
     // Parse URL
     let url = url::Url::parse(url_str)
@@ -560,7 +486,7 @@ async fn fetch_impl(
     debug!("Connected, making HTTP request...");
 
     // Perform the HTTP request — resolves as soon as headers arrive
-    let result = fetch::fetch_headers(stream, &url, method, headers, body, is_https, host, ca_bundle_wait)
+    let result = fetch::fetch_headers(stream, &url, method, headers, body, is_https, host, Some(tls_config))
         .await
         .map_err(|e| e.into_js_value())?;
 

@@ -644,7 +644,7 @@ pub trait CertifiedConn {
 /// TLS 1.3 is completely ubiquitous, we might be able to specify a simpler link
 /// handshake than Tor uses now.
 ///
-/// Note: We use `unsafe impl Send` on WASM types (like subtle_tls::TlsStream)
+/// Note: We use `unsafe impl Send` on some WASM types
 /// to allow using standard async_trait everywhere.
 #[async_trait]
 pub trait TlsConnector<S> {
