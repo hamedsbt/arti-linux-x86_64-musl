@@ -1,28 +1,46 @@
-# wasm todos
+# Wasm TODOs
 
-- [ ] code review tor-time
-- [ ] merge tor-time
-- [ ] code review tor-async-compat
-- [ ] merge tor-async-compat
-- [x] fix pre-existing tests (`cargo test`)
-- [ ] automated testing
-- [ ] check/clean ai code
-- [ ] improve js storage handling
-  - [x] remove rust inmemory storage
-- [ ] make tor-js API same/similar to https://www.npmjs.com/package/tor-js
-  - agree on API
-  - websocket?
-  - isolated clients (share network caching)
-  - sockets
-- [ ] faster bootstrap (allow external source? fix timing bugs? both?)
-- [ ] fix microdesc stalling issue (when batch size or parallelism is higher)
-- [ ] try fix suspected timing bugs (downloads unblocked by ping loop) (related to faster bootstrap)
-- sync with arti main branch
+## Required
+
+- [ ] Code review tor-time
+- [ ] Merge tor-time
+- [ ] Code review tor-async-compat
+- [ ] Merge tor-async-compat
+- [x] Fix pre-existing tests (`cargo test`)
+- [ ] Automated testing
+- [ ] Fix warnings, clippy
+- [ ] Check/clean ai code
+- [ ] Make tor-js API same/similar to https://www.npmjs.com/package/tor-js
+  - [x] Use standard `Response` incl streaming
+  - [ ] Fix awkward initialization
+  - [ ] Fix `TorClient` async new
+  - [ ] Logging
+  - [x] Remove rust inmemory storage
+  - [ ] FileSystem storage
+    - [x] Prototyped (tor-fetch.js)
+  - [ ] IndexedDb storage
+    - [x] Prototyped (tor-js-showcase)
+  - [ ] In-memory storage
+    - [x] Prototyped (tor-fetch-inmemory.js)
+  - [ ] Platform-dependent (browser/nodejs) default storage
+- [ ] Fix slow bootstrap (via non-tor sources if needed)
+- Sync with arti main branch
   - [x] 206e629
   - [x] 9306eec
-  - [ ] (probably needed again later)
-- [ ] fix tor-fetch\[-with-storage\].js slow exit (prints response and hangs for a long time)
-- [ ] fix TODO/FIXMEs added
-- [ ] try making npm module small (option to fetch wasm with hash check?)
-- [ ] code review
-- [ ] merge
+  - [ ] (Probably needed again later)
+- [ ] Fix/deprioritize TODO/FIXMEs added
+- [ ] Provide tiny module variant via hash-checked download
+- [ ] Code review
+- [ ] Merge
+
+## Nice to Have
+
+- [ ] API extensions
+  - [ ] Isolated clients (share network caching)
+  - [ ] WebSocket
+  - [ ] Regular sockets
+- [ ] Try making npm module small (option to fetch wasm with hash check?)
+- [ ] Fix performance issue(s) affecting normal bootstrap
+  - [ ] Microdesc stalls when batch size or parallelism is higher
+  - [ ] Downloads unblocked by ping loop
+- [ ] Fix tor-fetch.js slow exit (prints response and hangs for a long time)
