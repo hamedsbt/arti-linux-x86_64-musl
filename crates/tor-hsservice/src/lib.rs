@@ -336,7 +336,7 @@ impl OnionService {
             keymgr.clone(),
             pow_manager_storage_handle,
             netdir_provider.clone(),
-            status_tx.clone().into(),
+            status_tx.clone(),
             config_rx.clone(),
         )?;
 

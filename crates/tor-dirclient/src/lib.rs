@@ -84,7 +84,7 @@ fn truncate_middle(s: &str, max_len: usize) -> std::borrow::Cow<'_, str> {
     }
     // Reserve 3 chars for "..."
     let available = max_len.saturating_sub(3);
-    let head_len = (available + 1) / 2;
+    let head_len = available.div_ceil(2);
     let tail_len = available / 2;
     let head: String = s.chars().take(head_len).collect();
     let tail: String = s.chars().skip(char_count - tail_len).collect();

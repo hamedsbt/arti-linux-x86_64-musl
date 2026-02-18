@@ -81,6 +81,7 @@ pub trait StringStore: Send + Sync {
 ///
 /// On WASM, custom storage must always be provided.
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum AnyStateMgr {
     /// Filesystem-based storage (native only).
     #[cfg(not(target_arch = "wasm32"))]

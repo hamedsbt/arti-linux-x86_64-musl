@@ -284,7 +284,7 @@ impl<R: Runtime> TorClientBuilder<R> {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let (state_dir, mistrust) = self.config.state_dir()
-                        .map_err(|e| crate::Error::from(e))?;
+                        .map_err(crate::Error::from)?;
                     Ok(AnyStateMgr::from_path_and_mistrust(&state_dir, mistrust)
                         .map_err(|e| crate::Error::from(ErrorDetail::StateMgrSetup(e)))?)
                 }

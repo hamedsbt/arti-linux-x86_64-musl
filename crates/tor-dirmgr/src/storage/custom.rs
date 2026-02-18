@@ -197,7 +197,7 @@ fn hex_to_32_bytes(hex_str: &str) -> Result<[u8; 32]> {
     if bytes.len() != 32 {
         return Err(Error::CacheCorruption("wrong digest length in cache"));
     }
-    let mut arr = [0u8; 32];
+    let mut arr = [0_u8; 32];
     arr.copy_from_slice(&bytes);
     Ok(arr)
 }
