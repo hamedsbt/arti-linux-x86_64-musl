@@ -32,6 +32,7 @@
 - [ ] Provide tiny module variant via hash-checked download
 - [ ] Code review
 - [ ] Merge
+- [ ] Publish on npm
 
 ## Nice to Have
 
@@ -39,7 +40,7 @@
   - [ ] Isolated clients (share network caching)
   - [ ] WebSocket
   - [ ] Regular sockets
-- [ ] Try making npm module small (option to fetch wasm with hash check?)
+- [ ] Try making npm module small
 - [ ] Fix performance issue(s) affecting normal bootstrap
   - [ ] Microdesc stalls when batch size or parallelism is higher
   - [ ] Downloads unblocked by ping loop
