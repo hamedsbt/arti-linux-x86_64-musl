@@ -228,6 +228,7 @@ impl StateMgr for AnyStateMgr {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;

@@ -35,6 +35,7 @@ use crate::rpc::RpcProxySupport;
 
 /// Placeholder type when RPC is disabled at compile time.
 #[cfg(not(feature = "rpc"))]
+#[cfg_attr(feature = "experimental-api", non_exhaustive)]
 #[cfg_attr(feature = "experimental-api", visibility::make(pub))]
 pub(crate) enum RpcMgr {}
 

@@ -95,6 +95,7 @@ struct StoredConsensus {
 }
 
 impl StoredConsensus {
+    /// Create a `StoredConsensus` from metadata and document content.
     fn from_meta_and_content(meta: &ConsensusMeta, pending: bool, content: &str) -> Self {
         let lifetime = meta.lifetime();
         Self {
@@ -108,6 +109,7 @@ impl StoredConsensus {
         }
     }
 
+    /// Convert to a `ConsensusMeta`.
     fn to_meta(&self) -> Result<ConsensusMeta> {
         let lifetime = Lifetime::new(
             secs_to_system_time(self.valid_after_secs),
@@ -182,16 +184,19 @@ struct StoredProtocols {
 // Helper functions
 // ============================================================================
 
+/// Convert a `SystemTime` to seconds since UNIX epoch.
 fn system_time_to_secs(t: SystemTime) -> u64 {
     t.duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
 
+/// Convert seconds since UNIX epoch to a `SystemTime`.
 fn secs_to_system_time(secs: u64) -> SystemTime {
     SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs)
 }
 
+/// Decode a hex string into a 32-byte array.
 fn hex_to_32_bytes(hex_str: &str) -> Result<[u8; 32]> {
     let bytes = hex::decode(hex_str).map_err(|_| Error::CacheCorruption("invalid hex in cache"))?;
     if bytes.len() != 32 {
@@ -202,10 +207,12 @@ fn hex_to_32_bytes(hex_str: &str) -> Result<[u8; 32]> {
     Ok(arr)
 }
 
+/// Build a storage key for a consensus document.
 fn consensus_key(flavor: ConsensusFlavor, sha3_of_whole: &[u8; 32]) -> String {
     format!("dir:consensus:{}:{}", flavor_to_str(flavor), hex::encode(sha3_of_whole))
 }
 
+/// Build a storage key for an authority certificate.
 fn authcert_key(ids: &AuthCertKeyIds) -> String {
     format!(
         "dir:authcert:{}:{}",
@@ -214,16 +221,19 @@ fn authcert_key(ids: &AuthCertKeyIds) -> String {
     )
 }
 
+/// Build a storage key for a microdescriptor.
 fn microdesc_key(digest: &MdDigest) -> String {
     format!("dir:microdesc:{}", hex::encode(digest))
 }
 
 #[cfg(feature = "routerdesc")]
+/// Build a storage key for a router descriptor.
 fn routerdesc_key(digest: &RdDigest) -> String {
     format!("dir:routerdesc:{}", hex::encode(digest))
 }
 
 #[cfg(feature = "bridge-client")]
+/// Build a storage key for a bridge descriptor.
 fn bridge_key(bridge: &BridgeConfig) -> String {
     // Use a hash of the bridge config string as the key
     use digest::Digest;
@@ -231,6 +241,7 @@ fn bridge_key(bridge: &BridgeConfig) -> String {
     format!("dir:bridge:{}", hex::encode(&hash[..16]))
 }
 
+/// Convert a `ConsensusFlavor` to its string representation.
 fn flavor_to_str(flavor: ConsensusFlavor) -> &'static str {
     match flavor {
         ConsensusFlavor::Microdesc => "microdesc",
@@ -239,6 +250,7 @@ fn flavor_to_str(flavor: ConsensusFlavor) -> &'static str {
 }
 
 #[allow(dead_code)]
+/// Parse a string into a `ConsensusFlavor`, if recognized.
 fn str_to_flavor(s: &str) -> Option<ConsensusFlavor> {
     match s {
         "microdesc" => Some(ConsensusFlavor::Microdesc),
@@ -276,6 +288,7 @@ impl BoxedDirStore {
         }
     }
 
+    /// Load and deserialize a JSON value from the underlying store.
     fn load_json<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
         let inner = self.inner.read().map_err(|_| Error::CacheCorruption("lock poisoned"))?;
         match inner.load(key)? {
@@ -288,6 +301,7 @@ impl BoxedDirStore {
         }
     }
 
+    /// Serialize and store a value as JSON in the underlying store.
     fn store_json<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
         let inner = self.inner.read().map_err(|_| Error::CacheCorruption("lock poisoned"))?;
         let json = serde_json::to_string(value)

@@ -302,15 +302,10 @@ async fn fetch_single<R: Runtime>(
 #[cfg(test)]
 static CANNED_RESPONSE: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(vec![]));
 
-/// Launch a set of download requests for a set of missing objects in
-/// `missing`, and return each request along with the response it received.
-///
-/// Don't launch more than `parallelism` requests at once.
-#[allow(clippy::cognitive_complexity)] // TODO: maybe refactor?
-#[instrument(level = "trace", skip_all)]
-/// Create the stream of fetch requests for the given missing documents.
+/// Create the list of fetch requests for the given missing documents.
 ///
 /// This is separated from `download_attempt` to allow testing with canned responses.
+#[instrument(level = "trace", skip_all)]
 fn create_fetch_requests<R: Runtime>(
     dirmgr: &Arc<DirMgr<R>>,
     attempt_id: AttemptId,
@@ -355,22 +350,20 @@ async fn fetch_multiple<R: Runtime>(
         .collect()
         .await;
 
-    let mut useful_responses = Vec::new();
-    for r in responses {
-        match r {
-            Ok((request, response)) => {
-                if response.status_code() == 200 {
-                    useful_responses.push((request, response));
-                } else {
-                    trace!(
-                        "cache declined request; reported status {:?}",
-                        response.status_code()
-                    );
-                }
+    let useful_responses: Vec<_> = responses
+        .into_iter()
+        .filter_map(|r| match r {
+            Ok((req, resp)) if resp.status_code() == 200 => Some((req, resp)),
+            Ok((_, resp)) => {
+                trace!("cache declined request; reported status {:?}", resp.status_code());
+                None
             }
-            Err(e) => warn_report!(e, "error while downloading"),
-        }
-    }
+            Err(e) => {
+                warn_report!(e, "error while downloading");
+                None
+            }
+        })
+        .collect();
 
     trace!(attempt=%attempt_id, "received {} useful responses from our requests.", useful_responses.len());
 
@@ -471,7 +464,7 @@ fn process_download_response<R: Runtime>(
     dirmgr: &Arc<DirMgr<R>>,
     state: &mut Box<dyn DirState>,
     attempt_id: AttemptId,
-    client_req: ClientRequest,
+    client_req: &ClientRequest,
     dir_response: DirResponse,
     n_errors: &mut usize,
 ) -> Result<()> {
@@ -488,39 +481,9 @@ fn process_download_response<R: Runtime>(
             return Ok(());
         }
     };
-    match dirmgr.expand_response_text(&client_req, text) {
-        Ok(text) => {
-            let doc_source = DocSource::DirServer {
-                source: source.clone(),
-            };
-            let mut changed = false;
-            let outcome = state.add_from_download(
-                &text,
-                &client_req,
-                doc_source,
-                Some(&dirmgr.store),
-                &mut changed,
-            );
 
-            if !changed {
-                debug_assert!(outcome.is_err());
-            }
-
-            if let Some(source) = source {
-                if let Err(e) = &outcome {
-                    *n_errors += 1;
-                    note_cache_error(dirmgr.circmgr()?.deref(), &source, e);
-                } else {
-                    note_cache_success(dirmgr.circmgr()?.deref(), &source);
-                }
-            }
-
-            if let Err(e) = &outcome {
-                dirmgr.note_errors(attempt_id, 1);
-                warn_report!(e, "error while adding directory info");
-            }
-            propagate_fatal_errors!(outcome);
-        }
+    let text = match dirmgr.expand_response_text(client_req, text) {
+        Ok(text) => text,
         Err(e) => {
             warn_report!(e, "Error when expanding directory text");
             if let Some(source) = source {
@@ -528,8 +491,40 @@ fn process_download_response<R: Runtime>(
                 note_cache_error(dirmgr.circmgr()?.deref(), &source, &e);
             }
             propagate_fatal_errors!(Err(e));
+            return Ok(());
+        }
+    };
+
+    let doc_source = DocSource::DirServer {
+        source: source.clone(),
+    };
+    let mut changed = false;
+    let outcome = state.add_from_download(
+        &text,
+        client_req,
+        doc_source,
+        Some(&dirmgr.store),
+        &mut changed,
+    );
+
+    if !changed {
+        debug_assert!(outcome.is_err());
+    }
+
+    if let Some(source) = source {
+        if let Err(e) = &outcome {
+            *n_errors += 1;
+            note_cache_error(dirmgr.circmgr()?.deref(), &source, e);
+        } else {
+            note_cache_success(dirmgr.circmgr()?.deref(), &source);
         }
     }
+
+    if let Err(e) = &outcome {
+        dirmgr.note_errors(attempt_id, 1);
+        warn_report!(e, "error while adding directory info");
+    }
+    propagate_fatal_errors!(outcome);
     Ok(())
 }
 
@@ -557,7 +552,7 @@ async fn download_attempt<R: Runtime>(
         let fetched = fetch_multiple(Arc::clone(dirmgr), attempt_id, &missing, parallelism).await?;
         let mut n_errors = 0;
         for (client_req, dir_response) in fetched {
-            process_download_response(dirmgr, state, attempt_id, client_req, dir_response, &mut n_errors)?;
+            process_download_response(dirmgr, state, attempt_id, &client_req, dir_response, &mut n_errors)?;
         }
         if n_errors != 0 {
             dirmgr.note_errors(attempt_id, n_errors);
@@ -583,7 +578,7 @@ async fn download_attempt<R: Runtime>(
             match result {
                 Ok((request, response)) => {
                     if response.status_code() == 200 {
-                        process_download_response(dirmgr, state, attempt_id, request, response, &mut n_errors)?;
+                        process_download_response(dirmgr, state, attempt_id, &request, response, &mut n_errors)?;
                         dirmgr.update_progress(attempt_id, state.bootstrap_progress());
                     } else {
                         trace!(

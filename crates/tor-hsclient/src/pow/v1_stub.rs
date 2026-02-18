@@ -19,6 +19,7 @@ impl HsPowClientV1 {
     pub(super) fn increase_effort(&mut self) {}
 
     /// Stub; always returns None
+    #[allow(clippy::unused_async)] // must be async to match the real impl's API
     pub(super) async fn solve(&self) -> Result<Option<ProofOfWorkV1>, ProofOfWorkError> {
         Ok(None)
     }

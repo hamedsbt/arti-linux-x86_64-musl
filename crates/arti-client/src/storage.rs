@@ -100,10 +100,12 @@ pub fn split_storage<S: KeyValueStore + 'static>(
 ///
 /// Adds a `"state:"` prefix to all keys.
 struct KvStateAdapter {
+    /// The underlying key-value store.
     store: Arc<dyn KeyValueStore>,
 }
 
 impl KvStateAdapter {
+    /// Add the `"state:"` prefix to a key.
     fn prefixed(key: &str) -> String {
         format!("state:{}", key)
     }
@@ -151,6 +153,7 @@ impl StringStore for KvStateAdapter {
 ///
 /// Directory keys already include the `"dir:"` prefix, so no prefix is added.
 struct KvDirAdapter {
+    /// The underlying key-value store.
     store: Arc<dyn KeyValueStore>,
 }
 
@@ -211,6 +214,7 @@ impl CustomDirStore for KvDirAdapter {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use std::collections::HashMap;
     use std::sync::RwLock;
@@ -289,7 +293,7 @@ mod tests {
         assert!(statemgr.can_store());
 
         // Store via state manager (StateMgr::store serializes to JSON)
-        statemgr.store("guards", &42i32).unwrap();
+        statemgr.store("guards", &42_i32).unwrap();
 
         // Load back
         let loaded: Option<i32> = statemgr.load("guards").unwrap();
@@ -312,7 +316,7 @@ mod tests {
         assert!(adapter.is_readonly());
 
         // Upgrade to readwrite (acquires lock on underlying store)
-        assert_eq!(adapter.upgrade_to_readwrite().unwrap(), true);
+        assert!(adapter.upgrade_to_readwrite().unwrap());
         assert!(!adapter.is_readonly());
 
         // Store a dir key (keys already include "dir:" prefix from BoxedDirStore)

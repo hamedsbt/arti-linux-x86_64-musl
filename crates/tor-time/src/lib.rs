@@ -242,6 +242,7 @@ pub fn fmt_http_date(t: SystemTime) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]

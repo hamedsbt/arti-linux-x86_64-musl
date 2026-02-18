@@ -31,6 +31,10 @@ pub(crate) struct PowManager<R> {
 pub(crate) struct PowManagerStateRecord;
 
 impl<R: Runtime> PowManager<R> {
+    /// Create a new (stub) PoW manager. Does nothing.
+    #[allow(clippy::unnecessary_wraps)] // signature must match real impl
+    #[allow(clippy::too_many_arguments)] // signature must match real impl
+    #[allow(clippy::new_ret_no_self)] // signature must match real impl
     pub(crate) fn new(
         _runtime: R,
         _nickname: HsNickname,
@@ -55,6 +59,8 @@ impl<R: Runtime> PowManager<R> {
         })
     }
 
+    /// Launch the (stub) PoW manager. Does nothing.
+    #[allow(clippy::unnecessary_wraps)] // signature must match real impl
     pub(crate) fn launch(self: Arc<Self>) -> Result<(), StartupError> {
         Ok(())
     }
