@@ -5,6 +5,10 @@ edition = "2021"
 authors = ["Webtor Contributors"]
 license = "MIT"
 description = "Lightweight Snowflake transport for arti-client integration"
+keywords = ["tor", "arti", "snowflake", "transport"]
+categories = ["network-programming"]
+repository = "https://gitlab.torproject.org/tpo/core/arti.git/"
+readme = "README.md"
 
 [dependencies]
 # Core async runtime

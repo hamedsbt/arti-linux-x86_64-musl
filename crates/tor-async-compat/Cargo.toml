@@ -5,6 +5,10 @@ edition = "2024"
 rust-version = "1.86"
 license = "MIT OR Apache-2.0"
 description = "async_trait wrapper that uses ?Send on WASM"
+keywords = ["tor", "arti", "async", "wasm"]
+categories = ["asynchronous"]
+repository = "https://gitlab.torproject.org/tpo/core/arti.git/"
+readme = "README.md"
 
 [lib]
 proc-macro = true
