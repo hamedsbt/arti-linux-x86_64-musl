@@ -41,6 +41,7 @@
 #![allow(clippy::needless_raw_string_hashes)] // complained-about code is fine, often best
 #![allow(clippy::needless_lifetimes)] // See arti#1765
 #![allow(mismatched_lifetime_syntaxes)] // temporary workaround for arti#2060
+#![allow(clippy::collapsible_if)] // See arti#2342
 #![deny(clippy::unused_async)]
 //! <!-- @@ end lint list maintained by maint/add_warning @@ -->
 
@@ -50,8 +51,8 @@
 mod conn;
 #[cfg(feature = "ffi")]
 pub mod ffi;
-pub mod llconn;
 mod msgs;
+mod nb_stream;
 #[macro_use]
 mod util;
 #[cfg(test)]
@@ -62,3 +63,4 @@ pub use conn::{
     RpcConnBuilder, StreamError,
 };
 pub use msgs::{AnyRequestId, ObjectId, request::InvalidRequestError, response::RpcError};
+pub use nb_stream::SendRequestError;

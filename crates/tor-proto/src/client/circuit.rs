@@ -74,7 +74,6 @@ use crate::circuit::UniqId;
 
 use super::{ClientTunnel, TargetHop};
 
-use either::Either;
 use futures::channel::mpsc;
 use oneshot_fused_workaround as oneshot;
 
@@ -93,8 +92,6 @@ pub use path::{Path, PathEntry};
 
 /// The size of the buffer for communication between `ClientCirc` and its reactor.
 pub const CIRCUIT_BUFFER_SIZE: usize = 128;
-
-pub(crate) use crate::client::reactor::syncview::ClientCircSyncView;
 
 // TODO: export this from the top-level instead (it's not client-specific).
 pub use crate::circuit::CircParameters;
@@ -116,18 +113,6 @@ pub(super) enum ClientCircChanMsg {
     /// A cell telling us to destroy the circuit.
     Destroy(chanmsg::Destroy),
     // Note: RelayEarly is not valid for clients!
-}
-
-impl crate::util::msg::ToRelayMsg for ClientCircChanMsg {
-    fn to_relay_msg(self) -> Either<chanmsg::Relay, Self> {
-        use ClientCircChanMsg::*;
-        use Either::*;
-
-        match self {
-            Relay(r) => Left(r),
-            m => Right(m),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -2294,7 +2279,7 @@ pub(crate) mod test {
         fn disposition(
             &mut self,
             _ctx: &crate::client::stream::IncomingStreamRequestContext<'_>,
-            _circ: &crate::circuit::CircSyncView<'_>,
+            _circ: &crate::circuit::CircHopSyncView<'_>,
         ) -> Result<crate::client::stream::IncomingStreamRequestDisposition> {
             Ok(crate::client::stream::IncomingStreamRequestDisposition::Accept)
         }
@@ -3444,7 +3429,7 @@ pub(crate) mod test {
                         .data_recvd
                         .extend_from_slice(dat.as_ref());
 
-                    let is_next_cell_sendme = data_cells_received % 31 == 0;
+                    let is_next_cell_sendme = data_cells_received.is_multiple_of(31);
                     if is_next_cell_sendme {
                         if tags.is_empty() {
                             // Important: we need to make sure all the SENDMEs

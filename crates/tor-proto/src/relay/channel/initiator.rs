@@ -88,6 +88,7 @@ where
             Some(&auth_challenge_cell),
             &identities,
             &mut verified,
+            None,
         )?
         .into_authenticate(verified.framed_tls.deref(), &identities.link_sign_kp)?;
 
