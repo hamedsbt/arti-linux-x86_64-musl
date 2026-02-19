@@ -12,7 +12,8 @@
 - [ ] Check/clean ai code
 - [ ] Make tor-js API same/similar to https://www.npmjs.com/package/tor-js
   - [x] Use standard `Response` incl streaming
-  - [ ] Fix awkward initialization
+  - [x] Fix awkward initialization
+  - [ ] Make initialization portable (don't use wasm file)
   - [x] Fix `TorClient` async new
   - [x] Logging
   - [x] Remove rust inmemory storage
