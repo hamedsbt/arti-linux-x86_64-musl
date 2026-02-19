@@ -26,6 +26,8 @@ export class Log {
     });
   }
 
+  // FIXME: include trace
+
   debug(...args: unknown[]): void {
     this.log('debug', ...args);
   }
@@ -45,7 +47,7 @@ export class Log {
   /** @internal Create a callback for WASM setLogCallback */
   _makeWasmCallback(): (level: string, target: string, message: string) => void {
     return (level: string, _target: string, message: string) => {
-      const logLevel = (['debug', 'info', 'warn', 'error'].includes(level)
+      const logLevel = (['debug', 'info', 'warn', 'error'].includes(level) // FIXME: Better detection
         ? level
         : 'debug') as LogLevel;
       this.log(logLevel, message);

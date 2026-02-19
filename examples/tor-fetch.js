@@ -9,30 +9,34 @@
 // State is persisted to ~/.local/share/tor-js/
 // Subsequent runs will load cached state for faster bootstrap.
 
-import { TorClient, Log, storage } from '../crates/tor-js/ts-wrapper/dist/index.js';
+import { TorClient, Log } from '../crates/tor-js/ts-wrapper/dist/index.js';
 
 async function main() {
   const url = process.argv[2] ?? 'https://check.torproject.org/api/ip';
 
-  console.log(`\nCreating TorClient with persistent storage...\n`);
+  const log = new Log();
+
+  log.info();
+  log.info(`Creating TorClient with persistent storage...`);
 
   const startTime = performance.now();
 
   const client = new TorClient({
     snowflakeUrl: 'wss://snowflake.pse.dev/',
     fingerprint: '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194',
-    log: new Log(),
-    storage: new storage.FilesystemStorage(),
+    log,
   });
 
   await client.ready();
 
   const connectTime = ((performance.now() - startTime) / 1000).toFixed(1);
-  console.log(`\nConnected in ${connectTime}s, fetching ${url}...\n`);
+  log.info();
+  log.info(`Connected in ${connectTime}s, fetching ${url}...`);
 
   // Make fetch request
   const fetchStart = performance.now();
   const response = await client.fetch(url);
+  const responseText = await response.text();
   const fetchTime = ((performance.now() - fetchStart) / 1000).toFixed(1);
 
   // Cleanup
@@ -41,11 +45,12 @@ async function main() {
   // Wait just a little bit so that the last log is our output
   await new Promise(resolve => setTimeout(resolve, 50));
 
-  console.log(`\nStatus: ${response.status}`);
-  console.log(`Connect time: ${connectTime}s`);
-  console.log(`Fetch time: ${fetchTime}s`);
-  console.log('Response:');
-  console.log(await response.text());
+  log.info();
+  log.info(`Status: ${response.status}`);
+  log.info(`Connect time: ${connectTime}s`);
+  log.info(`Fetch time: ${fetchTime}s`);
+  log.info('Response:');
+  log.info(responseText);
 }
 
 main().catch(err => {

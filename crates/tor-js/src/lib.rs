@@ -47,7 +47,7 @@ use arti_client::config::{BridgeConfigBuilder, CfgPath, pt::TransportConfigBuild
 use arti_client::{TorClient as ArtiTorClient, TorClientConfig};
 use serde::Deserialize;
 use tor_rtcompat::wasm::WasmRuntime;
-use tracing::{debug, info};
+use tracing::{debug, info, error};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
@@ -344,7 +344,7 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
 
     // Set up custom storage if provided
     if let Some(js_storage_interface) = options.storage {
-        info!("Initializing custom JS storage...");
+        info!("Initializing JS storage...");
         let js_storage = JsStorage::new(js_storage_interface);
 
         let cached_storage = CachedJsStorage::new(js_storage)
@@ -354,9 +354,9 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
             })?;
 
         builder = builder.storage(cached_storage);
-        info!("Custom storage configured (state + directory cache)");
+        info!("Storage configured (state + directory cache)");
     } else {
-        info!("Using default in-memory storage");
+        error!("Storage not configured");
     }
 
     let tor_client = builder

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://snowflake.torproject.net wss://snowflake.pse.dev https:; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'none';">
-    <title>tor-js - arti-client in WASM</title>
+    <title>tor-js showcase</title>
     <link rel="icon" href="tor.svg" type="image/svg+xml">
     <style>
         /* Dracula Pro Color Palette */
@@ -509,62 +509,48 @@
             }
         }
 
-        // Safe log entry creation
-        function createLogEntry(level, message) {
-            const entry = document.createElement('div');
-            entry.className = 'log-entry';
+        // Log instance that renders to the DOM log panel
+        const log = new Log({
+            rawLog: (level, ...args) => {
+                const output = document.getElementById('logOutput');
+                if (!output) return;
 
-            const levelSpan = document.createElement('span');
-            let levelClass;
-            switch (level) {
-                case 'INFO': levelClass = 'log-info'; break;
-                case 'ERROR': levelClass = 'log-error'; break;
-                case 'WARN': levelClass = 'log-warn'; break;
-                case 'DEBUG': levelClass = 'log-debug'; break;
-                case 'TRACE': levelClass = 'log-debug'; break;
-            }
-            levelSpan.className = levelClass;
-            levelSpan.textContent = level;
-            levelSpan.style.display = 'inline-block';
-            levelSpan.style.minWidth = '6ch';
+                const emptyState = output.querySelector('.empty-state');
+                if (emptyState) emptyState.remove();
 
-            const messageSpan = document.createElement('span');
-            messageSpan.textContent = message;
+                while (output.children.length >= MAX_LOG_ENTRIES) {
+                    output.removeChild(output.lastChild);
+                }
 
-            entry.appendChild(levelSpan);
-            entry.appendChild(messageSpan);
+                const entry = document.createElement('div');
+                entry.className = 'log-entry';
 
-            return entry;
-        }
+                const levelSpan = document.createElement('span');
+                const levelUpper = level.toUpperCase();
+                const levelClasses = { INFO: 'log-info', ERROR: 'log-error', WARN: 'log-warn', DEBUG: 'log-debug' };
+                levelSpan.className = levelClasses[levelUpper] ?? 'log-debug';
+                levelSpan.textContent = levelUpper;
+                levelSpan.style.display = 'inline-block';
+                levelSpan.style.minWidth = '6ch';
 
-        function log(level, message) {
-            const output = document.getElementById('logOutput');
-            if (!output) return;
+                const messageSpan = document.createElement('span');
+                messageSpan.textContent = args.join(' ');
 
-            // Remove empty state message on first log
-            const emptyState = output.querySelector('.empty-state');
-            if (emptyState) {
-                emptyState.remove();
-            }
-
-            // Enforce max log entries
-            while (output.children.length >= MAX_LOG_ENTRIES) {
-                output.removeChild(output.lastChild);
-            }
-
-            const entry = createLogEntry(level, message);
-            output.insertBefore(entry, output.firstChild);
-        }
+                entry.appendChild(levelSpan);
+                entry.appendChild(messageSpan);
+                output.insertBefore(entry, output.firstChild);
+            },
+        });
 
         // Global error handlers
         window.addEventListener('error', (event) => {
             console.error('Uncaught error:', event.error);
-            log('ERROR', 'Uncaught error: ' + (event.error?.message || 'Unknown error'));
+            log.error('Uncaught error: ' + (event.error?.message || 'Unknown error'));
         });
 
         window.addEventListener('unhandledrejection', (event) => {
             console.error('Unhandled promise rejection:', event.reason);
-            log('ERROR', 'Unhandled rejection: ' + (event.reason?.message || event.reason || 'Unknown error'));
+            log.error('Unhandled rejection: ' + (event.reason?.message || event.reason || 'Unknown error'));
         });
 
         async function run() {
@@ -609,38 +595,30 @@
 
             let torClient = null;
 
-            // Create a Log that writes to the DOM log panel
-            const torLog = new Log({
-                rawLog: (level, ...args) => {
-                    const message = args.join(' ');
-                    log(level.toUpperCase(), message);
-                },
-            });
-
             statusEl.textContent = 'Ready to connect';
             statusDot.className = 'status-dot';
-            log('INFO', 'Ready - click "Connect" to start');
+            log.info('Ready - click "Connect" to start');
 
             openBtn.addEventListener('click', async () => {
                 const bridgeUrl = bridgeUrlSelect.value;
                 const fingerprint = fingerprintInput.value.trim();
 
                 if (!fingerprint || fingerprint.length !== 40) {
-                    log('ERROR', 'Invalid fingerprint: must be 40 hex characters');
+                    log.error('Invalid fingerprint: must be 40 hex characters');
                     return;
                 }
 
                 openBtn.disabled = true;
                 statusEl.textContent = 'Connecting via Snowflake...';
                 statusDot.className = 'status-dot loading';
-                log('INFO', `Connecting to ${bridgeUrl} with fingerprint ${fingerprint.substring(0, 8)}...`);
+                log.info(`Connecting to ${bridgeUrl} with fingerprint ${fingerprint.substring(0, 8)}...`);
 
                 try {
                     const startTime = performance.now();
                     torClient = new TorClient({
                         snowflakeUrl: bridgeUrl,
                         fingerprint,
-                        log: torLog,
+                        log,
                         storage: new storage.IndexedDBStorage(),
                     });
                     await torClient.ready();
@@ -648,7 +626,7 @@
                     const connectTime = ((performance.now() - startTime) / 1000).toFixed(1);
                     statusEl.textContent = `Connected (${connectTime}s)`;
                     statusDot.className = 'status-dot ready';
-                    log('INFO', `Connected in ${connectTime}s`);
+                    log.info(`Connected in ${connectTime}s`);
 
                     closeBtn.disabled = false;
                     fetchBtn.disabled = false;
@@ -656,7 +634,7 @@
                 } catch (e) {
                     statusEl.textContent = 'Connection failed';
                     statusDot.className = 'status-dot error';
-                    log('ERROR', 'Connection failed: ' + (e.message || e));
+                    log.error('Connection failed: ' + (e.message || e));
                     openBtn.disabled = false;
                 }
             });
@@ -664,7 +642,7 @@
             closeBtn.addEventListener('click', () => {
                 if (torClient) {
                     torClient.close();
-                    log('INFO', 'Disconnected');
+                    log.info('Disconnected');
                     torClient = null;
                 }
                 statusEl.textContent = 'Disconnected';
@@ -687,7 +665,7 @@
                 fetchOutput.className = 'output-box loading';
                 fetchOutput.textContent = 'Fetching...';
                 fetchBtn.disabled = true;
-                log('INFO', `Fetching ${url}...`);
+                log.info(`Fetching ${url}...`);
 
                 try {
                     const startTime = performance.now();
@@ -697,11 +675,11 @@
                     const text = await response.text();
                     fetchOutput.className = 'output-box success';
                     fetchOutput.textContent = `Status: ${response.status} (${fetchTime}s)\n\n${text.substring(0, 2000)}`;
-                    log('INFO', `Fetch complete: ${response.status} (${fetchTime}s, ${text.length} bytes)`);
+                    log.info(`Fetch complete: ${response.status} (${fetchTime}s, ${text.length} bytes)`);
                 } catch (e) {
                     fetchOutput.className = 'output-box error';
                     fetchOutput.textContent = e.message || String(e);
-                    log('ERROR', 'Fetch failed: ' + (e.message || e));
+                    log.error('Fetch failed: ' + (e.message || e));
                 }
                 fetchBtn.disabled = false;
             });

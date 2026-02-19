@@ -6,6 +6,7 @@ import {
 } from './wasm.js';
 import type { TorClientOptions, FetchInit } from './types.js';
 import { Log } from './Log.js';
+import { createAutoStorage } from './storage/index.js';
 
 export class TorClient {
   private log: Log;
@@ -13,7 +14,7 @@ export class TorClient {
   private closed = false;
 
   constructor(options: TorClientOptions) {
-    this.log = (options.log ?? new Log({ rawLog: () => {} })).child('TorClient');
+    this.log = (options.log ?? new Log()).child('Tor');
     this.clientPromise = this.bootstrap(options);
   }
 
@@ -21,9 +22,7 @@ export class TorClient {
     await ensureWasmInitialized();
 
     // Wire up logging
-    if (options.log) {
-      wasmSetLogCallback(options.log._makeWasmCallback());
-    }
+    wasmSetLogCallback(this.log._makeWasmCallback());
 
     // Create WASM options
     let wasmOptions: WasmTorClientOptions;
@@ -33,10 +32,7 @@ export class TorClient {
       wasmOptions = new WasmTorClientOptions(options.snowflakeUrl, options.fingerprint);
     }
 
-    // Attach storage
-    if (options.storage) {
-      wasmOptions = wasmOptions.withStorage(options.storage);
-    }
+    wasmOptions = wasmOptions.withStorage(options.storage ?? createAutoStorage());
 
     // Create client (WASM constructor returns a Promise)
     this.log.info('Bootstrapping...');
