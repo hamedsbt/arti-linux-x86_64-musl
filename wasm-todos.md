@@ -13,16 +13,13 @@
 - [ ] Make tor-js API same/similar to https://www.npmjs.com/package/tor-js
   - [x] Use standard `Response` incl streaming
   - [ ] Fix awkward initialization
-  - [ ] Fix `TorClient` async new
-  - [ ] Logging
+  - [x] Fix `TorClient` async new
+  - [x] Logging
   - [x] Remove rust inmemory storage
-  - [ ] FileSystem storage
-    - [x] Prototyped (tor-fetch.js)
-  - [ ] IndexedDb storage
-    - [x] Prototyped (tor-js-showcase)
-  - [ ] In-memory storage
-    - [x] Prototyped (tor-fetch-inmemory.js)
-  - [ ] Platform-dependent (browser/nodejs) default storage
+  - [x] FileSystem storage
+  - [x] IndexedDb storage
+  - [x] In-memory storage
+  - [x] Platform-dependent (browser/nodejs) default storage
 - [ ] Fix slow bootstrap (via non-tor sources if needed)
 - Sync with arti main branch
   - [x] 206e629
