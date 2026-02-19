@@ -29,6 +29,7 @@
   - [ ] (Probably needed again later)
 - [ ] Fix/deprioritize TODO/FIXMEs added
 - [ ] Provide tiny module variant via hash-checked download
+  - jsdelivr/unpkg/githubusercontent
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm
