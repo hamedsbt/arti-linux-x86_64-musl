@@ -393,7 +393,7 @@
         <div class="site-header-inner">
             <img src="tor.svg" alt="tor-js logo" class="site-logo">
             <h1 class="site-title">tor-js</h1>
-            <span class="site-subtitle">arti-client (official Tor) in WASM</span>
+            <span class="site-subtitle">Official Tor in JS via Arti + WASM</span>
         </div>
     </header>
 
@@ -475,19 +475,6 @@
         </div>
     </div>
 
-    <!-- Site Footer -->
-    <footer class="site-footer">
-        <div class="site-footer-inner">
-            <span class="version-info">
-                tor-js v0.1.0 | arti-client (official Tor Project)
-            </span>
-            <div class="footer-links">
-                <a href="https://gitlab.torproject.org/tpo/core/arti" target="_blank" rel="noopener noreferrer">Arti</a>
-                <a href="https://github.com/nickelc/webtor-rs" target="_blank" rel="noopener noreferrer">webtor-rs</a>
-            </div>
-        </div>
-    </footer>
-
     <script type="importmap">
         { "imports": { "#wasm": "./dist/wasm-pkg/tor_js.js" } }
     </script>
@@ -527,28 +514,23 @@
             const entry = document.createElement('div');
             entry.className = 'log-entry';
 
-            const time = document.createElement('span');
-            time.className = 'log-time';
-            const now = new Date();
-            const ms = String(now.getMilliseconds()).padStart(3, '0');
-            time.textContent = `[${now.toLocaleTimeString('en-US', { hour12: false })}.${ms}] `;
-
             const levelSpan = document.createElement('span');
-            let levelClass = 'log-info';
-            let prefix = 'INFO';
+            let levelClass;
             switch (level) {
-                case 'ERROR': levelClass = 'log-error'; prefix = 'ERR '; break;
-                case 'WARN': levelClass = 'log-warn'; prefix = 'WARN'; break;
-                case 'DEBUG': levelClass = 'log-debug'; prefix = 'DBG '; break;
-                case 'TRACE': levelClass = 'log-debug'; prefix = 'TRC '; break;
+                case 'INFO': levelClass = 'log-info'; break;
+                case 'ERROR': levelClass = 'log-error'; break;
+                case 'WARN': levelClass = 'log-warn'; break;
+                case 'DEBUG': levelClass = 'log-debug'; break;
+                case 'TRACE': levelClass = 'log-debug'; break;
             }
             levelSpan.className = levelClass;
-            levelSpan.textContent = prefix + ' ';
+            levelSpan.textContent = level;
+            levelSpan.style.display = 'inline-block';
+            levelSpan.style.minWidth = '6ch';
 
             const messageSpan = document.createElement('span');
             messageSpan.textContent = message;
 
-            entry.appendChild(time);
             entry.appendChild(levelSpan);
             entry.appendChild(messageSpan);
 
