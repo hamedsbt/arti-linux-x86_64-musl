@@ -1,0 +1,31 @@
+{
+  "name": "tor-js",
+  "version": "0.3.0",
+  "description": "TypeScript Tor client using arti via WASM",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "imports": {
+    "#wasm": "./dist/wasm-pkg/tor_js.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "clean": "rm -rf dist src/wasm-pkg"
+  },
+  "author": "Andrew Morris",
+  "license": "MIT OR Apache-2.0",
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "tsup": "^8.3.5",
+    "typescript": "~5.7.3"
+  }
+}
