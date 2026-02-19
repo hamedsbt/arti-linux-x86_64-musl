@@ -27,6 +27,7 @@
 - Sync with arti main branch
   - [x] 206e629
   - [x] 9306eec
+  - [x] 5c13837
   - [ ] (Probably needed again later)
 - [ ] Fix/deprioritize TODO/FIXMEs added
 - [ ] Provide tiny module variant via hash-checked download
