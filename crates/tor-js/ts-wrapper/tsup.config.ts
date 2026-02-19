@@ -8,5 +8,5 @@ export default defineConfig({
   clean: true,
   splitting: false,
   target: 'es2022',
-  external: ['#wasm', 'node:fs/promises', 'node:url'],
+  external: ['#wasm', 'node:fs/promises', 'node:os', 'node:path', 'node:url'],
 });
