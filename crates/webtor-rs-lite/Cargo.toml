@@ -42,7 +42,7 @@ serde_json = "1.0"
 kcp = "0.6"
 
 # Random
-rand = { version = "0.8", features = ["std", "std_rng"] }
+rand = { version = "0.9.1", features = ["std", "std_rng"] }
 
 # WASM utilities
 wasm-bindgen-futures = "0.4"
@@ -104,6 +104,9 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 webpki-roots = "0.26"
 async-trait = "0.1"
+
+[dev-dependencies]
+tor-basic-utils = { path = "../tor-basic-utils", version = "0.39.0" }
 
 [features]
 default = []

@@ -820,6 +820,7 @@ mod tests {
     use super::*;
     use crate::test_util::portable_test;
     use rand::Rng;
+    use tor_basic_utils::RngExt;
 
     #[portable_test]
     fn test_segment_encode_decode() {
@@ -879,7 +880,7 @@ mod tests {
     const FUZZ_ITERATIONS: usize = 256;
 
     fn random_smux_command(rng: &mut impl rand::Rng) -> SmuxCommand {
-        match rng.gen_range(0..5) {
+        match rng.gen_range_checked(0..5).expect("non-empty range") {
             0 => SmuxCommand::Syn,
             1 => SmuxCommand::Fin,
             2 => SmuxCommand::Psh,
@@ -889,17 +890,17 @@ mod tests {
     }
 
     fn random_bytes(rng: &mut impl rand::Rng, max_len: usize) -> Vec<u8> {
-        let len = rng.gen_range(0..=max_len);
-        (0..len).map(|_| rng.gen()).collect()
+        let len = rng.gen_range_checked(0..=max_len).expect("non-empty range");
+        (0..len).map(|_| rng.random()).collect()
     }
 
     #[portable_test]
     fn smux_segment_roundtrips() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         for _ in 0..FUZZ_ITERATIONS {
             let cmd = random_smux_command(&mut rng);
-            let stream_id: u32 = rng.gen();
+            let stream_id: u32 = rng.random();
             let data = random_bytes(&mut rng, 1024);
 
             let seg = SmuxSegment {
@@ -922,11 +923,11 @@ mod tests {
 
     #[portable_test]
     fn smux_update_roundtrips() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         for _ in 0..FUZZ_ITERATIONS {
-            let consumed: u32 = rng.gen();
-            let window: u32 = rng.gen();
+            let consumed: u32 = rng.random();
+            let window: u32 = rng.random();
 
             let seg = SmuxSegment::upd(3, consumed, window);
             let upd = SmuxUpdate::decode(&seg.data).unwrap();
@@ -938,12 +939,11 @@ mod tests {
 
     #[portable_test]
     fn smux_partial_decode_returns_none() {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         for _ in 0..FUZZ_ITERATIONS {
             let cmd = random_smux_command(&mut rng);
-            let stream_id: u32 = rng.gen();
+            let stream_id: u32 = rng.random();
             let data = random_bytes(&mut rng, 256);
 
             let seg = SmuxSegment {
@@ -971,11 +971,11 @@ mod tests {
 
     #[portable_test]
     fn smux_rejects_invalid_version() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         for _ in 0..FUZZ_ITERATIONS {
             let version: u8 = loop {
-                let v: u8 = rng.gen();
+                let v: u8 = rng.random();
                 if v != SMUX_VERSION {
                     break v;
                 }
@@ -995,10 +995,10 @@ mod tests {
 
     #[portable_test]
     fn smux_rejects_invalid_command() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         for _ in 0..FUZZ_ITERATIONS {
-            let cmd_byte: u8 = rng.gen_range(5..=255);
+            let cmd_byte: u8 = rng.gen_range_checked(5..=255u8).expect("non-empty range");
 
             let mut buf = Vec::with_capacity(12);
             buf.push(SMUX_VERSION);

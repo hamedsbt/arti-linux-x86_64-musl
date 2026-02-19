@@ -27,6 +27,7 @@ use tokio_crate as tokio;
 use futures::io::{AsyncReadExt, AsyncWriteExt};
 use std::fs;
 use std::path::{Path, PathBuf};
+use tor_basic_utils::PathExt as _;
 use std::sync::RwLock;
 
 /// A simple file-backed implementation of `KeyValueStore`.
@@ -43,7 +44,7 @@ impl FileStore {
         fs::create_dir_all(dir).expect("failed to create storage dir");
         // Ignore storage files in git
         let gitignore = dir.join(".gitignore");
-        if !gitignore.exists() {
+        if !gitignore.try_exists().unwrap_or(false) {
             fs::write(&gitignore, "*\n").expect("failed to create .gitignore");
         }
         Self {
@@ -160,7 +161,7 @@ async fn main() -> Result<()> {
     let storage_dir = PathBuf::from("custom_storage");
     let store = FileStore::new(&storage_dir);
 
-    eprintln!("using custom storage in {}/", storage_dir.display());
+    eprintln!("using custom storage in {}/", storage_dir.display_lossy());
     eprintln!("connecting to Tor...");
 
     let tor_client = TorClient::builder()

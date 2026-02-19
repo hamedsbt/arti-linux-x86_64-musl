@@ -374,6 +374,7 @@ mod tests {
     use super::*;
     use crate::test_util::portable_test;
     use rand::Rng;
+    use tor_basic_utils::RngExt;
 
     #[portable_test]
     fn test_frame_encode_decode_small() {
@@ -453,17 +454,17 @@ mod tests {
     const FUZZ_ITERATIONS: usize = 256;
 
     fn random_bytes(rng: &mut impl rand::Rng, max_len: usize) -> Vec<u8> {
-        let len = rng.gen_range(0..=max_len);
-        (0..len).map(|_| rng.gen()).collect()
+        let len = rng.gen_range_checked(0..=max_len).expect("non-empty range");
+        (0..len).map(|_| rng.random()).collect()
     }
 
     #[portable_test]
     fn turbo_frame_roundtrips() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         for _ in 0..FUZZ_ITERATIONS {
             let data = random_bytes(&mut rng, 0x4000); // 16KB max
-            let is_padding: bool = rng.gen();
+            let is_padding: bool = rng.random();
 
             let frame = if is_padding {
                 TurboFrame::padding(data.clone())
@@ -506,12 +507,11 @@ mod tests {
 
     #[portable_test]
     fn turbo_partial_decode_returns_none() {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         for _ in 0..FUZZ_ITERATIONS {
             let data = random_bytes(&mut rng, 1024);
-            let is_padding: bool = rng.gen();
+            let is_padding: bool = rng.random();
 
             let frame = if is_padding {
                 TurboFrame::padding(data)
