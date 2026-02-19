@@ -69,7 +69,7 @@ impl WasmSleepFuture {
     fn new(duration: Duration) -> Self {
         #[cfg(target_arch = "wasm32")]
         {
-            let millis = duration.as_millis().min(u32::MAX as u128) as u32;
+            let millis = duration.as_millis().min(u128::from(u32::MAX)) as u32;
             Self {
                 inner: gloo_timers::future::TimeoutFuture::new(millis),
             }
