@@ -40,7 +40,7 @@ export class TorClient {
 
     // Create client (WASM constructor returns a Promise)
     this.log.info('Bootstrapping...');
-    const client = await (new WasmTorClient(wasmOptions) as unknown as Promise<WasmTorClient>);
+    const client = await WasmTorClient.create(wasmOptions);
     this.log.info('Bootstrap complete');
     return client;
   }

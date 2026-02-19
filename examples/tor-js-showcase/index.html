@@ -488,78 +488,14 @@
         </div>
     </footer>
 
+    <script type="importmap">
+        { "imports": { "#wasm": "./dist/wasm-pkg/tor_js.js" } }
+    </script>
     <script type="module">
-        import initWasm, { init, TorClient, TorClientOptions, setLogCallback } from './pkg/tor_js.js';
+        import { TorClient, Log, storage } from './dist/index.js';
 
         // Constants
         const MAX_LOG_ENTRIES = 500;
-        const IDB_NAME = 'tor-js-storage';
-        const IDB_STORE = 'kv';
-
-        // ====================================================================
-        // IndexedDbStorage - TorStorage implementation using IndexedDB
-        // ====================================================================
-
-        class IndexedDbStorage {
-            constructor() {
-                this._db = null;
-            }
-
-            async _open() {
-                if (this._db) return this._db;
-                return new Promise((resolve, reject) => {
-                    const req = indexedDB.open(IDB_NAME, 1);
-                    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
-                    req.onsuccess = () => { this._db = req.result; resolve(this._db); };
-                    req.onerror = () => reject(req.error);
-                });
-            }
-
-            async get(key) {
-                const db = await this._open();
-                return new Promise((resolve, reject) => {
-                    const tx = db.transaction(IDB_STORE, 'readonly');
-                    const req = tx.objectStore(IDB_STORE).get(key);
-                    req.onsuccess = () => resolve(req.result ?? null);
-                    req.onerror = () => reject(req.error);
-                });
-            }
-
-            async set(key, value) {
-                const db = await this._open();
-                return new Promise((resolve, reject) => {
-                    const tx = db.transaction(IDB_STORE, 'readwrite');
-                    tx.objectStore(IDB_STORE).put(value, key);
-                    tx.oncomplete = () => resolve();
-                    tx.onerror = () => reject(tx.error);
-                });
-            }
-
-            async delete(key) {
-                const db = await this._open();
-                return new Promise((resolve, reject) => {
-                    const tx = db.transaction(IDB_STORE, 'readwrite');
-                    tx.objectStore(IDB_STORE).delete(key);
-                    tx.oncomplete = () => resolve();
-                    tx.onerror = () => reject(tx.error);
-                });
-            }
-
-            async keys(prefix) {
-                const db = await this._open();
-                return new Promise((resolve, reject) => {
-                    const tx = db.transaction(IDB_STORE, 'readonly');
-                    const req = tx.objectStore(IDB_STORE).getAllKeys();
-                    req.onsuccess = () => resolve(req.result.filter(k => typeof k === 'string' && k.startsWith(prefix)));
-                    req.onerror = () => reject(req.error);
-                });
-            }
-
-            // FIXME: Stub — use the Web Locks API for real cross-tab locking:
-            //   await navigator.locks.request('tor-storage', {ifAvailable: true}, ...)
-            async tryLock() { return true; }
-            async unlock() {}
-        }
 
         // URL validation
         function validateUrl(url) {
@@ -691,116 +627,102 @@
 
             let torClient = null;
 
-            try {
-                statusEl.textContent = 'Loading WASM...';
+            // Create a Log that writes to the DOM log panel
+            const torLog = new Log({
+                rawLog: (level, ...args) => {
+                    const message = args.join(' ');
+                    log(level.toUpperCase(), message);
+                },
+            });
+
+            statusEl.textContent = 'Ready to connect';
+            statusDot.className = 'status-dot';
+            log('INFO', 'Ready - click "Connect" to start');
+
+            openBtn.addEventListener('click', async () => {
+                const bridgeUrl = bridgeUrlSelect.value;
+                const fingerprint = fingerprintInput.value.trim();
+
+                if (!fingerprint || fingerprint.length !== 40) {
+                    log('ERROR', 'Invalid fingerprint: must be 40 hex characters');
+                    return;
+                }
+
+                openBtn.disabled = true;
+                statusEl.textContent = 'Connecting via Snowflake...';
                 statusDot.className = 'status-dot loading';
+                log('INFO', `Connecting to ${bridgeUrl} with fingerprint ${fingerprint.substring(0, 8)}...`);
 
-                // Initialize WASM module
-                await initWasm();
-                init();
+                try {
+                    const startTime = performance.now();
+                    torClient = new TorClient({
+                        snowflakeUrl: bridgeUrl,
+                        fingerprint,
+                        log: torLog,
+                        storage: new storage.IndexedDBStorage(),
+                    });
+                    await torClient.ready();
 
-                // Set up log callback to receive Rust logs
-                setLogCallback((level, target, message) => {
-                    log(level, message);
-                });
+                    const connectTime = ((performance.now() - startTime) / 1000).toFixed(1);
+                    statusEl.textContent = `Connected (${connectTime}s)`;
+                    statusDot.className = 'status-dot ready';
+                    log('INFO', `Connected in ${connectTime}s`);
 
-                log('INFO', 'WASM module loaded');
-                statusEl.textContent = 'Ready to connect';
-                statusDot.className = 'status-dot';
-
-                openBtn.addEventListener('click', async () => {
-                    const bridgeUrl = bridgeUrlSelect.value;
-                    const fingerprint = fingerprintInput.value.trim();
-
-                    if (!fingerprint || fingerprint.length !== 40) {
-                        log('ERROR', 'Invalid fingerprint: must be 40 hex characters');
-                        return;
-                    }
-
-                    openBtn.disabled = true;
-                    statusEl.textContent = 'Connecting via Snowflake...';
-                    statusDot.className = 'status-dot loading';
-                    log('INFO', `Connecting to ${bridgeUrl} with fingerprint ${fingerprint.substring(0, 8)}...`);
-
-                    try {
-                        const startTime = performance.now();
-                        const options = new TorClientOptions(bridgeUrl, fingerprint)
-                            .withStorage(new IndexedDbStorage());
-                        torClient = await TorClient.create(options);
-
-                        const connectTime = ((performance.now() - startTime) / 1000).toFixed(1);
-                        statusEl.textContent = `Connected (${connectTime}s)`;
-                        statusDot.className = 'status-dot ready';
-                        log('INFO', `Connected in ${connectTime}s`);
-
-                        closeBtn.disabled = false;
-                        fetchBtn.disabled = false;
-
-                    } catch (e) {
-                        statusEl.textContent = 'Connection failed';
-                        statusDot.className = 'status-dot error';
-                        log('ERROR', 'Connection failed: ' + (e.message || e));
-                        openBtn.disabled = false;
-                    }
-                });
-
-                closeBtn.addEventListener('click', async () => {
-                    if (torClient) {
-                        try {
-                            await torClient.close();
-                            log('INFO', 'Disconnected');
-                        } catch (e) {
-                            log('ERROR', 'Close error: ' + (e.message || e));
-                        }
-                        torClient = null;
-                    }
-                    statusEl.textContent = 'Disconnected';
-                    statusDot.className = 'status-dot';
-                    openBtn.disabled = false;
-                    closeBtn.disabled = true;
-                    fetchBtn.disabled = true;
-                });
-
-                fetchBtn.addEventListener('click', async () => {
-                    const url = urlInput.value;
-
-                    const validation = validateUrl(url);
-                    if (!validation.valid) {
-                        fetchOutput.className = 'output-box error';
-                        fetchOutput.textContent = validation.error;
-                        return;
-                    }
-
-                    fetchOutput.className = 'output-box loading';
-                    fetchOutput.textContent = 'Fetching...';
-                    fetchBtn.disabled = true;
-                    log('INFO', `Fetching ${url}...`);
-
-                    try {
-                        const startTime = performance.now();
-                        const response = await torClient.fetch(url);
-                        const fetchTime = ((performance.now() - startTime) / 1000).toFixed(1);
-
-                        const text = await response.text();
-                        fetchOutput.className = 'output-box success';
-                        fetchOutput.textContent = `Status: ${response.status} (${fetchTime}s)\n\n${text.substring(0, 2000)}`;
-                        log('INFO', `Fetch complete: ${response.status} (${fetchTime}s, ${text.length} bytes)`);
-                    } catch (e) {
-                        fetchOutput.className = 'output-box error';
-                        fetchOutput.textContent = e.message || String(e);
-                        log('ERROR', 'Fetch failed: ' + (e.message || e));
-                    }
+                    closeBtn.disabled = false;
                     fetchBtn.disabled = false;
-                });
 
-                log('INFO', 'Ready - click "Connect" to start');
+                } catch (e) {
+                    statusEl.textContent = 'Connection failed';
+                    statusDot.className = 'status-dot error';
+                    log('ERROR', 'Connection failed: ' + (e.message || e));
+                    openBtn.disabled = false;
+                }
+            });
 
-            } catch (error) {
-                console.error('Failed to initialize:', error);
-                statusEl.textContent = 'Failed to load WASM';
-                statusDot.className = 'status-dot error';
-                log('ERROR', 'Initialization failed: ' + (error.message || error));
-            }
+            closeBtn.addEventListener('click', () => {
+                if (torClient) {
+                    torClient.close();
+                    log('INFO', 'Disconnected');
+                    torClient = null;
+                }
+                statusEl.textContent = 'Disconnected';
+                statusDot.className = 'status-dot';
+                openBtn.disabled = false;
+                closeBtn.disabled = true;
+                fetchBtn.disabled = true;
+            });
+
+            fetchBtn.addEventListener('click', async () => {
+                const url = urlInput.value;
+
+                const validation = validateUrl(url);
+                if (!validation.valid) {
+                    fetchOutput.className = 'output-box error';
+                    fetchOutput.textContent = validation.error;
+                    return;
+                }
+
+                fetchOutput.className = 'output-box loading';
+                fetchOutput.textContent = 'Fetching...';
+                fetchBtn.disabled = true;
+                log('INFO', `Fetching ${url}...`);
+
+                try {
+                    const startTime = performance.now();
+                    const response = await torClient.fetch(url);
+                    const fetchTime = ((performance.now() - startTime) / 1000).toFixed(1);
+
+                    const text = await response.text();
+                    fetchOutput.className = 'output-box success';
+                    fetchOutput.textContent = `Status: ${response.status} (${fetchTime}s)\n\n${text.substring(0, 2000)}`;
+                    log('INFO', `Fetch complete: ${response.status} (${fetchTime}s, ${text.length} bytes)`);
+                } catch (e) {
+                    fetchOutput.className = 'output-box error';
+                    fetchOutput.textContent = e.message || String(e);
+                    log('ERROR', 'Fetch failed: ' + (e.message || e));
+                }
+                fetchBtn.disabled = false;
+            });
         }
 
         if (document.readyState === 'loading') {

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build tor-js WASM package
+# Build tor-js WASM package and TypeScript wrapper
 #
 # Usage: scripts/tor-js/build.sh [--target web|nodejs|bundler] [--release]
 #
@@ -32,10 +32,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-echo "Building tor-js for target '$TARGET'..."
+echo "Building tor-js WASM for target '$TARGET'..."
 wasm-pack build crates/tor-js --target "$TARGET" $PROFILE
 
 # Copy README to pkg
 cp crates/tor-js/README.md crates/tor-js/pkg/
 
-echo "Done! Package available at: crates/tor-js/pkg/"
+echo "WASM package available at: crates/tor-js/pkg/"
+
+# Build TypeScript wrapper
+echo ""
+echo "Building TypeScript wrapper..."
+cd crates/tor-js/ts-wrapper
+npm install --silent
+npm run build
+
+echo ""
+echo "Done! ts-wrapper available at: crates/tor-js/ts-wrapper/dist/"

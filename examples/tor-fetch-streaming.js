@@ -13,8 +13,8 @@ import { readFile, writeFile, unlink, readdir, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
+import { TorClient, Log } from '../crates/tor-js/ts-wrapper/dist/index.js';
 
 // ============================================================================
 // FilesystemStorage - TorStorage implementation using Node.js fs
@@ -85,8 +85,6 @@ class FilesystemStorage {
 // ============================================================================
 
 async function main() {
-  const { TorClient, TorClientOptions, init } = await setup();
-
   const url = process.argv[2] ?? 'https://www.gutenberg.org/cache/epub/100/pg100.txt';
   const pattern = process.argv[3] ?? 'the';
   const regex = new RegExp(pattern, 'gi');
@@ -94,18 +92,21 @@ async function main() {
   const storageDir = join(homedir(), '.local', 'state', 'tor-js');
 
   // Initialize filesystem storage
-  const storage = new FilesystemStorage(storageDir);
-  await storage.init();
+  const fsStorage = new FilesystemStorage(storageDir);
+  await fsStorage.init();
 
   console.log(`\nCreating TorClient...\n`);
   const startTime = performance.now();
 
-  const options = new TorClientOptions(
-    'wss://snowflake.pse.dev/',
-    '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194'
-  ).withStorage(storage);
+  const client = new TorClient({
+    snowflakeUrl: 'wss://snowflake.pse.dev/',
+    fingerprint: '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194',
+    log: new Log(),
+    storage: fsStorage,
+  });
 
-  const client = await TorClient.create(options);
+  await client.ready();
+
   const connectTime = ((performance.now() - startTime) / 1000).toFixed(1);
   console.log(`\nConnected in ${connectTime}s`);
   console.log(`Streaming ${url}`);
@@ -152,34 +153,7 @@ async function main() {
   console.log(`  ${matches} matches of /${pattern}/`);
   console.log(`  ${throughput} KB/s throughput`);
 
-  await client.close();
-}
-
-async function setup() {
-  console.log('Loading WASM module...');
-
-  let initWasm, init, TorClient, TorClientOptions;
-  try {
-    const module = await import('../crates/tor-js/pkg/tor_js.js');
-    initWasm = module.default;
-    init = module.init;
-    TorClient = module.TorClient;
-    TorClientOptions = module.TorClientOptions;
-  } catch (err) {
-    throw new Error(
-      'Failed to import tor-js. Run: scripts/tor-js/build.sh',
-      { cause: err },
-    );
-  }
-
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const wasmPath = join(__dirname, '../crates/tor-js/pkg/tor_js_bg.wasm');
-  const wasmBytes = await readFile(wasmPath);
-  await initWasm(wasmBytes);
-
-  init();
-
-  return { TorClient, TorClientOptions, init };
+  client.close();
 }
 
 main().catch(err => {
