@@ -351,6 +351,35 @@
             margin-bottom: 0;
         }
 
+        details.debug-section {
+            margin-bottom: 0;
+        }
+
+        details.debug-section summary {
+            font-size: 12px;
+            color: var(--comment);
+            cursor: pointer;
+            padding: 6px 0;
+            user-select: none;
+        }
+
+        details.debug-section summary:hover {
+            color: var(--fg);
+        }
+
+        .debug-content {
+            background: var(--bg);
+            border-radius: 6px;
+            padding: 12px;
+            margin-top: 6px;
+        }
+
+        .debug-content .output-box {
+            margin-top: 8px;
+            min-height: 40px;
+            max-height: 120px;
+        }
+
         @media (max-width: 900px) {
             .main-container {
                 grid-template-columns: 1fr;
@@ -409,20 +438,43 @@
 
                 <div class="bridge-config">
                     <div class="input-group">
-                        <label for="bridgeUrl">Snowflake Bridge URL</label>
-                        <select id="bridgeUrl" name="bridgeUrl">
-                            <option value="wss://snowflake.pse.dev/">pse.dev (WebSocket)</option>
-                            <option value="wss://snowflake.torproject.net/">torproject.net (WebSocket)</option>
+                        <label for="transportMode">Transport</label>
+                        <select id="transportMode" name="transportMode">
+                            <option value="webrtc" selected>WebRTC (via Snowflake broker)</option>
+                            <option value="websocket">WebSocket (direct bridge)</option>
                         </select>
                     </div>
-                    <div class="input-group">
-                        <label for="fingerprint">Bridge Fingerprint</label>
-                        <input type="text" id="fingerprint" name="fingerprint" value="664A92FF3EF71E03A2F09B1DAABA2DDF920D5194" placeholder="40-character hex fingerprint">
+
+                    <!-- WebRTC config -->
+                    <div id="webrtcConfig">
+                        <div class="input-group">
+                            <label for="brokerUrl">Broker URL</label>
+                            <input type="url" id="brokerUrl" name="brokerUrl" value="https://snowflake-broker.torproject.net/" placeholder="https://snowflake-broker.torproject.net/">
+                        </div>
+                        <div class="input-group">
+                            <label for="webrtcFingerprint">Bridge Fingerprint</label>
+                            <input type="text" id="webrtcFingerprint" name="webrtcFingerprint" value="2B280B23E1107BB62ABFC40DDCC8824814F80A72" placeholder="40-character hex fingerprint">
+                        </div>
+                    </div>
+
+                    <!-- WebSocket config -->
+                    <div id="websocketConfig" style="display: none;">
+                        <div class="input-group">
+                            <label for="bridgeUrl">Bridge URL</label>
+                            <select id="bridgeUrl" name="bridgeUrl">
+                                <option value="wss://snowflake.pse.dev/">pse.dev</option>
+                                <option value="wss://snowflake.torproject.net/">torproject.net</option>
+                            </select>
+                        </div>
+                        <div class="input-group">
+                            <label for="wsFingerprint">Bridge Fingerprint</label>
+                            <input type="text" id="wsFingerprint" name="wsFingerprint" value="664A92FF3EF71E03A2F09B1DAABA2DDF920D5194" placeholder="40-character hex fingerprint">
+                        </div>
                     </div>
                 </div>
 
                 <div class="btn-group" style="margin-top: 12px;">
-                    <button id="openBtn" aria-label="Open and initialize Tor client connection">Connect</button>
+                    <button id="connectBtn" aria-label="Connect to the Tor network">Connect</button>
                     <button id="closeBtn" class="secondary" disabled aria-label="Close Tor client connection">Disconnect</button>
                 </div>
             </div>
@@ -459,6 +511,14 @@
                     <div class="output-box" id="fetchOutput" role="region" aria-live="polite" aria-label="Request result">Ready...</div>
                 </div>
             </div>
+
+            <details class="debug-section">
+                <summary>Debug</summary>
+                <div class="debug-content">
+                    <button id="deleteStateBtn" class="secondary" style="padding: 6px 12px;">Delete state (except microdescs)</button>
+                    <div class="output-box" id="debugOutput"></div>
+                </div>
+            </details>
         </div>
 
         <!-- Right Panel - Logs -->
@@ -556,16 +616,28 @@
         async function run() {
             const statusEl = document.getElementById('status');
             const statusDot = document.getElementById('statusDot');
-            const openBtn = document.getElementById('openBtn');
+            const transportMode = document.getElementById('transportMode');
+            const webrtcConfig = document.getElementById('webrtcConfig');
+            const websocketConfig = document.getElementById('websocketConfig');
+            const brokerUrlInput = document.getElementById('brokerUrl');
+            const webrtcFingerprintInput = document.getElementById('webrtcFingerprint');
+            const bridgeUrlSelect = document.getElementById('bridgeUrl');
+            const wsFingerprintInput = document.getElementById('wsFingerprint');
+            const connectBtn = document.getElementById('connectBtn');
             const closeBtn = document.getElementById('closeBtn');
             const fetchBtn = document.getElementById('fetchBtn');
             const presetSelect = document.getElementById('presetSelect');
             const urlInput = document.getElementById('urlInput');
-            const bridgeUrlSelect = document.getElementById('bridgeUrl');
-            const fingerprintInput = document.getElementById('fingerprint');
             const fetchOutput = document.getElementById('fetchOutput');
             const clearBtn = document.getElementById('clearBtn');
             const logOutput = document.getElementById('logOutput');
+
+            // Toggle config sections based on transport mode
+            transportMode.addEventListener('change', () => {
+                const isWebRtc = transportMode.value === 'webrtc';
+                webrtcConfig.style.display = isWebRtc ? '' : 'none';
+                websocketConfig.style.display = isWebRtc ? 'none' : '';
+            });
 
             // Preset selection handler
             presetSelect.addEventListener('change', () => {
@@ -575,7 +647,7 @@
                 }
             });
 
-            // Bridge URL presets with fingerprints
+            // WebSocket bridge URL presets with fingerprints
             const bridgeFingerprints = {
                 'wss://snowflake.pse.dev/': '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194',
                 'wss://snowflake.torproject.net/': '2B280B23E1107BB62ABFC40DDCC8824814F80A72',
@@ -584,7 +656,7 @@
             bridgeUrlSelect.addEventListener('change', () => {
                 const fp = bridgeFingerprints[bridgeUrlSelect.value];
                 if (fp) {
-                    fingerprintInput.value = fp;
+                    wsFingerprintInput.value = fp;
                 }
             });
 
@@ -593,38 +665,101 @@
                 logOutput.innerHTML = '<div class="empty-state">Logs cleared.</div>';
             });
 
+            // Debug: delete state except microdescs
+            const deleteStateBtn = document.getElementById('deleteStateBtn');
+            const debugOutput = document.getElementById('debugOutput');
+
+            deleteStateBtn.addEventListener('click', async () => {
+                deleteStateBtn.disabled = true;
+                debugOutput.className = 'output-box loading';
+                debugOutput.textContent = 'Deleting...';
+                try {
+                    const dbName = 'tor-js-tor-js'; // IndexedDBStorage default: `tor-js-${name}` with name='tor-js'
+                    const db = await new Promise((resolve, reject) => {
+                        const req = indexedDB.open(dbName, 1);
+                        req.onerror = () => reject(req.error);
+                        req.onsuccess = () => resolve(req.result);
+                        req.onupgradeneeded = (e) => {
+                            const db = e.target.result;
+                            if (!db.objectStoreNames.contains('keyvalue')) {
+                                db.createObjectStore('keyvalue');
+                            }
+                        };
+                    });
+
+                    const tx = db.transaction('keyvalue', 'readwrite');
+                    const store = tx.objectStore('keyvalue');
+                    const allKeys = await new Promise((resolve, reject) => {
+                        const req = store.getAllKeys();
+                        req.onerror = () => reject(req.error);
+                        req.onsuccess = () => resolve(req.result);
+                    });
+
+                    const toDelete = allKeys.filter(k => !String(k).startsWith('dir:microdesc:'));
+                    for (const key of toDelete) {
+                        store.delete(key);
+                    }
+
+                    await new Promise((resolve, reject) => {
+                        tx.oncomplete = () => resolve();
+                        tx.onerror = () => reject(tx.error);
+                    });
+
+                    const kept = allKeys.length - toDelete.length;
+                    debugOutput.className = 'output-box success';
+                    debugOutput.textContent = `Deleted ${toDelete.length} keys, kept ${kept} microdesc keys`;
+                    log.info(`Debug: deleted ${toDelete.length} state keys (kept ${kept} microdescs)`);
+                } catch (e) {
+                    debugOutput.className = 'output-box error';
+                    debugOutput.textContent = e.message || String(e);
+                    log.error('Debug: delete state failed: ' + (e.message || e));
+                }
+                deleteStateBtn.disabled = false;
+            });
+
             let torClient = null;
 
             statusEl.textContent = 'Ready to connect';
             statusDot.className = 'status-dot';
             log.info('Ready - click "Connect" to start');
 
-            openBtn.addEventListener('click', async () => {
-                const bridgeUrl = bridgeUrlSelect.value;
-                const fingerprint = fingerprintInput.value.trim();
+            connectBtn.addEventListener('click', async () => {
+                const useWebRtc = transportMode.value === 'webrtc';
+                const fingerprint = useWebRtc
+                    ? webrtcFingerprintInput.value.trim()
+                    : wsFingerprintInput.value.trim();
 
                 if (!fingerprint || fingerprint.length !== 40) {
                     log.error('Invalid fingerprint: must be 40 hex characters');
                     return;
                 }
 
-                openBtn.disabled = true;
-                statusEl.textContent = 'Connecting via Snowflake...';
+                connectBtn.disabled = true;
+                const mode = useWebRtc ? 'WebRTC' : 'WebSocket';
+                statusEl.textContent = `Connecting (${mode})...`;
                 statusDot.className = 'status-dot loading';
-                log.info(`Connecting to ${bridgeUrl} with fingerprint ${fingerprint.substring(0, 8)}...`);
+
+                if (useWebRtc) {
+                    const broker = brokerUrlInput.value.trim();
+                    log.info(`Connecting via WebRTC (broker: ${broker})...`);
+                } else {
+                    log.info(`Connecting to ${bridgeUrlSelect.value} with fingerprint ${fingerprint.substring(0, 8)}...`);
+                }
 
                 try {
                     const startTime = performance.now();
                     torClient = new TorClient({
-                        snowflakeUrl: bridgeUrl,
+                        snowflakeUrl: bridgeUrlSelect.value,
                         fingerprint,
+                        mode: useWebRtc ? 'webrtc' : 'websocket',
+                        brokerUrl: useWebRtc ? brokerUrlInput.value.trim() : undefined,
                         log,
                         storage: new storage.IndexedDBStorage(),
                     });
                     await torClient.ready();
 
                     const connectTime = ((performance.now() - startTime) / 1000).toFixed(1);
-                    statusEl.textContent = `Connected (${connectTime}s)`;
+                    statusEl.textContent = `Connected via ${mode} (${connectTime}s)`;
                     statusDot.className = 'status-dot ready';
                     log.info(`Connected in ${connectTime}s`);
 
@@ -635,7 +770,7 @@
                     statusEl.textContent = 'Connection failed';
                     statusDot.className = 'status-dot error';
                     log.error('Connection failed: ' + (e.message || e));
-                    openBtn.disabled = false;
+                    connectBtn.disabled = false;
                 }
             });
 
@@ -647,7 +782,7 @@
                 }
                 statusEl.textContent = 'Disconnected';
                 statusDot.className = 'status-dot';
-                openBtn.disabled = false;
+                connectBtn.disabled = false;
                 closeBtn.disabled = true;
                 fetchBtn.disabled = true;
             });

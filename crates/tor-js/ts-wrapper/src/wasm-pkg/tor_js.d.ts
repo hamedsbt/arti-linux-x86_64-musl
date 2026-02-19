@@ -176,9 +176,11 @@ export class TorClientOptions {
      * Create options for WebRTC Snowflake transport (via broker)
      *
      * # Arguments
+     * * `broker_url` - Snowflake broker URL (e.g., "https://snowflake-broker.torproject.net/").
+     *   Pass an empty string to use the default Tor Project broker.
      * * `fingerprint` - Bridge fingerprint (40 char hex string). Required for verification.
      */
-    static snowflakeWebRtc(fingerprint: string): TorClientOptions;
+    static snowflakeWebRtc(broker_url: string, fingerprint: string): TorClientOptions;
     /**
      * Set a custom storage implementation for persistent state.
      *

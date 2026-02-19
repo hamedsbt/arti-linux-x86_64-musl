@@ -30,6 +30,9 @@
 - [ ] Fix/deprioritize TODO/FIXMEs added
 - [ ] Provide tiny module variant via hash-checked download
   - jsdelivr/unpkg/githubusercontent
+- [x] WebRTC demo
+- [ ] Fix: Repeated "Unable to select a guard relay" issues when changing bridges (sometimes?)
+  - Sometimes it recovers (can complete request), other times it gets stuck
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm

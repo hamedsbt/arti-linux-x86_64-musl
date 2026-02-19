@@ -197,13 +197,20 @@ impl TorClientOptions {
     /// Create options for WebRTC Snowflake transport (via broker)
     ///
     /// # Arguments
+    /// * `broker_url` - Snowflake broker URL (e.g., "https://snowflake-broker.torproject.net/").
+    ///   Pass an empty string to use the default Tor Project broker.
     /// * `fingerprint` - Bridge fingerprint (40 char hex string). Required for verification.
     #[wasm_bindgen(js_name = snowflakeWebRtc)]
-    pub fn snowflake_webrtc(fingerprint: String) -> Self {
+    pub fn snowflake_webrtc(broker_url: String, fingerprint: String) -> Self {
         let fp = if fingerprint.is_empty() { None } else { Some(fingerprint) };
+        let broker = if broker_url.is_empty() {
+            webtor_rs_lite::snowflake_broker::BROKER_URL.to_string()
+        } else {
+            broker_url
+        };
         Self {
             mode: SnowflakeMode::WebRtc {
-                broker_url: webtor_rs_lite::snowflake_broker::BROKER_URL.to_string(),
+                broker_url: broker,
                 fingerprint: fp.clone(),
             },
             fingerprint: fp,

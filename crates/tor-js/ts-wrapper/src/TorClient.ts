@@ -27,7 +27,7 @@ export class TorClient {
     // Create WASM options
     let wasmOptions: WasmTorClientOptions;
     if (options.mode === 'webrtc') {
-      wasmOptions = WasmTorClientOptions.snowflakeWebRtc(options.fingerprint);
+      wasmOptions = WasmTorClientOptions.snowflakeWebRtc(options.brokerUrl ?? '', options.fingerprint);
     } else {
       wasmOptions = new WasmTorClientOptions(options.snowflakeUrl, options.fingerprint);
     }
