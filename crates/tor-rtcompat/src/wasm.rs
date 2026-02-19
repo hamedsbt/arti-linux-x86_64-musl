@@ -204,6 +204,7 @@ impl Blocking for WasmRuntime {
 
 /// Stub thread handle that will never be created (spawn_blocking panics).
 pub struct StubThreadHandle<T> {
+    /// Type marker for the result type.
     _phantom: std::marker::PhantomData<T>,
 }
 
@@ -224,6 +225,7 @@ impl<T: Send + 'static> Future for StubThreadHandle<T> {
 ///
 /// Real WASM networking requires a WebSocket or WebRTC transport layer.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct StubStream;
 
 impl AsyncRead for StubStream {
@@ -267,6 +269,7 @@ impl StreamOps for StubStream {
 }
 
 /// A stub listener that never accepts connections.
+#[non_exhaustive]
 pub struct StubListener;
 
 impl NetStreamListener<SocketAddr> for StubListener {
@@ -352,6 +355,7 @@ impl NetStreamProvider<unix::SocketAddr> for WasmRuntime {
 /// - Skips certificate verification (Tor validates via CERTS cells instead)
 /// - Verifies TLS handshake signatures (proves key possession)
 pub struct WasmTlsConnector {
+    /// The underlying TLS connector.
     connector: futures_rustls::TlsConnector,
 }
 
@@ -364,10 +368,10 @@ impl WasmTlsConnector {
         use futures_rustls::rustls;
 
         let provider = rustls_rustcrypto::provider();
-        let algorithms = provider.signature_verification_algorithms.clone();
+        let algorithms = provider.signature_verification_algorithms;
         let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
             .with_safe_default_protocol_versions()
-            .unwrap()
+            .expect("default protocol versions should be supported")
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(TorCertVerifier(algorithms)))
             .with_no_client_auth();
@@ -591,6 +595,7 @@ where
 // ============================================================================
 
 /// A stub UDP socket that always returns errors.
+#[non_exhaustive]
 pub struct StubUdpSocket;
 
 #[async_trait]

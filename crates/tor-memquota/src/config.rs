@@ -223,7 +223,8 @@ fn compute_max_from_total_system_mem(mem: Result<usize, MemQueryError>) -> Qty {
                     if #[cfg(target_pointer_width = "64")] {
                         8 * GIB
                     } else {
-                        1 * GIB
+                        #[expect(clippy::identity_op, reason = "consistency with 8 * GIB")]
+                        { 1 * GIB }
                     }
                 }
             });

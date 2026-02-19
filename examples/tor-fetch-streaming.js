@@ -105,7 +105,7 @@ async function main() {
     '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194'
   ).withStorage(storage);
 
-  const client = await new TorClient(options);
+  const client = await TorClient.create(options);
   const connectTime = ((performance.now() - startTime) / 1000).toFixed(1);
   console.log(`\nConnected in ${connectTime}s`);
   console.log(`Streaming ${url}`);

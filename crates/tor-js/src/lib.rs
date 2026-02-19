@@ -19,7 +19,7 @@
 //! );
 //!
 //! // Create the Tor client (async)
-//! const client = await new TorClient(options);
+//! const client = await TorClient.create(options);
 //!
 //! // Make a fetch request through Tor
 //! const response = await client.fetch('https://check.torproject.org/api/ip');
@@ -240,12 +240,13 @@ pub struct TorClient {
 
 #[wasm_bindgen]
 impl TorClient {
-    /// Create a new TorClient with the given options
+    /// Create a new TorClient with the given options.
     ///
     /// This is an async operation that returns a Promise.
     /// The client will bootstrap and establish a connection to the Tor network.
-    #[wasm_bindgen(constructor)]
-    pub fn new(options: TorClientOptions) -> js_sys::Promise {
+    ///
+    /// Usage from JS: `const client = await TorClient.create(options);`
+    pub fn create(options: TorClientOptions) -> js_sys::Promise {
         wasm_bindgen_futures::future_to_promise(async move {
             let client = create_client(options).await?;
             Ok(JsValue::from(client))
@@ -604,7 +605,7 @@ const TS_TYPES: &str = r#"
  *
  * const options = new TorClientOptions(url, fingerprint)
  *   .withStorage(new IndexedDBStorage());
- * const client = await new TorClient(options);
+ * const client = await TorClient.create(options);
  * ```
  */
 export interface TorStorage {

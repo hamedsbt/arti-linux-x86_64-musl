@@ -726,7 +726,7 @@
                         const startTime = performance.now();
                         const options = new TorClientOptions(bridgeUrl, fingerprint)
                             .withStorage(new IndexedDbStorage());
-                        torClient = await new TorClient(options);
+                        torClient = await TorClient.create(options);
 
                         const connectTime = ((performance.now() - startTime) / 1000).toFixed(1);
                         statusEl.textContent = `Connected (${connectTime}s)`;

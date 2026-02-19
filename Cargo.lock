@@ -8875,6 +8875,7 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "tor-async-compat",
+ "tor-async-utils",
  "tor-basic-utils",
  "tor-chanmgr",
  "tor-error",

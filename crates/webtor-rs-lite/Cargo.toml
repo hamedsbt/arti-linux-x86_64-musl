@@ -27,6 +27,7 @@ tor-error = { path = "../tor-error" }
 tor-memquota = { path = "../tor-memquota" }
 tor-chanmgr = { path = "../tor-chanmgr" }
 tor-async-compat = { path = "../tor-async-compat", version = "0.39.0" }
+tor-async-utils = { path = "../tor-async-utils", version = "0.39.0" }
 
 # Cryptography
 hex = "0.4"

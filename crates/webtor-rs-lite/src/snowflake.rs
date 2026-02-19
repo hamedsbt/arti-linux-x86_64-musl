@@ -328,10 +328,10 @@ pub async fn create_snowflake_stream(
 /// verifies TLS handshake signatures.
 fn make_tor_tls_connector() -> futures_rustls::TlsConnector {
     let provider = rustls_rustcrypto::provider();
-    let algorithms = provider.signature_verification_algorithms.clone();
+    let algorithms = provider.signature_verification_algorithms;
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
         .with_safe_default_protocol_versions()
-        .unwrap()
+        .expect("default protocol versions should be supported")
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(
             tor_rtcompat::wasm::TorCertVerifier::new(algorithms),

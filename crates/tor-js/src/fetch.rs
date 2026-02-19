@@ -475,6 +475,7 @@ where
 ///
 /// The returned `FetchHeadersResult` contains parsed headers and a `BodyReader`
 /// that can be used to read the body asynchronously.
+#[expect(clippy::too_many_arguments, reason = "HTTP fetch requires many parameters")]
 pub async fn fetch_headers<S>(
     stream: S,
     url: &Url,

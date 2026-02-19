@@ -24,8 +24,6 @@
 //! chanmgr.set_pt_mgr(Arc::new(pt_mgr));
 //! ```
 
-#![cfg(target_arch = "wasm32")]
-
 use std::sync::Arc;
 
 use tor_chanmgr::factory::{AbstractPtError, AbstractPtMgr, BootstrapReporter, ChannelFactory};
@@ -193,7 +191,7 @@ impl SnowflakeChannelFactory {
         let peer_cert = peer_cert.ok_or_else(|| tor_chanmgr::Error::Io {
             action: "get peer certificate",
             peer: None,
-            source: std::io::Error::new(std::io::ErrorKind::Other, "No peer certificate from TLS")
+            source: std::io::Error::other("No peer certificate from TLS")
                 .into(),
         })?;
 

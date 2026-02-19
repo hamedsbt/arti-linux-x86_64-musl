@@ -263,7 +263,7 @@ mod wasm {
 
     /// Wait for ICE gathering state to become complete
     async fn wait_for_ice_gathering(pc: &RtcPeerConnection) -> Result<()> {
-        let (tx, rx) = futures::channel::oneshot::channel::<()>();
+        let (tx, rx) = tor_async_utils::oneshot::channel::<()>();
         let tx = Rc::new(RefCell::new(Some(tx)));
 
         // Clone pc reference for use in closure
@@ -315,7 +315,7 @@ mod wasm {
             return Ok(());
         }
 
-        let (tx, rx) = futures::channel::oneshot::channel::<std::result::Result<(), String>>();
+        let (tx, rx) = tor_async_utils::oneshot::channel::<std::result::Result<(), String>>();
         let tx = Rc::new(RefCell::new(Some(tx)));
 
         let tx_open = tx.clone();

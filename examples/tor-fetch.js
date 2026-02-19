@@ -106,7 +106,7 @@ async function main() {
   ).withStorage(storage);
 
   // Create client (returns Promise)
-  const client = await new TorClient(options);
+  const client = await TorClient.create(options);
 
   const connectTime = ((performance.now() - startTime) / 1000).toFixed(1);
   console.log(`\nConnected in ${connectTime}s, fetching ${url}...\n`);

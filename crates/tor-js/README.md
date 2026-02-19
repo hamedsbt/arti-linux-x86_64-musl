@@ -41,7 +41,7 @@ const options = new TorClientOptions(
     '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194'  // pse.dev bridge fingerprint
 );
 
-const client = await new TorClient(options);
+const client = await TorClient.create(options);
 
 // Make a request through Tor
 const response = await client.fetch('https://check.torproject.org/api/ip');
@@ -71,7 +71,7 @@ const options = new module.TorClientOptions(
     'wss://snowflake.pse.dev/',
     '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194'
 );
-const client = await new module.TorClient(options);
+const client = await module.TorClient.create(options);
 const response = await client.fetch('https://check.torproject.org/api/ip');
 console.log(response.text());
 await client.close();
@@ -122,7 +122,7 @@ Note: The pse.dev bridge accepts non-browser connections (Node.js), while torpro
 ### `TorClient`
 
 ```javascript
-const client = await new TorClient(options);
+const client = await TorClient.create(options);
 ```
 
 #### `client.fetch(url, init?)`

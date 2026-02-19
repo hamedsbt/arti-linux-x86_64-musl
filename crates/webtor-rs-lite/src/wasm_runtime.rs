@@ -44,7 +44,7 @@ struct SendTimeout(#[expect(dead_code)] gloo_timers::callback::Timeout);
 unsafe impl Send for SendTimeout {}
 
 pub struct WasmSleep {
-    rx: futures::channel::oneshot::Receiver<()>,
+    rx: tor_async_utils::oneshot::Receiver<()>,
     // Keep the timeout handle alive so it doesn't get cancelled
     _timeout: SendTimeout,
 }
@@ -54,7 +54,7 @@ unsafe impl Send for WasmSleep {}
 
 impl WasmSleep {
     fn new(duration: Duration) -> Self {
-        let (tx, rx) = futures::channel::oneshot::channel();
+        let (tx, rx) = tor_async_utils::oneshot::channel();
 
         {
             // gloo-timers works in both browsers and Node.js

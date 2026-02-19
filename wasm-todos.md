@@ -6,9 +6,9 @@
 - [ ] Merge tor-time
 - [ ] Code review tor-async-compat
 - [ ] Merge tor-async-compat
-- [x] Fix pre-existing tests (`cargo test`)
+- [x] Fix pre-existing tests (`cargo test`) (see `scripts/check.sh`)
 - [ ] Automated testing
-- [ ] Fix warnings, clippy
+- [x] Fix warnings, clippy
 - [ ] Check/clean ai code
 - [ ] Make tor-js API same/similar to https://www.npmjs.com/package/tor-js
   - [x] Use standard `Response` incl streaming

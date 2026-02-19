@@ -236,25 +236,29 @@ impl CachedJsStorage {
 
     /// Pre-load all data from JS storage into the cache.
     async fn preload_all(&self) -> Result<(), JsValue> {
+        // Collect all entries before acquiring the lock to avoid holding it across await points.
+        let mut entries = Vec::new();
+
+        let state_keys = self.js_storage.keys("state:").await?;
+        for key in state_keys {
+            if let Some(value) = self.js_storage.get(&key).await? {
+                entries.push((key, value));
+            }
+        }
+
+        let dir_keys = self.js_storage.keys("dir:").await?;
+        for key in dir_keys {
+            if let Some(value) = self.js_storage.get(&key).await? {
+                entries.push((key, value));
+            }
+        }
+
         let mut cache = self
             .cache
             .write()
             .map_err(|_| JsValue::from_str("cache lock poisoned"))?;
-
-        // Load state keys
-        let state_keys = self.js_storage.keys("state:").await?;
-        for key in state_keys {
-            if let Some(value) = self.js_storage.get(&key).await? {
-                cache.insert(key, value);
-            }
-        }
-
-        // Load dir keys
-        let dir_keys = self.js_storage.keys("dir:").await?;
-        for key in dir_keys {
-            if let Some(value) = self.js_storage.get(&key).await? {
-                cache.insert(key, value);
-            }
+        for (key, value) in entries {
+            cache.insert(key, value);
         }
 
         tracing::debug!("CachedJsStorage: preloaded {} entries", cache.len());

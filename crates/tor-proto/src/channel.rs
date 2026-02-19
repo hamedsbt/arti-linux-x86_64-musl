@@ -842,10 +842,11 @@ impl Channel {
     ///
     /// Return `None` if the channel is currently in use.
     pub fn duration_unused(&self) -> Option<std::time::Duration> {
-        self.details
-            .unused_since
-            .time_since_update()
-            .map(Into::into)
+        let duration = self.details.unused_since.time_since_update();
+        #[cfg(not(target_arch = "wasm32"))]
+        { duration.map(Into::into) }
+        #[cfg(target_arch = "wasm32")]
+        { duration }
     }
 
     /// Return a new [`ChannelSender`] to transmit cells on this channel.
