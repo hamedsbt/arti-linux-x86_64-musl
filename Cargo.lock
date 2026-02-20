@@ -7431,7 +7431,7 @@ dependencies = [
 
 [[package]]
 name = "tor-js"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "arti-client",
  "console_error_panic_hook",

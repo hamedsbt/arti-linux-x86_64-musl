@@ -15,6 +15,13 @@ fn main() {
             }
         })
         .unwrap_or("unknown");
+    // Verify Cargo.toml version matches package.json
+    let cargo_version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+    assert_eq!(
+        cargo_version, version,
+        "Version mismatch: Cargo.toml has {cargo_version} but ts-wrapper/package.json has {version}"
+    );
+
     // Build profile
     let profile = std::env::var("PROFILE").unwrap_or_default();
     let dev = if profile != "release" { " (dev)" } else { "" };
