@@ -28,7 +28,7 @@
   - [x] 5c13837
   - [ ] (Probably needed again later)
 - [ ] Fix/deprioritize TODO/FIXMEs added
-- [ ] Provide tiny module variant via hash-checked download
+- [x] Provide tiny module variant via hash-checked download
   - jsdelivr/unpkg/githubusercontent
 - [x] WebRTC demo
 - [ ] Fix: Repeated "Unable to select a guard relay" issues when changing bridges (sometimes?)
