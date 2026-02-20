@@ -53,5 +53,7 @@ fn main() {
     println!("cargo:rustc-env=TOR_JS_GIT_INFO={git_info}");
 
     println!("cargo:rerun-if-changed=ts-wrapper/package.json");
+    // .git/HEAD changes on branch switch; .git/index changes on every commit/stage
     println!("cargo:rerun-if-changed=../../.git/HEAD");
+    println!("cargo:rerun-if-changed=../../.git/index");
 }
