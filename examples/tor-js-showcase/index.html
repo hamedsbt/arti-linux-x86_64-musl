@@ -440,25 +440,13 @@
                     <div class="input-group">
                         <label for="transportMode">Transport</label>
                         <select id="transportMode" name="transportMode">
-                            <option value="webrtc" selected>WebRTC (via Snowflake broker)</option>
-                            <option value="websocket">WebSocket (direct bridge)</option>
+                            <option value="websocket" selected>WebSocket (direct bridge)</option>
+                            <option value="webrtc">WebRTC (via Snowflake broker)</option>
                         </select>
                     </div>
 
-                    <!-- WebRTC config -->
-                    <div id="webrtcConfig">
-                        <div class="input-group">
-                            <label for="brokerUrl">Broker URL</label>
-                            <input type="url" id="brokerUrl" name="brokerUrl" value="https://snowflake-broker.torproject.net/" placeholder="https://snowflake-broker.torproject.net/">
-                        </div>
-                        <div class="input-group">
-                            <label for="webrtcFingerprint">Bridge Fingerprint</label>
-                            <input type="text" id="webrtcFingerprint" name="webrtcFingerprint" value="2B280B23E1107BB62ABFC40DDCC8824814F80A72" placeholder="40-character hex fingerprint">
-                        </div>
-                    </div>
-
                     <!-- WebSocket config -->
-                    <div id="websocketConfig" style="display: none;">
+                    <div id="websocketConfig">
                         <div class="input-group">
                             <label for="bridgeUrl">Bridge URL</label>
                             <select id="bridgeUrl" name="bridgeUrl">
@@ -469,6 +457,18 @@
                         <div class="input-group">
                             <label for="wsFingerprint">Bridge Fingerprint</label>
                             <input type="text" id="wsFingerprint" name="wsFingerprint" value="664A92FF3EF71E03A2F09B1DAABA2DDF920D5194" placeholder="40-character hex fingerprint">
+                        </div>
+                    </div>
+
+                    <!-- WebRTC config -->
+                    <div id="webrtcConfig" style="display: none;">
+                        <div class="input-group">
+                            <label for="brokerUrl">Broker URL</label>
+                            <input type="url" id="brokerUrl" name="brokerUrl" value="https://snowflake-broker.torproject.net/" placeholder="https://snowflake-broker.torproject.net/">
+                        </div>
+                        <div class="input-group">
+                            <label for="webrtcFingerprint">Bridge Fingerprint</label>
+                            <input type="text" id="webrtcFingerprint" name="webrtcFingerprint" value="2B280B23E1107BB62ABFC40DDCC8824814F80A72" placeholder="40-character hex fingerprint">
                         </div>
                     </div>
                 </div>
@@ -634,9 +634,9 @@
 
             // Toggle config sections based on transport mode
             transportMode.addEventListener('change', () => {
-                const isWebRtc = transportMode.value === 'webrtc';
-                webrtcConfig.style.display = isWebRtc ? '' : 'none';
-                websocketConfig.style.display = isWebRtc ? 'none' : '';
+                const isWebSocket = transportMode.value === 'websocket';
+                websocketConfig.style.display = isWebSocket ? '' : 'none';
+                webrtcConfig.style.display = isWebSocket ? 'none' : '';
             });
 
             // Preset selection handler
@@ -729,8 +729,8 @@
                     ? webrtcFingerprintInput.value.trim()
                     : wsFingerprintInput.value.trim();
 
-                if (!fingerprint || fingerprint.length !== 40) {
-                    log.error('Invalid fingerprint: must be 40 hex characters');
+                if (!fingerprint || (fingerprint !== 'not-pinned' && fingerprint.length !== 40)) {
+                    log.error('Invalid fingerprint: must be 40 hex characters or "not-pinned"');
                     return;
                 }
 

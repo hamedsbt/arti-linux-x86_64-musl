@@ -47,8 +47,9 @@ export class Log {
   /** @internal Create a callback for WASM setLogCallback */
   _makeWasmCallback(): (level: string, target: string, message: string) => void {
     return (level: string, _target: string, message: string) => {
-      const logLevel = (['debug', 'info', 'warn', 'error'].includes(level) // FIXME: Better detection
-        ? level
+      const levelLower = level.toLowerCase();
+      const logLevel = (['debug', 'info', 'warn', 'error'].includes(levelLower) // FIXME: Better detection
+        ? levelLower
         : 'debug') as LogLevel;
       this.log(logLevel, message);
     };

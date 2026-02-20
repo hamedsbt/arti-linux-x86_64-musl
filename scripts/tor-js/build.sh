@@ -12,15 +12,10 @@ set -e
 
 cd "$(dirname "$0")/../.."
 
-TARGET="web"
-PROFILE=""
+PROFILE="--dev"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --target)
-            TARGET="$2"
-            shift 2
-            ;;
         --release)
             PROFILE="--release"
             shift
@@ -32,8 +27,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-echo "Building tor-js WASM for target '$TARGET'..."
-wasm-pack build crates/tor-js --target "$TARGET" $PROFILE
+echo "Building tor-js WASM..."
+wasm-pack build crates/tor-js --target web $PROFILE
 
 # Copy README to pkg
 cp crates/tor-js/README.md crates/tor-js/pkg/
