@@ -536,10 +536,10 @@
     </div>
 
     <script type="importmap">
-        { "imports": { "#wasm": "./dist/wasm-pkg/tor_js.js" } }
+        { "imports": { "#wasm": "./dist/wasm-pkg/tor_js.js", "#wasm-base64-data": "./dist/wasm-base64-data.js" } }
     </script>
     <script type="module">
-        import { TorClient, Log, storage } from './dist/index.js';
+        import { TorClient, Log, storage } from './dist/wasm-base64.js';
 
         // Constants
         const MAX_LOG_ENTRIES = 500;

@@ -9,7 +9,7 @@
 // State is persisted to ~/.local/share/tor-js/
 // Subsequent runs will load cached state for faster bootstrap.
 
-import { TorClient, Log } from '../crates/tor-js/ts-wrapper/dist/index.js';
+import { TorClient, Log } from '../crates/tor-js/ts-wrapper/dist/wasm-base64.js';
 
 async function main() {
   const url = process.argv[2] ?? 'https://check.torproject.org/api/ip';

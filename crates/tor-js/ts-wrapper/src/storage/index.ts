@@ -11,7 +11,7 @@ export function createAutoStorage(name: string = 'tor-js'): TorStorage {
     return new IndexedDBStorage(name);
   }
   if (typeof process !== 'undefined' && process.versions?.node) {
-    return new FilesystemStorage();
+    return FilesystemStorage.localShare(name);
   }
   throw new Error(
     'No persistent storage available: need IndexedDB (browser) or filesystem (Node.js)',

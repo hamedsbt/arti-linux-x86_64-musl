@@ -10,10 +10,10 @@
 - [ ] Automated testing
 - [x] Fix warnings, clippy
 - [ ] Check/clean ai code
-- [ ] Make tor-js API same/similar to https://www.npmjs.com/package/tor-js
+- [x] Make tor-js API same/similar to https://www.npmjs.com/package/tor-js
   - [x] Use standard `Response` incl streaming
   - [x] Fix awkward initialization
-  - [ ] Make initialization portable (don't use wasm file)
+  - [x] Make initialization portable (don't use wasm file)
   - [x] Fix `TorClient` async new
   - [x] Logging
   - [x] Remove rust inmemory storage
@@ -33,6 +33,7 @@
 - [x] WebRTC demo
 - [ ] Fix: Repeated "Unable to select a guard relay" issues when changing bridges (sometimes?)
   - Sometimes it recovers (can complete request), other times it gets stuck
+- [ ] Fix sourcemaps
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm

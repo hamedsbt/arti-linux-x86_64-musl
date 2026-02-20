@@ -9,10 +9,23 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./wasm-cdn": {
+      "types": "./dist/wasm-cdn.d.ts",
+      "import": "./dist/wasm-cdn.js"
+    },
+    "./wasm-file": {
+      "types": "./dist/wasm-file.d.ts",
+      "import": "./dist/wasm-file.js"
+    },
+    "./wasm-base64": {
+      "types": "./dist/wasm-base64.d.ts",
+      "import": "./dist/wasm-base64.js"
     }
   },
   "imports": {
-    "#wasm": "./dist/wasm-pkg/tor_js.js"
+    "#wasm": "./dist/wasm-pkg/tor_js.js",
+    "#wasm-base64-data": "./dist/wasm-base64-data.js"
   },
   "files": [
     "dist"

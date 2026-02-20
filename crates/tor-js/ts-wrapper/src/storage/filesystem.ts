@@ -66,20 +66,32 @@ function unmangleKey(filename: string): string {
 
 export class FilesystemStorage implements TorStorage {
   private dirPath: string | null;
+  private name: string | null;
+  private resolvedDirPath: string | null = null;
   private initialized = false;
 
-  /**
-   * @param dirPath Absolute path to the storage directory.
-   *   Defaults to `~/.local/share/tor-js`.
-   */
-  constructor(dirPath?: string) {
-    this.dirPath = dirPath ?? null;
+  constructor(dirPath: string) {
+    this.dirPath = dirPath;
+    this.name = null;
+  }
+
+  static localShare(name: string): FilesystemStorage {
+    const s = new FilesystemStorage('');
+    s.dirPath = null;
+    s.name = name;
+    return s;
   }
 
   private async resolvedDir(): Promise<string> {
-    if (this.dirPath) return this.dirPath;
-    const { os, path } = await getNodeDeps();
-    return path.join(os.homedir(), '.local', 'share', 'tor-js');
+    if (!this.resolvedDirPath) {
+      if (this.dirPath) {
+        this.resolvedDirPath = this.dirPath;
+      } else {
+        const { os, path } = await getNodeDeps();
+        this.resolvedDirPath = path.join(os.homedir(), '.local', 'share', this.name!);
+      }
+    }
+    return this.resolvedDirPath!;
   }
 
   private async ensureDir(): Promise<void> {

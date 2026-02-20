@@ -15,7 +15,8 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "paths": {
-      "#wasm": ["../pkg/tor_js.d.ts"]
+      "#wasm": ["../pkg/tor_js.d.ts"],
+      "#wasm-base64-data": ["./src/wasm-base64-data.d.ts"]
     }
   },
   "include": ["src"],
