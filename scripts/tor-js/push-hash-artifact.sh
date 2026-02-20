@@ -5,11 +5,23 @@
 # and stored under SHA256(hash) so the filename doesn't reveal the key.
 # This prevents accidental exposure of dev builds with sensitive info.
 #
-# Usage: scripts/tor-js/push-hash-artifact.sh
+# By default, artifacts are stored under tmp/<hash-hash> (temporary).
+# Use --persist to store under <prefix>/<hash-hash> (permanent).
+# All tmp/* files are scrubbed from the branch history on each push.
+#
+# Usage: scripts/tor-js/push-hash-artifact.sh [--persist]
 
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
+
+PERSIST=false
+for arg in "$@"; do
+  case "$arg" in
+    --persist) PERSIST=true ;;
+    *) echo "Unknown argument: $arg"; exit 1 ;;
+  esac
+done
 
 WASM_FILE="crates/tor-js/pkg/tor_js_bg.wasm"
 
@@ -52,40 +64,68 @@ SCRIPT
 
 eval "$ENCRYPT_OUTPUT"
 
-PREFIX="${HASH_HASH:0:2}"
-DEST="$PREFIX/$HASH_HASH"
+if [ "$PERSIST" = true ]; then
+  PREFIX="${HASH_HASH:0:2}"
+  DEST="$PREFIX/$HASH_HASH"
+else
+  DEST="tmp/$HASH_HASH"
+fi
 
 echo "WASM hash:      $HASH"
 echo "hash(hash):     $HASH_HASH"
 echo "Artifact path:  $DEST"
+echo "Mode:           $([ "$PERSIST" = true ] && echo "persistent" || echo "temporary")"
 
 REMOTE=$(git remote get-url origin)
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR" "$ENCRYPTED_FILE"' EXIT
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK" "$ENCRYPTED_FILE"' EXIT
 
-# Clone just the hash-artifacts branch (or create it as an orphan)
+# Clone the hash-artifacts branch (full history needed for rewriting)
 if git ls-remote --exit-code --heads "$REMOTE" hash-artifacts >/dev/null 2>&1; then
-  git clone --depth 1 --branch hash-artifacts --single-branch "$REMOTE" "$TMPDIR"
+  git clone --branch hash-artifacts --single-branch "$REMOTE" "$WORK"
 else
   echo "Creating new orphan branch hash-artifacts..."
-  git init "$TMPDIR"
-  git -C "$TMPDIR" remote add origin "$REMOTE"
-  git -C "$TMPDIR" checkout --orphan hash-artifacts
+  git init "$WORK"
+  git -C "$WORK" remote add origin "$REMOTE"
+  git -C "$WORK" checkout --orphan hash-artifacts
+fi
+
+# Scrub all tmp/* from history
+if git -C "$WORK" ls-tree -r --name-only HEAD 2>/dev/null | grep -q '^tmp/'; then
+  echo "Scrubbing tmp/* from history..."
+  FILTER_BRANCH_SQUELCH_WARNING=1 git -C "$WORK" filter-branch --force \
+    --index-filter 'git rm --cached --ignore-unmatch -r tmp/' \
+    --prune-empty -- hash-artifacts || true
+
+  # If all commits were pruned, the branch ref is gone — recreate as orphan
+  if ! git -C "$WORK" rev-parse --verify hash-artifacts >/dev/null 2>&1; then
+    git -C "$WORK" checkout --orphan hash-artifacts
+    git -C "$WORK" rm -rf --cached . >/dev/null 2>&1 || true
+  fi
+
+  # Clean leftover tmp/ files from working tree
+  rm -rf "$WORK/tmp"
+  NEEDS_PUSH=true
 fi
 
 # Check if artifact already exists
-if [ -f "$TMPDIR/$DEST" ]; then
-  echo "Artifact $DEST already exists on hash-artifacts branch. Nothing to do."
+if [ -f "$WORK/$DEST" ]; then
+  echo "Artifact $DEST already exists on hash-artifacts branch."
+  if [ "${NEEDS_PUSH:-}" = true ]; then
+    git -C "$WORK" push --force origin hash-artifacts
+    echo "Pushed (scrubbed tmp/* from history)."
+  else
+    echo "Nothing to do."
+  fi
   exit 0
 fi
 
-# Copy the encrypted file
-mkdir -p "$TMPDIR/$PREFIX"
-cp "$ENCRYPTED_FILE" "$TMPDIR/$DEST"
+# Add the new artifact
+mkdir -p "$(dirname "$WORK/$DEST")"
+cp "$ENCRYPTED_FILE" "$WORK/$DEST"
+git -C "$WORK" add "$DEST"
+git -C "$WORK" commit -m "Add $DEST"
 
-# Commit and push
-git -C "$TMPDIR" add "$DEST"
-git -C "$TMPDIR" commit -m "Add $DEST"
-git -C "$TMPDIR" push origin hash-artifacts
+git -C "$WORK" push --force origin hash-artifacts
 
 echo "Pushed $DEST to hash-artifacts branch."

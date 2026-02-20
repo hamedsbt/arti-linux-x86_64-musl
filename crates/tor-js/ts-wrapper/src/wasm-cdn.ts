@@ -101,47 +101,50 @@ setWasmSourceProvider(async () => {
   const hashHash = await sha256hex(hashBytes);
   const hashHashPrefix = hashHash.slice(0, 2);
 
-  const GITHUB_URL = `https://raw.githubusercontent.com/voltrevo/arti/hash-artifacts/${hashHashPrefix}/${hashHash}`;
+  const githubBase = `https://raw.githubusercontent.com/voltrevo/arti/hash-artifacts/`;
 
-  const urls = [
-    `https://cdn.jsdelivr.net/npm/tor-js@${__PACKAGE_VERSION__}/dist/tor_js_bg.wasm`,
-    `https://unpkg.com/tor-js@${__PACKAGE_VERSION__}/dist/tor_js_bg.wasm`,
-    GITHUB_URL,
+  type Source = { urls: string[], encrypted: boolean };
+
+  const sources: Source[] = [
+    { urls: [`https://cdn.jsdelivr.net/npm/tor-js@${__PACKAGE_VERSION__}/dist/tor_js_bg.wasm`], encrypted: false },
+    { urls: [`https://unpkg.com/tor-js@${__PACKAGE_VERSION__}/dist/tor_js_bg.wasm`], encrypted: false },
+    { urls: [`${githubBase}${hashHashPrefix}/${hashHash}`, `${githubBase}tmp/${hashHash}`], encrypted: true },
   ];
 
-  // Shuffle for load balancing
-  for (let i = urls.length - 1; i > 0; i--) {
+  // Shuffle sources for load balancing
+  for (let i = sources.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [urls[i], urls[j]] = [urls[j], urls[i]];
+    [sources[i], sources[j]] = [sources[j], sources[i]];
   }
 
   const errors: string[] = [];
-  for (const url of urls) {
-    try {
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      let bytes = await resp.arrayBuffer();
+  for (const source of sources) {
+    for (const url of source.urls) {
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        let bytes = await resp.arrayBuffer();
 
-      // GitHub source is encrypted — decrypt before verification
-      if (url === GITHUB_URL) {
-        bytes = await decryptAesGcm(bytes, hashBytes);
+        if (source.encrypted) {
+          bytes = await decryptAesGcm(bytes, hashBytes);
+        }
+
+        const hash = await sha256hex(bytes);
+        if (hash !== __WASM_SHA256__) {
+          throw new Error(`SHA256 mismatch: expected ${__WASM_SHA256__}, got ${hash}`);
+        }
+
+        const result = new Uint8Array(bytes);
+
+        // Cache for next time (fire and forget)
+        if (cache) {
+          cache.set(CACHE_KEY, bytesToBase64(result)).catch(() => {});
+        }
+
+        return result;
+      } catch (err) {
+        errors.push(`${url}: ${err instanceof Error ? err.message : err}`);
       }
-
-      const hash = await sha256hex(bytes);
-      if (hash !== __WASM_SHA256__) {
-        throw new Error(`SHA256 mismatch: expected ${__WASM_SHA256__}, got ${hash}`);
-      }
-
-      const result = new Uint8Array(bytes);
-
-      // Cache for next time (fire and forget)
-      if (cache) {
-        cache.set(CACHE_KEY, bytesToBase64(result)).catch(() => {});
-      }
-
-      return result;
-    } catch (err) {
-      errors.push(`${url}: ${err instanceof Error ? err.message : err}`);
     }
   }
 
