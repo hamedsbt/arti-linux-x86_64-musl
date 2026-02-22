@@ -33,7 +33,8 @@
 - [x] WebRTC demo
 - [ ] Fix: Repeated "Unable to select a guard relay" issues when changing bridges (sometimes?)
   - Sometimes it recovers (can complete request), other times it gets stuck
-- [ ] Fix sourcemaps
+- [x] Fix sourcemaps
+- [ ] Check npm pack content
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm

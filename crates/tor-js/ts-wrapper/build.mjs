@@ -42,7 +42,16 @@ writeFileSync(
 );
 console.log(`Generated wasm-base64-data.js (${(base64Data.length / 1024 / 1024).toFixed(1)} MB)`);
 
-// 5. Copy WASM runtime files to dist/
+// 5. Run tsc to generate declaration maps (.d.ts.map files)
+// This overwrites tsup's .d.ts files with versions that include
+// //# sourceMappingURL= comments, enabling "jump to definition" in editors.
+execSync('npx tsc --emitDeclarationOnly --declarationMap', {
+  stdio: 'inherit',
+  cwd: __dirname,
+});
+console.log('Generated declaration maps (.d.ts.map files)');
+
+// 6. Copy WASM runtime files to dist/
 const distWasm = resolve(distDir, 'wasm-pkg');
 mkdirSync(distWasm, { recursive: true });
 copyFileSync(resolve(pkgDir, 'tor_js.js'), resolve(distWasm, 'tor_js.js'));

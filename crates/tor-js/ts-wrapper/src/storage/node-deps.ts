@@ -1,9 +1,7 @@
-import type path from 'node:path';
-
 export type NodeDeps = {
   fs: typeof import('node:fs/promises');
   os: typeof import('node:os');
-  path: path.PlatformPath;
+  path: typeof import('node:path');
 };
 
 let promise: Promise<NodeDeps> | undefined;
