@@ -28,7 +28,8 @@
     "#wasm-base64-data": "./dist/wasm-base64-data.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "scripts": {
     "build": "node build.mjs",

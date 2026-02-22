@@ -34,7 +34,9 @@
 - [ ] Fix: Repeated "Unable to select a guard relay" issues when changing bridges (sometimes?)
   - Sometimes it recovers (can complete request), other times it gets stuck
 - [x] Fix sourcemaps
-- [ ] Check npm pack content
+- [x] Check npm pack content
+- [ ] Add singleton entry points
+- [ ] README for npm package
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm
