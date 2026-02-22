@@ -1,4 +1,4 @@
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 
 interface LogConstructorParams {
   rawLog?: (level: LogLevel, ...args: unknown[]) => void;
@@ -26,7 +26,9 @@ export class Log {
     });
   }
 
-  // FIXME: include trace
+  trace(...args: unknown[]): void {
+    this.log('trace', ...args);
+  }
 
   debug(...args: unknown[]): void {
     this.log('debug', ...args);
@@ -48,7 +50,7 @@ export class Log {
   _makeWasmCallback(): (level: string, target: string, message: string) => void {
     return (level: string, _target: string, message: string) => {
       const levelLower = level.toLowerCase();
-      const logLevel = (['debug', 'info', 'warn', 'error'].includes(levelLower) // FIXME: Better detection
+      const logLevel = (['trace', 'debug', 'info', 'warn', 'error'].includes(levelLower) // FIXME: Better detection
         ? levelLower
         : 'debug') as LogLevel;
       this.log(logLevel, message);
