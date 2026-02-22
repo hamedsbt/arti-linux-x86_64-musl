@@ -58,10 +58,20 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["r
 # Error handling
 console_error_panic_hook = "0.1"
 
-# Random number generation (enable JS backend for all getrandom versions used transitively)
-# TODO: consolidate to only use latest getrandom once transitive deps are updated
+# Random number generation
+# These entries are not used directly in code. As the WASM binary root, tor-js must enable
+# the JS backend feature on every getrandom version present in the dep graph, because
+# getrandom needs to call crypto.getRandomValues() on WASM instead of OS primitives.
+# Cargo's feature unification propagates the feature to all transitive users of each version.
+# Three versions are needed because different parts of the dep graph haven't converged yet:
+#   0.2 (js):     rand_core 0.6.4 → getrandom 0.2  (rustls-rustcrypto + tor-llcrypto's rand_core_06 compat alias)
+#   0.3 (wasm_js): tor-basic-utils, uuid, rand_core 0.9.x, etc.
+#   0.4 (wasm_js): tor-bytes and tor-llcrypto list it directly under [target.wasm32-unknown-unknown.dependencies]
+# consolidate on 0.4 once older versions are gone:
+#   drop 0.2 once rustls-rustcrypto updates to rand_core 0.9+ and tor-llcrypto drops rand_core_06;
+#   drop 0.3 once tor-basic-utils, uuid, etc. update to getrandom 0.4.
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
-getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 # Serialization
