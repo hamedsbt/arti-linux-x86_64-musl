@@ -356,7 +356,7 @@ impl KeyValueStore for CachedJsStorage {
         Ok(true)
     }
 
-    fn is_locked(&self) -> Result<bool, StorageError> {
+    fn can_store(&self) -> Result<bool, StorageError> {
         Ok(*self.locked.read().map_err(|e| e.to_string())?)
     }
 

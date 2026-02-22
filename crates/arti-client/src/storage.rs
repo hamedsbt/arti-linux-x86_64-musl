@@ -63,7 +63,10 @@ pub trait KeyValueStore: Send + Sync {
     fn try_lock(&self) -> Result<bool, StorageError>;
 
     /// Return true if this store currently holds the write lock.
-    fn is_locked(&self) -> Result<bool, StorageError>;
+    ///
+    /// Returns `false` if the lock is not held by this instance, regardless
+    /// of whether another instance holds it.
+    fn can_store(&self) -> Result<bool, StorageError>;
 
     /// Release the write lock.
     fn unlock(&self) -> Result<(), StorageError>;
@@ -124,10 +127,8 @@ impl StringStore for KvStateAdapter {
             .map_err(|e| tor_persist::Error::store_error(key, std::io::Error::other(e)))
     }
 
-    fn is_locked(&self) -> tor_persist::Result<bool> {
-        self.store
-            .is_locked()
-            .map_err(|e| tor_persist::Error::lock_error(std::io::Error::other(e)))
+    fn can_store(&self) -> bool {
+        self.store.can_store().unwrap_or(false)
     }
 
     fn try_lock(&self) -> tor_persist::Result<LockStatus> {
@@ -168,7 +169,7 @@ impl CustomDirStore for KvDirAdapter {
     }
 
     fn store(&self, key: &str, value: &str) -> tor_dirmgr::Result<()> {
-        if !self.store.is_locked().unwrap_or(false) {
+        if !self.store.can_store().unwrap_or(false) {
             return Err(tor_dirmgr::Error::CacheCorruption("store is read-only"));
         }
         self.store.set(key, value).map_err(|e| {
@@ -178,7 +179,7 @@ impl CustomDirStore for KvDirAdapter {
     }
 
     fn delete(&self, key: &str) -> tor_dirmgr::Result<()> {
-        if !self.store.is_locked().unwrap_or(false) {
+        if !self.store.can_store().unwrap_or(false) {
             return Err(tor_dirmgr::Error::CacheCorruption("store is read-only"));
         }
         self.store.delete(key).map_err(|e| {
@@ -195,7 +196,7 @@ impl CustomDirStore for KvDirAdapter {
     }
 
     fn is_readonly(&self) -> bool {
-        !self.store.is_locked().unwrap_or(false)
+        !self.store.can_store().unwrap_or(false)
     }
 
     fn upgrade_to_readwrite(&mut self) -> tor_dirmgr::Result<bool> {
@@ -274,7 +275,7 @@ mod tests {
             }
         }
 
-        fn is_locked(&self) -> Result<bool, StorageError> {
+        fn can_store(&self) -> Result<bool, StorageError> {
             Ok(*self.locked.read().map_err(|e| e.to_string())?)
         }
 

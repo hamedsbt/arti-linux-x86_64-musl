@@ -43,7 +43,7 @@ use std::path::Path;
 ///     }
 ///
 ///     // ... implement other methods
-///     # fn is_locked(&self) -> tor_persist::Result<bool> { Ok(true) }
+///     # fn can_store(&self) -> bool { true }
 ///     # fn try_lock(&self) -> tor_persist::Result<LockStatus> { Ok(LockStatus::AlreadyHeld) }
 ///     # fn unlock(&self) -> tor_persist::Result<()> { Ok(()) }
 /// }
@@ -58,13 +58,11 @@ pub trait StringStore: Send + Sync {
     fn store_str(&self, key: &str, value: &str) -> Result<()>;
 
     /// Return true if this storage currently holds the write lock.
-    /// TODO: Is this the right naming? What is the pre-existing
-    /// pattern in Arti if any? eg is_lock_held would be clearer
-    /// since we return false if it's locked by someone else.
-    /// can_store was also seen, but that obscures the locking
-    /// reason. Also: Should we use a unified enum instead as seen
-    /// elsewhere (see enum LockStatus).
-    fn is_locked(&self) -> Result<bool>;
+    ///
+    /// Returns `false` if the lock is not held by this instance, regardless
+    /// of whether another instance holds it. Matches the semantics of
+    /// [`StateMgr::can_store`].
+    fn can_store(&self) -> bool;
 
     /// Try to acquire the lock for exclusive write access.
     fn try_lock(&self) -> Result<LockStatus>;
@@ -188,7 +186,7 @@ impl StateMgr for AnyStateMgr {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Fs(fs) => fs.store(key, val),
             Self::Custom(s) => {
-                if !s.is_locked().unwrap_or(false) {
+                if !s.can_store() {
                     return Err(Self::make_error(ErrorSource::NoLock, Action::Storing, key));
                 }
 
@@ -205,7 +203,7 @@ impl StateMgr for AnyStateMgr {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Fs(fs) => fs.can_store(),
-            Self::Custom(s) => s.is_locked().unwrap_or(false),
+            Self::Custom(s) => s.can_store(),
         }
     }
 
@@ -267,8 +265,8 @@ mod tests {
             Ok(())
         }
 
-        fn is_locked(&self) -> Result<bool> {
-            Ok(*self.locked.read().unwrap())
+        fn can_store(&self) -> bool {
+            *self.locked.read().unwrap()
         }
 
         fn try_lock(&self) -> Result<LockStatus> {
