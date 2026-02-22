@@ -48,6 +48,7 @@ pub const SNOWFLAKE_WS_URL_TOR_PROJECT: &str = "wss://snowflake.torproject.net/"
 
 /// Snowflake bridge fingerprint for PSE bridge
 pub const SNOWFLAKE_FINGERPRINT: &str = "664A92FF3EF71E03A2F09B1DAABA2DDF920D5194";
+// FIXME: Remove hardcoded urls and fingerprints (check for similar issues in diff against zydou/main)
 
 /// WebSocket Snowflake configuration
 #[derive(Debug, Clone)]

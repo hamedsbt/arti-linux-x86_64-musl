@@ -52,7 +52,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 use wasm_bindgen::prelude::*;
-use webtor_rs_lite::arti_transport::{SnowflakeMode, SnowflakePtMgr};
+use webtor_rs_lite::arti_transport::{BridgeFingerprint, SnowflakeMode, SnowflakePtMgr};
 
 // Global log callback (WASM is single-threaded, so thread_local is fine)
 thread_local! {
@@ -169,39 +169,10 @@ impl tracing::field::Visit for MessageVisitor {
 // TorClientOptions
 // ============================================================================
 
-/// Bridge fingerprint for identity verification.
-#[derive(Clone, Debug)]
-enum BridgeFingerprint {
-    /// A specific 40-char hex fingerprint to verify the bridge against.
-    Pinned(String),
-    /// Skip fingerprint verification (less secure).
-    NotPinned,
-}
-
-impl BridgeFingerprint {
-    /// Parse from a JS string: "not-pinned" → NotPinned, anything else → Pinned.
-    fn parse(s: String) -> Self {
-        if s == "not-pinned" {
-            Self::NotPinned
-        } else {
-            Self::Pinned(s)
-        }
-    }
-
-    /// Convert to `Option<String>` for passing to webtor-rs-lite's SnowflakeMode.
-    fn as_option(&self) -> Option<String> { // FIXME: Remove this, make webtor-rs-lite use enum properly
-        match self {
-            Self::Pinned(fp) => Some(fp.clone()),
-            Self::NotPinned => None,
-        }
-    }
-}
-
 /// Options for creating a TorClient
 #[wasm_bindgen]
 pub struct TorClientOptions {
     mode: SnowflakeMode,
-    fingerprint: BridgeFingerprint,
     /// Custom storage implementation (optional)
     storage: Option<JsStorageInterface>,
 }
@@ -215,13 +186,12 @@ impl TorClientOptions {
     /// * `fingerprint` - Bridge fingerprint (40 char hex string), or "not-pinned" to skip verification.
     #[wasm_bindgen(constructor)]
     pub fn new(snowflake_url: String, fingerprint: String) -> Self {
-        let fp = BridgeFingerprint::parse(fingerprint);
+        let fp = if fingerprint == "not-pinned" { BridgeFingerprint::NotPinned } else { BridgeFingerprint::Pinned(fingerprint) };
         Self {
             mode: SnowflakeMode::WebSocket {
                 url: snowflake_url,
-                fingerprint: fp.as_option(),
+                fingerprint: fp,
             },
-            fingerprint: fp,
             storage: None,
         }
     }
@@ -233,13 +203,12 @@ impl TorClientOptions {
     /// * `fingerprint` - Bridge fingerprint (40 char hex string), or "not-pinned" to skip verification.
     #[wasm_bindgen(js_name = snowflakeWebRtc)]
     pub fn snowflake_webrtc(broker_url: String, fingerprint: String) -> Self {
-        let fp = BridgeFingerprint::parse(fingerprint);
+        let fp = if fingerprint == "not-pinned" { BridgeFingerprint::NotPinned } else { BridgeFingerprint::Pinned(fingerprint) };
         Self {
             mode: SnowflakeMode::WebRtc {
                 broker_url,
-                fingerprint: fp.as_option(),
+                fingerprint: fp,
             },
-            fingerprint: fp,
             storage: None,
         }
     }
@@ -325,6 +294,11 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
     info!("Creating TorClient with arti-client...");
 
     // 1. Create Snowflake PT manager from webtor-rs-lite
+    // Extract fingerprint before moving mode into SnowflakePtMgr.
+    let bridge_fp = match &options.mode {
+        SnowflakeMode::WebSocket { fingerprint, .. } => fingerprint.clone(),
+        SnowflakeMode::WebRtc { fingerprint, .. } => fingerprint.clone(),
+    };
     let snowflake_mgr = SnowflakePtMgr::new(options.mode);
     info!("Created Snowflake PT manager");
 
@@ -339,9 +313,9 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
 
     // Configure the Snowflake bridge
     // The bridge line always needs a fingerprint for arti's parser.
-    // For NotPinned, use a dummy — actual verification is controlled by
+    // For None (not-pinned), use a dummy — actual verification is controlled by
     // SnowflakeMode's fingerprint field (None = skip verification).
-    let bridge_line = match &options.fingerprint {
+    let bridge_line = match bridge_fp {
         BridgeFingerprint::Pinned(fp) => format!("snowflake 0.0.2.0:1 {}", fp),
         BridgeFingerprint::NotPinned => "snowflake 0.0.2.0:1 0000000000000000000000000000000000000000".to_string(),
     };

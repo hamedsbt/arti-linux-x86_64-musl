@@ -39,7 +39,7 @@ pub use error::{Result, TorError};
 
 // Re-export arti-client integration types (WASM)
 #[cfg(target_arch = "wasm32")]
-pub use arti_transport::{SnowflakeChannelFactory, SnowflakeMode, SnowflakePtMgr};
+pub use arti_transport::{BridgeFingerprint, SnowflakeChannelFactory, SnowflakeMode, SnowflakePtMgr};
 
 // Re-export arti-client integration types (native)
 #[cfg(not(target_arch = "wasm32"))]
