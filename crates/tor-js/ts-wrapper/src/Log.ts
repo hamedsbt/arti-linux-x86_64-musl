@@ -48,12 +48,13 @@ export class Log {
 
   /** @internal Create a callback for WASM setLogCallback */
   _makeWasmCallback(): (level: string, target: string, message: string) => void {
-    return (level: string, _target: string, message: string) => {
-      const levelLower = level.toLowerCase();
-      const logLevel = (['trace', 'debug', 'info', 'warn', 'error'].includes(levelLower) // FIXME: Better detection
-        ? levelLower
-        : 'debug') as LogLevel;
-      this.log(logLevel, message);
+    const levels: ReadonlySet<string> = new Set(['trace', 'debug', 'info', 'warn', 'error']);
+    return (level: string, target: string, message: string) => {
+      if (!levels.has(level)) {
+        this.log('error', `unexpected log level from WASM: ${JSON.stringify(level)}`);
+        level = 'debug';
+      }
+      this.child(target).log(level as LogLevel, message);
     };
   }
 

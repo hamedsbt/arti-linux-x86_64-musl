@@ -107,7 +107,13 @@ where
         _ctx: tracing_subscriber::layer::Context<'_, S>,
     ) {
         // Extract event data
-        let level = event.metadata().level().as_str();
+        let level = match *event.metadata().level() {
+            tracing::Level::TRACE => "trace",
+            tracing::Level::DEBUG => "debug",
+            tracing::Level::INFO => "info",
+            tracing::Level::WARN => "warn",
+            tracing::Level::ERROR => "error",
+        };
         let target = event.metadata().target();
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
