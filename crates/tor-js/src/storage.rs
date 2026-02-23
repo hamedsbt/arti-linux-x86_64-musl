@@ -26,9 +26,8 @@ use wasm_bindgen_futures::JsFuture;
 ///
 /// This is the interface that JavaScript code must implement to provide
 /// custom storage. All methods return Promises.
-/// FIXME: Why use Result on these methods? Distinguishing sync/async failure
-/// is usually an anti-pattern in js. (Just put the failure in the promise
-/// always.)
+/// (Return values are wrapped in Result to handle the possibility that JS
+/// throws synchronously.)
 #[wasm_bindgen]
 extern "C" {
     /// The JavaScript storage interface type.
