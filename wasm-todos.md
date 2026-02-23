@@ -27,7 +27,8 @@
   - [x] 9306eec
   - [x] 5c13837
   - [ ] (Probably needed again later)
-- [ ] Fix/deprioritize TODO/FIXMEs added
+- [x] Fix/deprioritize TODO/FIXMEs added
+- [ ] Implement/fix missing storage locking in JS
 - [x] Provide tiny module variant via hash-checked download
   - jsdelivr/unpkg/githubusercontent
 - [x] WebRTC demo
