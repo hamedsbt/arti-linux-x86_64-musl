@@ -40,6 +40,7 @@
 - [ ] Check incremental build logic in tor-js (rerun-if-changed prevents ordinary cache invalidation? intent was to build only more often, never skip)
 - [ ] Confirm trace logging works in js
 - [ ] Fix wasm-base64 (should be self-contained, but requires `<script type="importmap">` in showcase index.html)
+- [ ] Fix slow js storage startup (loading '000s items into memory - fix with parallelism or chunked storage of microdescs)
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm
