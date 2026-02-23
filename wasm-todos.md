@@ -39,6 +39,7 @@
 - [ ] README for npm package
 - [ ] Check incremental build logic in tor-js (rerun-if-changed prevents ordinary cache invalidation? intent was to build only more often, never skip)
 - [ ] Confirm trace logging works in js
+- [ ] Fix wasm-base64 (should be self-contained, but requires `<script type="importmap">` in showcase index.html)
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm
