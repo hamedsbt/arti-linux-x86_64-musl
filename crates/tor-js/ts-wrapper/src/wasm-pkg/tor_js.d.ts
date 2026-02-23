@@ -169,7 +169,7 @@ export class TorClientOptions {
      *
      * # Arguments
      * * `snowflake_url` - WebSocket URL for the Snowflake bridge (e.g., "wss://snowflake.pse.dev/")
-     * * `fingerprint` - Bridge fingerprint (40 char hex string), or "not-pinned" to skip verification.
+     * * `fingerprint` - Bridge fingerprint (40 char hex string).
      */
     constructor(snowflake_url: string, fingerprint: string);
     /**
@@ -177,7 +177,7 @@ export class TorClientOptions {
      *
      * # Arguments
      * * `broker_url` - Snowflake broker URL (e.g., "https://snowflake-broker.torproject.net/").
-     * * `fingerprint` - Bridge fingerprint (40 char hex string), or "not-pinned" to skip verification.
+     * * `fingerprint` - Bridge fingerprint (40 char hex string).
      */
     static snowflakeWebRtc(broker_url: string, fingerprint: string): TorClientOptions;
     /**

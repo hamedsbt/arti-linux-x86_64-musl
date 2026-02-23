@@ -19,7 +19,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use crate::error::{Result, TorError};
-use crate::BridgeFingerprint;
 use crate::kcp_stream::{KcpConfig, KcpStream};
 use crate::smux::SmuxStream;
 use crate::turbo::TurboStream;
@@ -47,7 +46,7 @@ pub struct SnowflakeWsConfig {
     /// WebSocket URL for Snowflake endpoint
     pub ws_url: String,
     /// Bridge fingerprint
-    pub fingerprint: BridgeFingerprint,
+    pub fingerprint: String,
     /// KCP conversation ID (0 for default)
     pub kcp_conv: u32,
     /// SMUX stream ID (default: 3)
@@ -55,7 +54,7 @@ pub struct SnowflakeWsConfig {
 }
 
 impl SnowflakeWsConfig {
-    pub fn new(url: impl Into<String>, fingerprint: BridgeFingerprint) -> Self {
+    pub fn new(url: impl Into<String>, fingerprint: String) -> Self {
         Self {
             ws_url: url.into(),
             fingerprint,
@@ -267,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_config_defaults() {
-        let config = SnowflakeWsConfig::new("wss://test.example.com", BridgeFingerprint::NotPinned);
+        let config = SnowflakeWsConfig::new("wss://test.example.com", "AAAA00000000000000000000000000000000000000".to_string());
         assert_eq!(config.kcp_conv, 0);
         assert_eq!(config.smux_stream_id, 3);
     }

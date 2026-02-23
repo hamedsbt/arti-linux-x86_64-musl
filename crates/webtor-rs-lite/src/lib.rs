@@ -37,24 +37,6 @@ pub mod arti_transport_native;
 
 pub use error::{Result, TorError};
 
-/// Bridge fingerprint for identity verification.
-#[derive(Debug, Clone)]
-pub enum BridgeFingerprint {
-    /// A specific 40-char hex fingerprint to verify the bridge against.
-    Pinned(String),
-    /// Skip fingerprint verification (less secure).
-    NotPinned,
-}
-
-impl std::fmt::Display for BridgeFingerprint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BridgeFingerprint::Pinned(fp) => write!(f, "{}", fp),
-            BridgeFingerprint::NotPinned => write!(f, "(not pinned)"),
-        }
-    }
-}
-
 // Re-export arti-client integration types
 #[cfg(target_arch = "wasm32")]
 pub use arti_transport::{SnowflakeChannelFactory, SnowflakeMode, SnowflakePtMgr};

@@ -16,20 +16,19 @@ use tor_proto::channel::{Channel, ChannelBuilder};
 use tor_proto::memquota::ChannelAccount;
 use tor_rtcompat::{Runtime, SpawnExt};
 use tor_time::SystemTime;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::snowflake_ws_native::{SnowflakeWsConfig, SnowflakeWsStream};
-use crate::BridgeFingerprint;
 
 /// Snowflake channel factory that builds Tor channels over Snowflake transport (native)
 pub struct SnowflakeChannelFactory<R: Runtime> {
     url: String,
-    fingerprint: BridgeFingerprint,
+    fingerprint: String,
     runtime: R,
 }
 
 impl<R: Runtime> SnowflakeChannelFactory<R> {
-    pub fn new(runtime: R, url: impl Into<String>, fingerprint: BridgeFingerprint) -> Self {
+    pub fn new(runtime: R, url: impl Into<String>, fingerprint: String) -> Self {
         Self {
             url: url.into(),
             fingerprint,
@@ -57,13 +56,10 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
                 source: std::io::Error::other(e.to_string()).into(),
             })?;
 
-        // Parse fingerprint to RSA identity if provided
-        let rsa_id = match &self.fingerprint {
-            BridgeFingerprint::Pinned(fp) => hex::decode(fp)
-                .ok()
-                .and_then(|bytes| RsaIdentity::from_bytes(&bytes)),
-            BridgeFingerprint::NotPinned => None,
-        };
+        // Parse fingerprint to RSA identity
+        let rsa_id = hex::decode(&self.fingerprint)
+            .ok()
+            .and_then(|bytes| RsaIdentity::from_bytes(&bytes));
 
         // Get peer certificate from TLS stream
         let peer_cert = stream.peer_certificate().map_err(|e| tor_chanmgr::Error::Io {
@@ -127,19 +123,6 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
             clock_skew: None,
         })?;
 
-        // Log fingerprint if verification was skipped
-        if matches!(self.fingerprint, BridgeFingerprint::NotPinned) {
-            if let Some(peer_rsa_id) = chan.target().rsa_identity() {
-                let fingerprint_hex = hex::encode(peer_rsa_id.as_bytes()).to_uppercase();
-                warn!(
-                    "Bridge fingerprint verification was skipped. \
-                     The bridge's fingerprint is: {}. \
-                     For security, consider specifying this fingerprint explicitly.",
-                    fingerprint_hex
-                );
-            }
-        }
-
         // Spawn the channel reactor using SpawnExt trait
         self.runtime.spawn(async move {
             let _ = reactor.run().await;
@@ -198,12 +181,12 @@ impl AbstractPtError for SnowflakePtError {}
 /// for arti-client without requiring an external PT binary.
 pub struct SnowflakePtMgr<R: Runtime> {
     url: String,
-    fingerprint: BridgeFingerprint,
+    fingerprint: String,
     runtime: R,
 }
 
 impl<R: Runtime> SnowflakePtMgr<R> {
-    pub fn new(runtime: R, url: impl Into<String>, fingerprint: BridgeFingerprint) -> Self {
+    pub fn new(runtime: R, url: impl Into<String>, fingerprint: String) -> Self {
         Self {
             url: url.into(),
             fingerprint,

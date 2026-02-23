@@ -7,7 +7,7 @@ export interface TorClientOptions {
   /** Snowflake WebSocket bridge URL (e.g., "wss://snowflake.pse.dev/"). Used in 'websocket' mode. */
   snowflakeUrl: string;
 
-  /** Bridge fingerprint for verification (40-char hex string), or 'not-pinned' to skip verification. */
+  /** Bridge fingerprint for identity verification (40-char hex string). */
   fingerprint: string;
 
   /**

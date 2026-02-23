@@ -11,13 +11,13 @@
 //! // Create a PT manager for WebSocket Snowflake
 //! let pt_mgr = SnowflakePtMgr::new(SnowflakeMode::WebSocket {
 //!     url: "wss://snowflake.torproject.net/".to_string(),
-//!     fingerprint: BridgeFingerprint::NotPinned,
+//!     fingerprint: "2B280B23E1107BB62ABFC40DDCC8824814F80A72".to_string(),
 //! });
 //!
 //! // Or for WebRTC via broker
 //! let pt_mgr = SnowflakePtMgr::new(SnowflakeMode::WebRtc {
 //!     broker_url: "https://snowflake-broker.torproject.net/".to_string(),
-//!     fingerprint: BridgeFingerprint::NotPinned,
+//!     fingerprint: "2B280B23E1107BB62ABFC40DDCC8824814F80A72".to_string(),
 //! });
 //!
 //! // Then set it on the ChanMgr
@@ -28,19 +28,17 @@ use std::sync::Arc;
 
 use tor_chanmgr::factory::{AbstractPtError, AbstractPtMgr, BootstrapReporter, ChannelFactory};
 use tor_error::{ErrorKind, HasKind, HasRetryTime, RetryTime};
-use tor_linkspec::{HasChanMethod, HasRelayIds, IntoOwnedChanTarget, OwnedChanTarget, OwnedChanTargetBuilder, PtTransportName};
+use tor_linkspec::{HasChanMethod, IntoOwnedChanTarget, OwnedChanTarget, OwnedChanTargetBuilder, PtTransportName};
 use tor_llcrypto::pk::rsa::RsaIdentity;
 use tor_proto::channel::Channel;
 use tor_proto::memquota::ChannelAccount;
 use tor_async_compat::async_trait;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::snowflake::{SnowflakeBridge, SnowflakeConfig};
 use crate::snowflake_ws::{SnowflakeWsConfig, SnowflakeWsStream};
 use crate::time::system_time_now;
 use crate::wasm_runtime::WasmRuntime;
-
-pub use crate::BridgeFingerprint;
 
 /// Snowflake transport mode
 #[derive(Debug, Clone)]
@@ -49,15 +47,15 @@ pub enum SnowflakeMode {
     WebSocket {
         /// WebSocket URL (e.g., "wss://snowflake.torproject.net/")
         url: String,
-        /// Bridge fingerprint for verification, or `NotPinned` to skip.
-        fingerprint: BridgeFingerprint,
+        /// Bridge fingerprint (40-char hex) for identity verification.
+        fingerprint: String,
     },
     /// WebRTC connection via broker
     WebRtc {
         /// Broker URL (e.g., "https://snowflake-broker.torproject.net/")
         broker_url: String,
-        /// Bridge fingerprint for verification, or `NotPinned` to skip.
-        fingerprint: BridgeFingerprint,
+        /// Bridge fingerprint (40-char hex) for identity verification.
+        fingerprint: String,
     },
 }
 
@@ -76,14 +74,14 @@ impl SnowflakeChannelFactory {
     async fn build_ws_channel(
         &self,
         url: &str,
-        fingerprint: &BridgeFingerprint,
+        fingerprint: &str,
         target: &OwnedChanTarget,
         memquota: ChannelAccount,
     ) -> tor_chanmgr::Result<Arc<Channel>> {
         info!("Building Snowflake channel via WebSocket: {}", url);
 
         // Configure WebSocket Snowflake
-        let config = SnowflakeWsConfig::new(url, fingerprint.clone());
+        let config = SnowflakeWsConfig::new(url, fingerprint.to_string());
 
         // Connect via WebSocket
         let stream = SnowflakeWsStream::connect(config)
@@ -94,13 +92,10 @@ impl SnowflakeChannelFactory {
                 source: std::io::Error::other(e.to_string()).into(),
             })?;
 
-        // Parse fingerprint to RSA identity if provided
-        let rsa_id = match fingerprint {
-            BridgeFingerprint::Pinned(fp) => hex::decode(fp)
-                .ok()
-                .and_then(|bytes| RsaIdentity::from_bytes(&bytes)),
-            BridgeFingerprint::NotPinned => None,
-        };
+        // Parse fingerprint to RSA identity
+        let rsa_id = hex::decode(fingerprint)
+            .ok()
+            .and_then(|bytes| RsaIdentity::from_bytes(&bytes));
 
         // Build channel from the stream
         self.create_channel_from_stream(stream, rsa_id, target, memquota)
@@ -111,7 +106,7 @@ impl SnowflakeChannelFactory {
     async fn build_webrtc_channel(
         &self,
         broker_url: &str,
-        fingerprint: &BridgeFingerprint,
+        fingerprint: &str,
         target: &OwnedChanTarget,
         memquota: ChannelAccount,
     ) -> tor_chanmgr::Result<Arc<Channel>> {
@@ -121,11 +116,7 @@ impl SnowflakeChannelFactory {
         );
 
         // Configure WebRTC Snowflake
-        let fingerprint_str = match fingerprint {
-            BridgeFingerprint::Pinned(fp) => fp.to_string(),
-            BridgeFingerprint::NotPinned => String::new(),
-        };
-        let config = SnowflakeConfig::new(broker_url.to_string(), fingerprint_str);
+        let config = SnowflakeConfig::new(broker_url.to_string(), fingerprint.to_string());
 
         // Connect via WebRTC
         let bridge = SnowflakeBridge::with_config(config);
@@ -135,13 +126,10 @@ impl SnowflakeChannelFactory {
             source: std::io::Error::other(e.to_string()).into(),
         })?;
 
-        // Parse fingerprint to RSA identity if provided
-        let rsa_id = match fingerprint {
-            BridgeFingerprint::Pinned(fp) => hex::decode(fp)
-                .ok()
-                .and_then(|bytes| RsaIdentity::from_bytes(&bytes)),
-            BridgeFingerprint::NotPinned => None,
-        };
+        // Parse fingerprint to RSA identity
+        let rsa_id = hex::decode(fingerprint)
+            .ok()
+            .and_then(|bytes| RsaIdentity::from_bytes(&bytes));
 
         // Build channel from the stream
         self.create_channel_from_stream(stream, rsa_id, target, memquota)
@@ -235,19 +223,6 @@ impl SnowflakeChannelFactory {
             clock_skew: None,
         })?;
 
-        // Log fingerprint if verification was skipped
-        if rsa_id.is_none() {
-            if let Some(peer_rsa_id) = chan.target().rsa_identity() {
-                let fingerprint_hex = hex::encode(peer_rsa_id.as_bytes()).to_uppercase();
-                warn!(
-                    "Bridge fingerprint verification was skipped. \
-                     The bridge's fingerprint is: {}. \
-                     For security, consider specifying this fingerprint explicitly.",
-                    fingerprint_hex
-                );
-            }
-        }
-
         // Spawn the channel reactor
         wasm_bindgen_futures::spawn_local(async move {
             let _ = reactor.run().await;
@@ -322,22 +297,6 @@ impl SnowflakePtMgr {
     pub fn new(mode: SnowflakeMode) -> Self {
         Self { mode }
     }
-
-    /// Create with WebSocket URL
-    pub fn websocket(url: impl Into<String>) -> Self {
-        Self::new(SnowflakeMode::WebSocket {
-            url: url.into(),
-            fingerprint: BridgeFingerprint::NotPinned,
-        })
-    }
-
-    /// Create with WebRTC broker URL
-    pub fn webrtc(broker_url: impl Into<String>) -> Self {
-        Self::new(SnowflakeMode::WebRtc {
-            broker_url: broker_url.into(),
-            fingerprint: BridgeFingerprint::NotPinned,
-        })
-    }
 }
 
 #[async_trait]
@@ -371,7 +330,13 @@ mod tests {
 
     #[test]
     fn test_pt_mgr_creation() {
-        let _mgr = SnowflakePtMgr::websocket("wss://snowflake.torproject.net/");
-        let _mgr = SnowflakePtMgr::webrtc("https://snowflake-broker.torproject.net/");
+        let _mgr = SnowflakePtMgr::new(SnowflakeMode::WebSocket {
+            url: "wss://snowflake.torproject.net/".to_string(),
+            fingerprint: "2B280B23E1107BB62ABFC40DDCC8824814F80A72".to_string(),
+        });
+        let _mgr = SnowflakePtMgr::new(SnowflakeMode::WebRtc {
+            broker_url: "https://snowflake-broker.torproject.net/".to_string(),
+            fingerprint: "2B280B23E1107BB62ABFC40DDCC8824814F80A72".to_string(),
+        });
     }
 }

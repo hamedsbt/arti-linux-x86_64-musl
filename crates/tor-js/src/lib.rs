@@ -52,7 +52,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 use wasm_bindgen::prelude::*;
-use webtor_rs_lite::arti_transport::{BridgeFingerprint, SnowflakeMode, SnowflakePtMgr};
+use webtor_rs_lite::arti_transport::{SnowflakeMode, SnowflakePtMgr};
 
 // Global log callback (WASM is single-threaded, so thread_local is fine)
 thread_local! {
@@ -183,14 +183,13 @@ impl TorClientOptions {
     ///
     /// # Arguments
     /// * `snowflake_url` - WebSocket URL for the Snowflake bridge (e.g., "wss://snowflake.pse.dev/")
-    /// * `fingerprint` - Bridge fingerprint (40 char hex string), or "not-pinned" to skip verification.
+    /// * `fingerprint` - Bridge fingerprint (40 char hex string).
     #[wasm_bindgen(constructor)]
     pub fn new(snowflake_url: String, fingerprint: String) -> Self {
-        let fp = if fingerprint == "not-pinned" { BridgeFingerprint::NotPinned } else { BridgeFingerprint::Pinned(fingerprint) };
         Self {
             mode: SnowflakeMode::WebSocket {
                 url: snowflake_url,
-                fingerprint: fp,
+                fingerprint,
             },
             storage: None,
         }
@@ -200,14 +199,13 @@ impl TorClientOptions {
     ///
     /// # Arguments
     /// * `broker_url` - Snowflake broker URL (e.g., "https://snowflake-broker.torproject.net/").
-    /// * `fingerprint` - Bridge fingerprint (40 char hex string), or "not-pinned" to skip verification.
+    /// * `fingerprint` - Bridge fingerprint (40 char hex string).
     #[wasm_bindgen(js_name = snowflakeWebRtc)]
     pub fn snowflake_webrtc(broker_url: String, fingerprint: String) -> Self {
-        let fp = if fingerprint == "not-pinned" { BridgeFingerprint::NotPinned } else { BridgeFingerprint::Pinned(fingerprint) };
         Self {
             mode: SnowflakeMode::WebRtc {
                 broker_url,
-                fingerprint: fp,
+                fingerprint,
             },
             storage: None,
         }
@@ -295,7 +293,7 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
 
     // 1. Create Snowflake PT manager from webtor-rs-lite
     // Extract fingerprint before moving mode into SnowflakePtMgr.
-    let bridge_fp = match &options.mode {
+    let bridge_fingerprint = match &options.mode {
         SnowflakeMode::WebSocket { fingerprint, .. } => fingerprint.clone(),
         SnowflakeMode::WebRtc { fingerprint, .. } => fingerprint.clone(),
     };
@@ -312,13 +310,7 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
         .state_dir(CfgPath::new("/wasm/state".to_owned()));
 
     // Configure the Snowflake bridge
-    // The bridge line always needs a fingerprint for arti's parser.
-    // For None (not-pinned), use a dummy — actual verification is controlled by
-    // SnowflakeMode's fingerprint field (None = skip verification).
-    let bridge_line = match bridge_fp {
-        BridgeFingerprint::Pinned(fp) => format!("snowflake 0.0.2.0:1 {}", fp),
-        BridgeFingerprint::NotPinned => "snowflake 0.0.2.0:1 0000000000000000000000000000000000000000".to_string(),
-    };
+    let bridge_line = format!("snowflake 0.0.2.0:1 {}", bridge_fingerprint);
     debug!("Using bridge line: {}", bridge_line);
 
     let bridge: BridgeConfigBuilder = bridge_line
