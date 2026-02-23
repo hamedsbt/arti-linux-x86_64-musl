@@ -53,9 +53,7 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
         info!("Building native Snowflake channel via WebSocket: {}", self.url);
 
         // Configure WebSocket Snowflake
-        let config = SnowflakeWsConfig::new()
-            .with_url(&self.url)
-            .with_fingerprint(self.fingerprint.clone());
+        let config = SnowflakeWsConfig::new(&self.url, self.fingerprint.clone());
 
         // Connect via WebSocket
         let stream = SnowflakeWsStream::connect(config)

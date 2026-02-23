@@ -52,29 +52,14 @@ pub struct SnowflakeConfig {
 }
 
 impl SnowflakeConfig {
-    /// Create a new Snowflake config with default Tor Project broker
-    pub fn new() -> Self {
+    pub fn new(broker_url: String, fingerprint: String) -> Self {
         Self {
-            broker_url: String::new(), // FIXME: Dummy values. Require upfront initialization.
-            fingerprint: String::new(), // FIXME
+            broker_url,
+            fingerprint,
             connection_timeout: Duration::from_secs(60),
             kcp_conv: None,
             smux_stream_id: None,
         }
-    }
-
-    /// Create config with custom broker URL
-    pub fn with_broker(broker_url: String) -> Self {
-        Self {
-            broker_url,
-            ..Self::new()
-        }
-    }
-
-    /// Set bridge fingerprint
-    pub fn with_fingerprint(mut self, fingerprint: String) -> Self {
-        self.fingerprint = fingerprint;
-        self
     }
 
     /// Set connection timeout
@@ -90,12 +75,6 @@ impl SnowflakeConfig {
     }
 }
 
-impl Default for SnowflakeConfig {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Snowflake bridge connection manager
 pub struct SnowflakeBridge {
     #[allow(dead_code)] // Used in wasm32 target
@@ -103,13 +82,6 @@ pub struct SnowflakeBridge {
 }
 
 impl SnowflakeBridge {
-    /// Create with default configuration
-    pub fn new() -> Self {
-        Self {
-            config: SnowflakeConfig::new(),
-        }
-    }
-
     /// Create with custom configuration
     pub fn with_config(config: SnowflakeConfig) -> Self {
         Self { config }
@@ -204,12 +176,6 @@ impl SnowflakeBridge {
         Ok(SnowflakeStream {
             inner: SnowflakeInner::WebRtc(tls_stream),
         })
-    }
-}
-
-impl Default for SnowflakeBridge {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -311,16 +277,6 @@ impl AsyncWrite for SnowflakeStream {
     }
 }
 
-/// Create a new Snowflake stream using WebRTC (convenience function)
-pub async fn create_snowflake_stream(
-    _broker_url: &str, // Kept for API compatibility but ignored
-    _connection_timeout: Duration,
-) -> Result<SnowflakeStream> {
-    // Use default config with WebRTC
-    let bridge = SnowflakeBridge::new();
-    bridge.connect().await
-}
-
 /// Create a TLS connector for Tor relay connections.
 ///
 /// Skips certificate verification (Tor validates via CERTS cells) but
@@ -353,20 +309,21 @@ mod tests {
     use crate::test_util::portable_test;
 
     #[portable_test]
-    fn test_snowflake_config_default() {
-        let config = SnowflakeConfig::new();
+    fn test_snowflake_config_defaults() {
+        let config = SnowflakeConfig::new("https://example.com/broker".to_string(), String::new());
         assert_eq!(config.connection_timeout, Duration::from_secs(60));
     }
 
     #[portable_test]
     fn test_snowflake_config_with_timeout() {
-        let config = SnowflakeConfig::new().with_timeout(Duration::from_secs(120));
+        let config = SnowflakeConfig::new("https://example.com/broker".to_string(), String::new())
+            .with_timeout(Duration::from_secs(120));
         assert_eq!(config.connection_timeout, Duration::from_secs(120));
     }
 
     #[portable_test]
-    fn test_snowflake_config_with_fingerprint() {
-        let config = SnowflakeConfig::new().with_fingerprint("ABCD1234".to_string());
+    fn test_snowflake_config_fingerprint() {
+        let config = SnowflakeConfig::new("https://example.com/broker".to_string(), "ABCD1234".to_string());
         assert_eq!(config.fingerprint, "ABCD1234");
     }
 }

@@ -83,9 +83,7 @@ impl SnowflakeChannelFactory {
         info!("Building Snowflake channel via WebSocket: {}", url);
 
         // Configure WebSocket Snowflake
-        let config = SnowflakeWsConfig::new()
-            .with_url(url)
-            .with_fingerprint(fingerprint.clone());
+        let config = SnowflakeWsConfig::new(url, fingerprint.clone());
 
         // Connect via WebSocket
         let stream = SnowflakeWsStream::connect(config)
@@ -123,10 +121,11 @@ impl SnowflakeChannelFactory {
         );
 
         // Configure WebRTC Snowflake
-        let mut config = SnowflakeConfig::with_broker(broker_url.to_string());
-        if let BridgeFingerprint::Pinned(fp) = fingerprint {
-            config = config.with_fingerprint(fp.to_string());
-        }
+        let fingerprint_str = match fingerprint {
+            BridgeFingerprint::Pinned(fp) => fp.to_string(),
+            BridgeFingerprint::NotPinned => String::new(),
+        };
+        let config = SnowflakeConfig::new(broker_url.to_string(), fingerprint_str);
 
         // Connect via WebRTC
         let bridge = SnowflakeBridge::with_config(config);

@@ -52,23 +52,18 @@ pub struct ClientPollRequest {
 }
 
 impl ClientPollRequest {
-    pub fn new(offer: String) -> Self {
+    pub fn new(offer: String, fingerprint: String) -> Self {
         Self {
             offer,
             // Spoof as "unrestricted" when unknown to get matched with restricted proxies
             // This matches the behavior of the official Go client's NATPolicy
             nat: NatType::Unrestricted.to_string(),
-            fingerprint: String::new(), // FIXME: initialization
+            fingerprint,
         }
     }
 
     pub fn with_nat(mut self, nat: NatType) -> Self {
         self.nat = nat.to_string();
-        self
-    }
-
-    pub fn with_fingerprint(mut self, fingerprint: String) -> Self {
-        self.fingerprint = fingerprint;
         self
     }
 
@@ -115,17 +110,12 @@ pub struct BrokerClient {
 }
 
 impl BrokerClient {
-    pub fn new(broker_url: &str) -> Self {
+    pub fn new(broker_url: &str, fingerprint: String) -> Self {
         Self {
             broker_url: broker_url.to_string(),
-            fingerprint: String::new(), // FIXME: initialization
+            fingerprint,
             nat_type: NatType::Unknown,
         }
-    }
-
-    pub fn with_fingerprint(mut self, fingerprint: String) -> Self {
-        self.fingerprint = fingerprint;
-        self
     }
 
     pub fn with_nat_type(mut self, nat_type: NatType) -> Self {
@@ -137,8 +127,7 @@ impl BrokerClient {
     /// Returns the SDP answer from a volunteer proxy
     /// Retries using RetryPolicy::network() if no proxy is available
     pub async fn negotiate(&self, sdp_offer: &str) -> Result<String> {
-        let mut request = ClientPollRequest::new(sdp_offer.to_string())
-            .with_fingerprint(self.fingerprint.clone());
+        let mut request = ClientPollRequest::new(sdp_offer.to_string(), self.fingerprint.clone());
 
         if self.nat_type != NatType::Unknown {
             request = request.with_nat(self.nat_type);
@@ -357,7 +346,7 @@ mod tests {
 
     #[portable_test]
     fn test_request_encode() {
-        let request = ClientPollRequest::new("test-offer".to_string()).with_nat(NatType::Unknown);
+        let request = ClientPollRequest::new("test-offer".to_string(), String::new()).with_nat(NatType::Unknown);
 
         let encoded = request.encode().unwrap();
         let text = String::from_utf8(encoded).unwrap();

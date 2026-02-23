@@ -54,30 +54,14 @@ pub struct SnowflakeWsConfig {
     pub smux_stream_id: u32,
 }
 
-impl Default for SnowflakeWsConfig {
-    fn default() -> Self {
+impl SnowflakeWsConfig {
+    pub fn new(url: impl Into<String>, fingerprint: BridgeFingerprint) -> Self {
         Self {
-            ws_url: String::new(), // FIXME
-            fingerprint: BridgeFingerprint::NotPinned, // FIXME
+            ws_url: url.into(),
+            fingerprint,
             kcp_conv: 0,
             smux_stream_id: 3,
         }
-    }
-}
-
-impl SnowflakeWsConfig {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_url(mut self, url: &str) -> Self {
-        self.ws_url = url.to_string();
-        self
-    }
-
-    pub fn with_fingerprint(mut self, fingerprint: BridgeFingerprint) -> Self {
-        self.fingerprint = fingerprint;
-        self
     }
 }
 
@@ -282,8 +266,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_config_default() {
-        let config = SnowflakeWsConfig::default();
+    fn test_config_defaults() {
+        let config = SnowflakeWsConfig::new("wss://test.example.com", BridgeFingerprint::NotPinned);
         assert_eq!(config.kcp_conv, 0);
         assert_eq!(config.smux_stream_id, 3);
     }

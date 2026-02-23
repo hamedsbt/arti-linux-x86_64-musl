@@ -128,7 +128,7 @@ mod wasm {
             info!("SDP offer created ({} bytes)", offer_sdp.len());
 
             // 5. Exchange offer/answer via broker
-            let broker = BrokerClient::new(broker_url).with_fingerprint(fingerprint.to_string());
+            let broker = BrokerClient::new(broker_url, fingerprint.to_string());
             let answer_json = broker.negotiate(&offer_sdp).await?;
             info!("Got SDP answer from broker");
 
