@@ -40,15 +40,7 @@ use crate::snowflake_ws::{SnowflakeWsConfig, SnowflakeWsStream};
 use crate::time::system_time_now;
 use crate::wasm_runtime::WasmRuntime;
 
-/// Bridge fingerprint for identity verification.
-#[derive(Debug, Clone)]
-pub enum BridgeFingerprint {
-    /// A specific 40-char hex fingerprint to verify the bridge against.
-    Pinned(String),
-    /// Skip fingerprint verification (less secure).
-    NotPinned,
-}
-
+pub use crate::BridgeFingerprint;
 
 /// Snowflake transport mode
 #[derive(Debug, Clone)]
@@ -67,16 +59,6 @@ pub enum SnowflakeMode {
         /// Bridge fingerprint for verification, or `NotPinned` to skip.
         fingerprint: BridgeFingerprint,
     },
-}
-
-impl Default for SnowflakeMode {
-    fn default() -> Self {
-        // Default to WebSocket as it's simpler
-        SnowflakeMode::WebSocket {
-            url: crate::snowflake_ws::SNOWFLAKE_WS_URL.to_string(),
-            fingerprint: BridgeFingerprint::Pinned(crate::snowflake_ws::SNOWFLAKE_FINGERPRINT.to_string()),
-        }
-    }
 }
 
 /// Snowflake channel factory that builds Tor channels over Snowflake transport
@@ -101,10 +83,9 @@ impl SnowflakeChannelFactory {
         info!("Building Snowflake channel via WebSocket: {}", url);
 
         // Configure WebSocket Snowflake
-        let mut config = SnowflakeWsConfig::new().with_url(url);
-        if let BridgeFingerprint::Pinned(fp) = fingerprint {
-            config = config.with_fingerprint(fp);
-        }
+        let config = SnowflakeWsConfig::new()
+            .with_url(url)
+            .with_fingerprint(fingerprint.clone());
 
         // Connect via WebSocket
         let stream = SnowflakeWsStream::connect(config)
@@ -343,12 +324,7 @@ impl SnowflakePtMgr {
         Self { mode }
     }
 
-    /// Create with default WebSocket mode
-    pub fn websocket_default() -> Self {
-        Self::new(SnowflakeMode::default())
-    }
-
-    /// Create with custom WebSocket URL
+    /// Create with WebSocket URL
     pub fn websocket(url: impl Into<String>) -> Self {
         Self::new(SnowflakeMode::WebSocket {
             url: url.into(),
@@ -356,15 +332,7 @@ impl SnowflakePtMgr {
         })
     }
 
-    /// Create with WebRTC via default Tor Project broker
-    pub fn webrtc_default() -> Self {
-        Self::new(SnowflakeMode::WebRtc {
-            broker_url: crate::snowflake_broker::BROKER_URL.to_string(),
-            fingerprint: BridgeFingerprint::Pinned(crate::snowflake_broker::DEFAULT_BRIDGE_FINGERPRINT.to_string()),
-        })
-    }
-
-    /// Create with custom WebRTC broker URL
+    /// Create with WebRTC broker URL
     pub fn webrtc(broker_url: impl Into<String>) -> Self {
         Self::new(SnowflakeMode::WebRtc {
             broker_url: broker_url.into(),
@@ -403,20 +371,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_snowflake_mode_default() {
-        let mode = SnowflakeMode::default();
-        match mode {
-            SnowflakeMode::WebSocket { url, fingerprint } => {
-                assert!(url.contains("snowflake"));
-                assert!(matches!(fingerprint, BridgeFingerprint::Pinned(_)));
-            }
-            _ => panic!("Expected WebSocket mode"),
-        }
-    }
-
-    #[test]
     fn test_pt_mgr_creation() {
-        let _mgr = SnowflakePtMgr::websocket_default();
-        let _mgr = SnowflakePtMgr::webrtc_default();
+        let _mgr = SnowflakePtMgr::websocket("wss://snowflake.torproject.net/");
+        let _mgr = SnowflakePtMgr::webrtc("https://snowflake-broker.torproject.net/");
     }
 }

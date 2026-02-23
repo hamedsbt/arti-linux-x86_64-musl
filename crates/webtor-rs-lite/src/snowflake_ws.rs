@@ -20,6 +20,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use crate::error::{Result, TorError};
+use crate::BridgeFingerprint;
 use crate::websocket::WebSocketStream;
 use futures::{AsyncRead, AsyncWrite};
 use std::borrow::Cow;
@@ -34,20 +35,13 @@ use crate::turbo::TurboStream;
 use futures_rustls::rustls;
 use std::sync::Arc;
 
-/// WebSocket Snowflake endpoints
-pub const SNOWFLAKE_WS_URL: &str = "wss://snowflake.torproject.net/";
-pub const SNOWFLAKE_WS_URL_ALT: &str = "wss://snowflake.bamsoftware.com/";
-
-/// Snowflake bridge fingerprint (Tor Project's primary Snowflake bridge)
-pub const SNOWFLAKE_FINGERPRINT: &str = "2B280B23E1107BB62ABFC40DDCC8824814F80A72";
-
 /// WebSocket Snowflake configuration
 #[derive(Debug, Clone)]
 pub struct SnowflakeWsConfig {
     /// WebSocket URL for Snowflake endpoint
     pub ws_url: String,
     /// Bridge fingerprint
-    pub fingerprint: String,
+    pub fingerprint: BridgeFingerprint,
     /// KCP conversation ID (0 for default)
     pub kcp_conv: u32,
     /// SMUX stream ID (default: 3)
@@ -57,8 +51,8 @@ pub struct SnowflakeWsConfig {
 impl Default for SnowflakeWsConfig {
     fn default() -> Self {
         Self {
-            ws_url: SNOWFLAKE_WS_URL.to_string(),
-            fingerprint: SNOWFLAKE_FINGERPRINT.to_string(),
+            ws_url: String::new(), // FIXME
+            fingerprint: BridgeFingerprint::NotPinned, // FIXME
             kcp_conv: 0,
             smux_stream_id: 3,
         }
@@ -75,8 +69,8 @@ impl SnowflakeWsConfig {
         self
     }
 
-    pub fn with_fingerprint(mut self, fingerprint: &str) -> Self {
-        self.fingerprint = fingerprint.to_string();
+    pub fn with_fingerprint(mut self, fingerprint: BridgeFingerprint) -> Self {
+        self.fingerprint = fingerprint;
         self
     }
 }
@@ -237,11 +231,6 @@ fn make_tor_tls_connector() -> futures_rustls::TlsConnector {
     futures_rustls::TlsConnector::from(Arc::new(config))
 }
 
-/// Convenience function to create a WebSocket Snowflake stream
-pub async fn create_snowflake_ws_stream() -> Result<SnowflakeWsStream> {
-    SnowflakeWsStream::connect(SnowflakeWsConfig::default()).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,8 +239,6 @@ mod tests {
     #[portable_test]
     fn test_config_default() {
         let config = SnowflakeWsConfig::default();
-        assert_eq!(config.ws_url, SNOWFLAKE_WS_URL);
-        assert_eq!(config.fingerprint, SNOWFLAKE_FINGERPRINT);
         assert_eq!(config.kcp_conv, 0);
         assert_eq!(config.smux_stream_id, 3);
     }

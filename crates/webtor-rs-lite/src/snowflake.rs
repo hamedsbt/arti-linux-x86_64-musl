@@ -21,7 +21,6 @@
 use crate::error::Result;
 use crate::kcp_stream::{KcpConfig, KcpStream};
 use crate::smux::SmuxStream;
-use crate::snowflake_broker::{BROKER_URL, DEFAULT_BRIDGE_FINGERPRINT};
 use crate::turbo::TurboStream;
 use futures::{AsyncRead, AsyncWrite};
 use futures::io::AsyncWriteExt;
@@ -56,8 +55,8 @@ impl SnowflakeConfig {
     /// Create a new Snowflake config with default Tor Project broker
     pub fn new() -> Self {
         Self {
-            broker_url: BROKER_URL.to_string(),
-            fingerprint: DEFAULT_BRIDGE_FINGERPRINT.to_string(),
+            broker_url: String::new(), // FIXME: Dummy values. Require upfront initialization.
+            fingerprint: String::new(), // FIXME
             connection_timeout: Duration::from_secs(60),
             kcp_conv: None,
             smux_stream_id: None,
@@ -356,8 +355,6 @@ mod tests {
     #[portable_test]
     fn test_snowflake_config_default() {
         let config = SnowflakeConfig::new();
-        assert_eq!(config.broker_url, BROKER_URL);
-        assert_eq!(config.fingerprint, DEFAULT_BRIDGE_FINGERPRINT);
         assert_eq!(config.connection_timeout, Duration::from_secs(60));
     }
 

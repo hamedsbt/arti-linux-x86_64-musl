@@ -18,37 +18,29 @@ use tor_rtcompat::{Runtime, SpawnExt};
 use tor_time::SystemTime;
 use tracing::{debug, info, warn};
 
-use crate::snowflake_ws_native::{SnowflakeWsConfig, SnowflakeWsStream, SNOWFLAKE_WS_URL, SNOWFLAKE_FINGERPRINT};
+use crate::snowflake_ws_native::{SnowflakeWsConfig, SnowflakeWsStream};
+use crate::BridgeFingerprint;
 
 /// Snowflake channel factory that builds Tor channels over Snowflake transport (native)
 pub struct SnowflakeChannelFactory<R: Runtime> {
     url: String,
-    fingerprint: Option<String>,
+    fingerprint: BridgeFingerprint,
     runtime: R,
 }
 
 impl<R: Runtime> SnowflakeChannelFactory<R> {
-    /// Create a new Snowflake channel factory with default PSE bridge
-    pub fn new(runtime: R) -> Self {
-        Self {
-            url: SNOWFLAKE_WS_URL.to_string(),
-            fingerprint: Some(SNOWFLAKE_FINGERPRINT.to_string()),
-            runtime,
-        }
-    }
-
-    /// Create with custom URL
+    /// Create with a WebSocket URL
     pub fn with_url(runtime: R, url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
-            fingerprint: None,
+            fingerprint: BridgeFingerprint::NotPinned, // FIXME: fp should be explicitly initialized instead
             runtime,
         }
     }
 
     /// Set the fingerprint
-    pub fn with_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
-        self.fingerprint = Some(fingerprint.into());
+    pub fn with_fingerprint(mut self, fingerprint: BridgeFingerprint) -> Self { // TODO: after fixing initialization, this might not be needed
+        self.fingerprint = fingerprint;
         self
     }
 
@@ -61,10 +53,9 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
         info!("Building native Snowflake channel via WebSocket: {}", self.url);
 
         // Configure WebSocket Snowflake
-        let mut config = SnowflakeWsConfig::new().with_url(&self.url);
-        if let Some(fp) = &self.fingerprint {
-            config = config.with_fingerprint(fp);
-        }
+        let config = SnowflakeWsConfig::new()
+            .with_url(&self.url)
+            .with_fingerprint(self.fingerprint.clone());
 
         // Connect via WebSocket
         let stream = SnowflakeWsStream::connect(config)
@@ -76,11 +67,12 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
             })?;
 
         // Parse fingerprint to RSA identity if provided
-        let rsa_id = self.fingerprint.as_ref().and_then(|fp| {
-            hex::decode(fp)
+        let rsa_id = match &self.fingerprint {
+            BridgeFingerprint::Pinned(fp) => hex::decode(fp)
                 .ok()
-                .and_then(|bytes| RsaIdentity::from_bytes(&bytes))
-        });
+                .and_then(|bytes| RsaIdentity::from_bytes(&bytes)),
+            BridgeFingerprint::NotPinned => None,
+        };
 
         // Get peer certificate from TLS stream
         let peer_cert = stream.peer_certificate().map_err(|e| tor_chanmgr::Error::Io {
@@ -145,7 +137,7 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
         })?;
 
         // Log fingerprint if verification was skipped
-        if self.fingerprint.is_none() {
+        if matches!(self.fingerprint, BridgeFingerprint::NotPinned) {
             if let Some(peer_rsa_id) = chan.target().rsa_identity() {
                 let fingerprint_hex = hex::encode(peer_rsa_id.as_bytes()).to_uppercase();
                 warn!(
@@ -215,32 +207,23 @@ impl AbstractPtError for SnowflakePtError {}
 /// for arti-client without requiring an external PT binary.
 pub struct SnowflakePtMgr<R: Runtime> {
     url: String,
-    fingerprint: Option<String>,
+    fingerprint: BridgeFingerprint,
     runtime: R,
 }
 
 impl<R: Runtime> SnowflakePtMgr<R> {
-    /// Create a new Snowflake PT manager with default PSE bridge
-    pub fn new(runtime: R) -> Self {
-        Self {
-            url: SNOWFLAKE_WS_URL.to_string(),
-            fingerprint: Some(SNOWFLAKE_FINGERPRINT.to_string()),
-            runtime,
-        }
-    }
-
-    /// Create with custom WebSocket URL
+    /// Create with a WebSocket URL
     pub fn with_url(runtime: R, url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
-            fingerprint: None,
+            fingerprint: BridgeFingerprint::NotPinned, // FIXME: initialization
             runtime,
         }
     }
 
     /// Set the fingerprint
-    pub fn with_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
-        self.fingerprint = Some(fingerprint.into());
+    pub fn with_fingerprint(mut self, fingerprint: BridgeFingerprint) -> Self {
+        self.fingerprint = fingerprint;
         self
     }
 }
@@ -260,8 +243,7 @@ impl<R: Runtime> AbstractPtMgr for SnowflakePtMgr<R> {
                 "Creating native Snowflake channel factory for transport: {}",
                 transport_name
             );
-            let mut factory = SnowflakeChannelFactory::new(self.runtime.clone());
-            factory.url = self.url.clone();
+            let mut factory = SnowflakeChannelFactory::with_url(self.runtime.clone(), &self.url);
             factory.fingerprint = self.fingerprint.clone();
             Ok(Some(Arc::new(factory)))
         } else {

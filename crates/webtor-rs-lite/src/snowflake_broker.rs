@@ -15,20 +15,8 @@ use crate::retry::{retry_with_backoff, RetryPolicy};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-/// Snowflake broker URL (direct - has CORS support)
-pub const BROKER_URL: &str = "https://snowflake-broker.torproject.net/";
-
-/// Front domains for domain fronting (CDN77) - kept for reference but not used with CORS proxy
-pub const BROKER_FRONT_DOMAINS: &[&str] = &["www.cdn77.com", "www.phpmyadmin.net"];
-
-/// Direct broker URL (doesn't work from browsers due to CORS)
-pub const BROKER_URL_DIRECT: &str = "https://snowflake-broker.torproject.net/";
-
 /// Client protocol version
 const CLIENT_VERSION: &str = "1.0";
-
-/// Default bridge fingerprint (Tor Project's primary Snowflake bridge)
-pub const DEFAULT_BRIDGE_FINGERPRINT: &str = "2B280B23E1107BB62ABFC40DDCC8824814F80A72";
 
 /// NAT type for the client
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -70,7 +58,7 @@ impl ClientPollRequest {
             // Spoof as "unrestricted" when unknown to get matched with restricted proxies
             // This matches the behavior of the official Go client's NATPolicy
             nat: NatType::Unrestricted.to_string(),
-            fingerprint: DEFAULT_BRIDGE_FINGERPRINT.to_string(),
+            fingerprint: String::new(), // FIXME: initialization
         }
     }
 
@@ -130,7 +118,7 @@ impl BrokerClient {
     pub fn new(broker_url: &str) -> Self {
         Self {
             broker_url: broker_url.to_string(),
-            fingerprint: DEFAULT_BRIDGE_FINGERPRINT.to_string(),
+            fingerprint: String::new(), // FIXME: initialization
             nat_type: NatType::Unknown,
         }
     }
