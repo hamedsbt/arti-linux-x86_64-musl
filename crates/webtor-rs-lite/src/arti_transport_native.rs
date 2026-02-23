@@ -29,19 +29,12 @@ pub struct SnowflakeChannelFactory<R: Runtime> {
 }
 
 impl<R: Runtime> SnowflakeChannelFactory<R> {
-    /// Create with a WebSocket URL
-    pub fn with_url(runtime: R, url: impl Into<String>) -> Self {
+    pub fn new(runtime: R, url: impl Into<String>, fingerprint: BridgeFingerprint) -> Self {
         Self {
             url: url.into(),
-            fingerprint: BridgeFingerprint::NotPinned, // FIXME: fp should be explicitly initialized instead
+            fingerprint,
             runtime,
         }
-    }
-
-    /// Set the fingerprint
-    pub fn with_fingerprint(mut self, fingerprint: BridgeFingerprint) -> Self { // TODO: after fixing initialization, this might not be needed
-        self.fingerprint = fingerprint;
-        self
     }
 
     /// Build a channel using WebSocket Snowflake
@@ -210,19 +203,12 @@ pub struct SnowflakePtMgr<R: Runtime> {
 }
 
 impl<R: Runtime> SnowflakePtMgr<R> {
-    /// Create with a WebSocket URL
-    pub fn with_url(runtime: R, url: impl Into<String>) -> Self {
+    pub fn new(runtime: R, url: impl Into<String>, fingerprint: BridgeFingerprint) -> Self {
         Self {
             url: url.into(),
-            fingerprint: BridgeFingerprint::NotPinned, // FIXME: initialization
+            fingerprint,
             runtime,
         }
-    }
-
-    /// Set the fingerprint
-    pub fn with_fingerprint(mut self, fingerprint: BridgeFingerprint) -> Self {
-        self.fingerprint = fingerprint;
-        self
     }
 }
 
@@ -241,8 +227,7 @@ impl<R: Runtime> AbstractPtMgr for SnowflakePtMgr<R> {
                 "Creating native Snowflake channel factory for transport: {}",
                 transport_name
             );
-            let mut factory = SnowflakeChannelFactory::with_url(self.runtime.clone(), &self.url);
-            factory.fingerprint = self.fingerprint.clone();
+            let factory = SnowflakeChannelFactory::new(self.runtime.clone(), &self.url, self.fingerprint.clone());
             Ok(Some(Arc::new(factory)))
         } else {
             // Unknown transport
