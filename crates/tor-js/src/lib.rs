@@ -413,7 +413,6 @@ struct FetchInit {
     headers: Option<HashMap<String, String>>,
     #[serde(skip)]
     body: Option<Vec<u8>>,
-    // TODO: support AbortSignal-style cancellation via a `signal` option
 }
 
 /// Perform a fetch request, returning a real browser `Response` object.
@@ -439,10 +438,11 @@ async fn fetch_impl(
             .map_err(|e| JsTorError::new("INVALID_OPTIONS", "validation", e.to_string(), false).into_js_value())?
     };
 
-    // Extract body separately (handles string, Uint8Array, ArrayBuffer)
+    // Extract body and signal separately (JS objects; not handled by serde)
     if !init.is_undefined() && !init.is_null() {
         fetch_init.body = extract_body_from_js(&init)?;
     }
+    let signal = extract_signal_from_js(&init)?;
 
     // Parse method
     let method = match fetch_init.method.as_deref() {
@@ -478,12 +478,18 @@ async fn fetch_impl(
 
     info!("Fetching {} via Tor ({}:{})", url, host, port);
 
+    // Check abort before connecting (circuit building can take several seconds)
+    check_aborted(signal.as_ref())?;
+
     // Connect through Tor
     debug!("Connecting to {}:{}...", host, port);
     let stream = client
         .connect((host, port))
         .await
         .map_err(|e| JsTorError::connection(format!("Failed to connect: {}", e)).into_js_value())?;
+
+    // Check abort before sending the HTTP request
+    check_aborted(signal.as_ref())?;
 
     debug!("Connected, making HTTP request...");
 
@@ -501,14 +507,20 @@ async fn fetch_impl(
     }
 
     // Convert BodyReader → futures::Stream → JS ReadableStream
-    let body_stream = futures::stream::unfold(result.body_reader, |mut reader| async move {
+    // The signal is threaded through the unfold state so abort is checked between chunks.
+    let body_stream = futures::stream::unfold((result.body_reader, signal), |(mut reader, sig)| async move {
+        if let Some(s) = &sig {
+            if s.aborted() {
+                return Some((Err(JsTorError::aborted().into_js_value()), (reader, sig)));
+            }
+        }
         match reader.read_chunk().await {
             Ok(Some(chunk)) => {
                 let arr = js_sys::Uint8Array::from(&chunk[..]);
-                Some((Ok(arr.into()), reader))
+                Some((Ok(arr.into()), (reader, sig)))
             }
             Ok(None) => None,
-            Err(e) => Some((Err(e.into_js_value()), reader)),
+            Err(e) => Some((Err(e.into_js_value()), (reader, sig))),
         }
     });
     let readable = wasm_streams::ReadableStream::from_stream(body_stream);
@@ -561,6 +573,32 @@ fn extract_body_from_js(init: &JsValue) -> Result<Option<Vec<u8>>, JsValue> {
         false,
     )
     .into_js_value())
+}
+
+/// Extract an AbortSignal from a JavaScript FetchInit object.
+fn extract_signal_from_js(init: &JsValue) -> Result<Option<web_sys::AbortSignal>, JsValue> {
+    if init.is_undefined() || init.is_null() {
+        return Ok(None);
+    }
+    let signal = js_sys::Reflect::get(init, &JsValue::from_str("signal"))
+        .map_err(|e| JsTorError::new("INVALID_OPTIONS", "validation", format!("Failed to get signal: {:?}", e), false).into_js_value())?;
+    if signal.is_undefined() || signal.is_null() {
+        return Ok(None);
+    }
+    signal
+        .dyn_into::<web_sys::AbortSignal>()
+        .map(Some)
+        .map_err(|_| JsTorError::new("INVALID_OPTIONS", "validation", "signal must be an AbortSignal", false).into_js_value())
+}
+
+/// Return an abort error if the signal has already been triggered.
+fn check_aborted(signal: Option<&web_sys::AbortSignal>) -> Result<(), JsValue> {
+    if let Some(s) = signal {
+        if s.aborted() {
+            return Err(JsTorError::aborted().into_js_value());
+        }
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -653,7 +691,7 @@ export interface FetchInit {
     method?: string;
     headers?: Record<string, string>;
     body?: string | Uint8Array | ArrayBuffer;
-    // TODO: signal?: AbortSignal;
+    signal?: AbortSignal;
 }
 
 export interface TorClient {

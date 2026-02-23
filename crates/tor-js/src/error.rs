@@ -67,6 +67,11 @@ impl JsTorError {
         Self::new("INTERNAL", "internal", message, false)
     }
 
+    /// Create an abort error (signal was set before or during the operation)
+    pub fn aborted() -> Self {
+        Self::new("ABORT", "abort", "The operation was aborted", false)
+    }
+
     /// Convert to JsValue for returning to JavaScript
     pub fn into_js_value(self) -> JsValue {
         serde_wasm_bindgen::to_value(&self).unwrap_or_else(|_| {
