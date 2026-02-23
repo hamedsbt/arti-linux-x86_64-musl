@@ -37,6 +37,7 @@
 - [x] Check npm pack content
 - [ ] Add singleton entry points
 - [ ] README for npm package
+- [ ] Check incremental build logic in tor-js (rerun-if-changed prevents ordinary cache invalidation? intent was to build only more often, never skip)
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm
