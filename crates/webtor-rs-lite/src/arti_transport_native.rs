@@ -56,10 +56,18 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
                 source: std::io::Error::other(e.to_string()).into(),
             })?;
 
-        // Parse fingerprint to RSA identity
+        // Parse fingerprint to RSA identity — fail immediately if format is invalid
         let rsa_id = hex::decode(&self.fingerprint)
             .ok()
-            .and_then(|bytes| RsaIdentity::from_bytes(&bytes));
+            .and_then(|bytes| RsaIdentity::from_bytes(&bytes))
+            .ok_or_else(|| tor_chanmgr::Error::Io {
+                action: "parse bridge fingerprint",
+                peer: None,
+                source: std::io::Error::other(format!(
+                    "Invalid bridge fingerprint '{}': must be a 40-char hex string",
+                    self.fingerprint
+                )).into(),
+            })?;
 
         // Get peer certificate from TLS stream
         let peer_cert = stream.peer_certificate().map_err(|e| tor_chanmgr::Error::Io {
@@ -86,9 +94,7 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
 
         // Build peer target for error reporting and verification
         let mut peer_builder = OwnedChanTargetBuilder::default();
-        if let Some(id) = rsa_id {
-            peer_builder.rsa_identity(id);
-        }
+        peer_builder.rsa_identity(rsa_id);
 
         let peer = peer_builder.build().map_err(|e| {
             tor_chanmgr::Error::Internal(tor_error::internal!(
@@ -130,6 +136,30 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
             spawning: "channel reactor",
             cause: Arc::new(e),
         })?;
+
+        // Explicitly verify the bridge's RSA identity matches our expected fingerprint.
+        // The Tor handshake verify() may not enforce RSA identity strictly (ed25519 is
+        // primary in modern Tor), so we do our own strict check here.
+        let actual_rsa_id = chan.target().rsa_identity()
+            .ok_or_else(|| tor_chanmgr::Error::Io {
+                action: "verify bridge fingerprint",
+                peer: None,
+                source: std::io::Error::other("Bridge did not present an RSA identity").into(),
+            })?;
+
+        let actual_fp = hex::encode(actual_rsa_id.as_bytes()).to_uppercase();
+        let expected_fp = self.fingerprint.to_uppercase();
+
+        if actual_fp != expected_fp {
+            return Err(tor_chanmgr::Error::Io {
+                action: "verify bridge fingerprint",
+                peer: None,
+                source: std::io::Error::other(format!(
+                    "Bridge fingerprint mismatch: expected {}, got {}",
+                    expected_fp, actual_fp
+                )).into(),
+            });
+        }
 
         Ok(chan)
     }

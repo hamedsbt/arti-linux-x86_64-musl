@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use tor_chanmgr::factory::{AbstractPtError, AbstractPtMgr, BootstrapReporter, ChannelFactory};
 use tor_error::{ErrorKind, HasKind, HasRetryTime, RetryTime};
-use tor_linkspec::{HasChanMethod, IntoOwnedChanTarget, OwnedChanTarget, OwnedChanTargetBuilder, PtTransportName};
+use tor_linkspec::{HasChanMethod, HasRelayIds, IntoOwnedChanTarget, OwnedChanTarget, OwnedChanTargetBuilder, PtTransportName};
 use tor_llcrypto::pk::rsa::RsaIdentity;
 use tor_proto::channel::Channel;
 use tor_proto::memquota::ChannelAccount;
@@ -57,6 +57,36 @@ pub enum SnowflakeMode {
         /// Bridge fingerprint (40-char hex) for identity verification.
         fingerprint: String,
     },
+}
+
+/// Verify that a newly-built channel's RSA identity matches the expected fingerprint.
+///
+/// The Tor handshake `verify()` step may not enforce RSA identity strictly (ed25519
+/// is the primary identity in modern Tor). This explicit check ensures the bridge
+/// we connected to is actually the one we intended.
+fn verify_bridge_fingerprint(chan: &Channel, expected_fingerprint: &str) -> tor_chanmgr::Result<()> {
+    let actual_rsa_id = chan.target().rsa_identity()
+        .ok_or_else(|| tor_chanmgr::Error::Io {
+            action: "verify bridge fingerprint",
+            peer: None,
+            source: std::io::Error::other("Bridge did not present an RSA identity").into(),
+        })?;
+
+    let actual_fp = hex::encode(actual_rsa_id.as_bytes()).to_uppercase();
+    let expected_fp = expected_fingerprint.to_uppercase();
+
+    if actual_fp != expected_fp {
+        return Err(tor_chanmgr::Error::Io {
+            action: "verify bridge fingerprint",
+            peer: None,
+            source: std::io::Error::other(format!(
+                "Bridge fingerprint mismatch: expected {}, got {}",
+                expected_fp, actual_fp
+            )).into(),
+        });
+    }
+
+    Ok(())
 }
 
 /// Snowflake channel factory that builds Tor channels over Snowflake transport
@@ -92,14 +122,29 @@ impl SnowflakeChannelFactory {
                 source: std::io::Error::other(e.to_string()).into(),
             })?;
 
-        // Parse fingerprint to RSA identity
+        // Parse fingerprint to RSA identity — fail immediately if format is invalid
         let rsa_id = hex::decode(fingerprint)
             .ok()
-            .and_then(|bytes| RsaIdentity::from_bytes(&bytes));
+            .and_then(|bytes| RsaIdentity::from_bytes(&bytes))
+            .ok_or_else(|| tor_chanmgr::Error::Io {
+                action: "parse bridge fingerprint",
+                peer: None,
+                source: std::io::Error::other(format!(
+                    "Invalid bridge fingerprint '{}': must be a 40-char hex string",
+                    fingerprint
+                )).into(),
+            })?;
 
         // Build channel from the stream
-        self.create_channel_from_stream(stream, rsa_id, target, memquota)
-            .await
+        let chan = self.create_channel_from_stream(stream, Some(rsa_id), target, memquota)
+            .await?;
+
+        // Explicitly verify the bridge's RSA identity matches our expected fingerprint.
+        // The Tor handshake's verify() may not enforce RSA identity (ed25519 is primary),
+        // so we do our own strict check here.
+        verify_bridge_fingerprint(&chan, fingerprint)?;
+
+        Ok(chan)
     }
 
     /// Build a channel using WebRTC Snowflake
@@ -126,14 +171,27 @@ impl SnowflakeChannelFactory {
             source: std::io::Error::other(e.to_string()).into(),
         })?;
 
-        // Parse fingerprint to RSA identity
+        // Parse fingerprint to RSA identity — fail immediately if format is invalid
         let rsa_id = hex::decode(fingerprint)
             .ok()
-            .and_then(|bytes| RsaIdentity::from_bytes(&bytes));
+            .and_then(|bytes| RsaIdentity::from_bytes(&bytes))
+            .ok_or_else(|| tor_chanmgr::Error::Io {
+                action: "parse bridge fingerprint",
+                peer: None,
+                source: std::io::Error::other(format!(
+                    "Invalid bridge fingerprint '{}': must be a 40-char hex string",
+                    fingerprint
+                )).into(),
+            })?;
 
         // Build channel from the stream
-        self.create_channel_from_stream(stream, rsa_id, target, memquota)
-            .await
+        let chan = self.create_channel_from_stream(stream, Some(rsa_id), target, memquota)
+            .await?;
+
+        // Explicitly verify the bridge's RSA identity matches our expected fingerprint.
+        verify_bridge_fingerprint(&chan, fingerprint)?;
+
+        Ok(chan)
     }
 
     /// Create a Tor channel from a connected stream
