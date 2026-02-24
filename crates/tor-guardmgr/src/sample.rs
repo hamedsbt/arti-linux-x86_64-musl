@@ -925,6 +925,21 @@ impl GuardSet {
         match options.choose(&mut rand::rng()) {
             Some((src, g)) => Ok((*src, g.guard_id().clone())),
             None => {
+                // Log per-guard rejection details to help diagnose guard selection failures.
+                for (src, g) in self.preference_order() {
+                    let usable = g.usable();
+                    let reachable = g.reachable();
+                    let ready = g.ready_for_usage(usage, now);
+                    let pending = g.exploratory_circ_pending();
+                    let conforms = g.conforms_to_usage(usage);
+                    let permitted = self.active_filter.permits(g);
+                    debug!(
+                        guard=%g, ?src, ?usage,
+                        usable, ?reachable, ready, pending, conforms, permitted,
+                        dir_info_missing=g.dir_info_missing(),
+                        "Guard rejected during selection"
+                    );
+                }
                 let retry_at = if running.n_accepted == 0 {
                     self.next_retry(usage)
                 } else {

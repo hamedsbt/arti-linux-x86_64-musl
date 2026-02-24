@@ -368,6 +368,11 @@ impl Guard {
         self.unlisted_since.is_none() && self.disabled.is_none()
     }
 
+    /// Return true if this guard is missing directory information (e.g. microdescriptor).
+    pub(crate) fn dir_info_missing(&self) -> bool {
+        self.dir_info_missing
+    }
+
     /// Return true if this guard is ready (with respect to any timeouts) for
     /// the given `usage` at `now`.
     pub(crate) fn ready_for_usage(&self, usage: &GuardUsage, now: Instant) -> bool {
