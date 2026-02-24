@@ -6,10 +6,10 @@
 // then body chunks are processed incrementally — nothing is buffered.
 //
 // Build:   scripts/tor-js/build.sh
-// Usage:   examples/tor-fetch-streaming.js [url] [pattern]
-// Example: examples/tor-fetch-streaming.js https://norvig.com/big.txt the
+// Usage:   examples/tor-js/tor-fetch-streaming.js [url] [pattern]
+// Example: examples/tor-js/tor-fetch-streaming.js https://norvig.com/big.txt the
 
-import { TorClient, Log } from '../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/index.js';
+import { TorClient, Log } from '../../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/index.js';
 
 async function main() {
   const url = process.argv[2] ?? 'https://www.gutenberg.org/cache/epub/100/pg100.txt';

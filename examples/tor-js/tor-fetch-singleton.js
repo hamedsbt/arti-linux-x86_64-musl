@@ -3,10 +3,10 @@
 // Make an HTTP request through Tor using the singleton API
 //
 // Build:   scripts/tor-js/build.sh
-// Usage:   examples/tor-fetch-singleton.js [url]
-// Example: examples/tor-fetch-singleton.js https://check.torproject.org/api/ip
+// Usage:   examples/tor-js/tor-fetch-singleton.js [url]
+// Example: examples/tor-js/tor-fetch-singleton.js https://check.torproject.org/api/ip
 
-import { tor, Log } from '../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/singleton.js';
+import { tor, Log } from '../../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/singleton.js';
 
 const url = process.argv[2] ?? 'https://check.torproject.org/api/ip';
 

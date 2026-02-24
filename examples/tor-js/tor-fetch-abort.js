@@ -8,9 +8,9 @@
 //   3. Unused signal       — normal fetch with a signal that is never fired
 //
 // Build:   scripts/tor-js/build.sh
-// Usage:   examples/tor-fetch-abort.js
+// Usage:   examples/tor-js/tor-fetch-abort.js
 
-import { TorClient, Log } from '../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/index.js';
+import { TorClient, Log } from '../../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/index.js';
 
 function pass(label) { console.log(`  [PASS] ${label}`); }
 function fail(label, detail) { console.error(`  [FAIL] ${label}: ${detail}`); process.exitCode = 1; }

@@ -3,13 +3,13 @@
 // Make an HTTP request through Tor with persistent filesystem storage
 //
 // Build:   scripts/tor-js/build.sh
-// Usage:   examples/tor-fetch.js [url]
-// Example: examples/tor-fetch.js https://check.torproject.org/api/ip
+// Usage:   examples/tor-js/tor-fetch.js [url]
+// Example: examples/tor-js/tor-fetch.js https://check.torproject.org/api/ip
 //
 // State is persisted to ~/.local/share/tor-js/
 // Subsequent runs will load cached state for faster bootstrap.
 
-import { TorClient, Log } from '../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/index.js';
+import { TorClient, Log } from '../../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/index.js';
 
 async function main() {
   const url = process.argv[2] ?? 'https://check.torproject.org/api/ip';
@@ -22,8 +22,8 @@ async function main() {
   const startTime = performance.now();
 
   const client = new TorClient({
-    snowflakeUrl: 'wss://snowflake.pse.dev/',
-    fingerprint: '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194',
+    snowflakeUrl: 'wss://snowflake.torproject.net/',
+    fingerprint: '2B280B23E1107BB62ABFC40DDCC8824814F80A72',
     log,
   });
 
@@ -51,9 +51,28 @@ async function main() {
   log.info(`Fetch time: ${fetchTime}s`);
   log.info('Response:');
   log.info(responseText);
+
+  // This does not block exit (see .unref), but logs if nodejs stays alive
+  // without exiting gracefully. This suggests resource use (presumably in arti)
+  // that persists beyond .close().
+  await shutdown();
 }
 
 main().catch(err => {
   console.error(err);
   process.exit(1);
 });
+
+async function shutdown() {
+  await softDelay(2000);
+  console.log('\nWaiting up to 10s for graceful exit.');
+  await softDelay(8000);
+  console.warn('WARN: Graceful exit did not occur. Ignoring.\n')
+  process.exit(0);
+}
+
+async function softDelay(ms) {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms).unref();
+  });
+}

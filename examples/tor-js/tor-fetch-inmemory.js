@@ -3,13 +3,13 @@
 // Make an HTTP request through Tor from Node.js using arti-client via tor-js
 //
 // Build:   scripts/tor-js/build.sh
-// Usage:   examples/tor-fetch-inmemory.js [url]
-// Example: examples/tor-fetch-inmemory.js https://check.torproject.org/api/ip
+// Usage:   examples/tor-js/tor-fetch-inmemory.js [url]
+// Example: examples/tor-js/tor-fetch-inmemory.js https://check.torproject.org/api/ip
 //
 // Uses in-memory storage (state is lost when the process exits).
 // For persistent storage, see tor-fetch.js.
 
-import { TorClient, Log, storage } from '../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/index.js';
+import { TorClient, Log, storage } from '../../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/index.js';
 
 async function main() {
   const url = process.argv[2] ?? 'https://check.torproject.org/api/ip';
