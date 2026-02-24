@@ -210,6 +210,11 @@ export class TorClientOptions {
 export function init(log_level?: string): void;
 
 /**
+ * Dynamically update the minimum log level.
+ */
+export function setLogLevel(level: string): void;
+
+/**
  * Set a callback function to receive log messages
  *
  * The callback receives three arguments: (level: string, target: string, message: string)

@@ -50,13 +50,31 @@ use tor_rtcompat::wasm::WasmRuntime;
 use tracing::{debug, info, error};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
 use wasm_bindgen::prelude::*;
 use webtor_rs_lite::arti_transport::{SnowflakeMode, SnowflakePtMgr};
 
 // Global log callback (WASM is single-threaded, so thread_local is fine)
 thread_local! {
     static LOG_CALLBACK: RefCell<Option<js_sys::Function>> = const { RefCell::new(None) };
+    static LOG_LEVEL_HANDLE: RefCell<Option<tracing_subscriber::reload::Handle<
+        tracing_subscriber::filter::LevelFilter,
+        tracing_subscriber::Registry,
+    >>> = const { RefCell::new(None) };
+}
+
+/// Parse a log level string into a `LevelFilter`.
+fn parse_level(level: &str) -> Result<tracing_subscriber::filter::LevelFilter, JsValue> {
+    match level {
+        "trace" => Ok(tracing_subscriber::filter::LevelFilter::TRACE),
+        "debug" => Ok(tracing_subscriber::filter::LevelFilter::DEBUG),
+        "info" => Ok(tracing_subscriber::filter::LevelFilter::INFO),
+        "warn" => Ok(tracing_subscriber::filter::LevelFilter::WARN),
+        "error" => Ok(tracing_subscriber::filter::LevelFilter::ERROR),
+        other => Err(JsValue::from_str(&format!(
+            "Invalid log level: {:?}. Must be trace, debug, info, warn, or error.",
+            other
+        ))),
+    }
 }
 
 // ============================================================================
@@ -68,36 +86,49 @@ thread_local! {
 /// This must be called before creating any TorClient instances.
 /// Sets up panic hooks and logging infrastructure.
 ///
-/// The optional `log_level` parameter sets the minimum log level:
+/// The optional `log_level` parameter sets the initial log level:
 /// "trace", "debug", "info", "warn", or "error". Defaults to "debug".
+/// The level can be changed later with `setLogLevel()`.
 #[wasm_bindgen]
 pub fn init(log_level: Option<String>) -> Result<(), JsValue> {
     // Set up panic handler for better error messages
     console_error_panic_hook::set_once();
 
-    // Set up tracing with custom layer that forwards to JS callback
-    let js_layer = JsLogLayer;
-    let filter = match log_level.as_deref() {
-        Some("trace") => tracing_subscriber::filter::LevelFilter::TRACE,
-        Some("debug") => tracing_subscriber::filter::LevelFilter::DEBUG,
-        Some("info") => tracing_subscriber::filter::LevelFilter::INFO,
-        Some("warn") => tracing_subscriber::filter::LevelFilter::WARN,
-        Some("error") => tracing_subscriber::filter::LevelFilter::ERROR,
-        Some(other) => {
-            return Err(JsValue::from_str(&format!(
-                "Invalid log level: {:?}. Must be trace, debug, info, warn, or error.",
-                other
-            )));
-        },
-        None => tracing_subscriber::filter::LevelFilter::DEBUG
+    let initial_filter = match log_level.as_deref() {
+        Some(level) => parse_level(level)?,
+        None => tracing_subscriber::filter::LevelFilter::DEBUG,
     };
+
+    // Create a reloadable filter so the level can be changed dynamically
+    let (filter, reload_handle) = tracing_subscriber::reload::Layer::new(initial_filter);
 
     // Use try_init() to avoid panicking if init() is called more than once
     let _ = tracing_subscriber::registry()
-        .with(js_layer.with_filter(filter))
+        .with(filter)
+        .with(JsLogLayer)
         .try_init();
 
+    LOG_LEVEL_HANDLE.with(|h| {
+        *h.borrow_mut() = Some(reload_handle);
+    });
+
     Ok(())
+}
+
+/// Dynamically update the minimum log level.
+///
+/// Called from JS when the broadest requested level across all clients changes.
+#[wasm_bindgen(js_name = setLogLevel)]
+pub fn set_log_level(level: String) -> Result<(), JsValue> {
+    let new_filter = parse_level(&level)?;
+    LOG_LEVEL_HANDLE.with(|h| {
+        if let Some(handle) = h.borrow().as_ref() {
+            handle.modify(|filter| *filter = new_filter)
+                .map_err(|e| JsValue::from_str(&format!("Failed to update log level: {}", e)))
+        } else {
+            Err(JsValue::from_str("init() must be called before setLogLevel()"))
+        }
+    })
 }
 
 /// Set a callback function to receive log messages

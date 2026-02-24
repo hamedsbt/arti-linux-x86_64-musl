@@ -1,18 +1,81 @@
 import initWasm, {
   init as wasmInit,
   setLogCallback as wasmSetLogCallback,
+  setLogLevel as wasmSetLogLevel,
   TorClient as WasmTorClient,
   TorClientOptions as WasmTorClientOptions,
 } from '#wasm';
 
-export { WasmTorClient, WasmTorClientOptions, wasmSetLogCallback };
+export { WasmTorClient, WasmTorClientOptions };
+
+// ============================================================================
+// Log listener management
+// ============================================================================
+
+type WasmLogCallback = (level: string, target: string, message: string) => void;
+
+const LEVEL_ORDER = ['trace', 'debug', 'info', 'warn', 'error'] as const;
+
+function levelIndex(level: string): number {
+  const idx = LEVEL_ORDER.indexOf(level as typeof LEVEL_ORDER[number]);
+  return idx === -1 ? 1 : idx; // default to debug
+}
+
+interface LogListener {
+  callback: WasmLogCallback;
+  levelIdx: number;
+}
+
+const logListeners = new Map<WasmLogCallback, LogListener>();
+
+/** Recompute the broadest level across all listeners and update the WASM filter. */
+function syncWasmLogLevel(): void {
+  let broadestIdx = LEVEL_ORDER.length - 1; // start at narrowest (error)
+  for (const listener of logListeners.values()) {
+    if (listener.levelIdx < broadestIdx) {
+      broadestIdx = listener.levelIdx;
+    }
+  }
+  wasmSetLogLevel(LEVEL_ORDER[broadestIdx]);
+}
+
+/**
+ * Register a log callback at a given level. The WASM subscriber is
+ * automatically widened to the broadest level across all listeners.
+ * Each listener only receives events at or above its own level.
+ * Returns an unregister function.
+ */
+export function addLogListener(cb: WasmLogCallback, level: string = 'debug'): () => void {
+  logListeners.set(cb, { callback: cb, levelIdx: levelIndex(level) });
+  syncWasmLogLevel();
+  return () => {
+    logListeners.delete(cb);
+    if (logListeners.size > 0) {
+      syncWasmLogLevel();
+    }
+  };
+}
+
+/**
+ * Update the level for an existing listener and re-sync the WASM filter.
+ */
+export function setListenerLevel(cb: WasmLogCallback, level: string): void {
+  const listener = logListeners.get(cb);
+  if (listener) {
+    listener.levelIdx = levelIndex(level);
+    syncWasmLogLevel();
+  }
+}
+
+// ============================================================================
+// WASM initialization
+// ============================================================================
 
 type WasmSourceProvider = () => Promise<BufferSource | Uint8Array>;
 
 let initPromise: Promise<void> | null = null;
 let customWasmUrl: string | URL | undefined;
 let wasmSourceProvider: WasmSourceProvider | undefined;
-let configuredLogLevel: string | undefined;
 
 /**
  * Override the WASM binary URL. Must be called before any TorClient is created.
@@ -38,11 +101,9 @@ export function setWasmSourceProvider(provider: WasmSourceProvider): void {
 
 /**
  * Ensures the WASM module is loaded and initialized. Idempotent.
- * The logLevel from the first call wins (subsequent calls are no-ops).
  */
-export async function ensureWasmInitialized(logLevel?: string): Promise<void> {
+export async function ensureWasmInitialized(): Promise<void> {
   if (initPromise) return initPromise;
-  configuredLogLevel = logLevel;
   initPromise = doInit();
   return initPromise;
 }
@@ -63,5 +124,15 @@ async function doInit(): Promise<void> {
     // Browser: use URL relative to this module
     await initWasm({ module_or_path: new URL('./tor_js_bg.wasm', import.meta.url) });
   }
-  wasmInit(configuredLogLevel);
+  wasmInit();
+
+  // Install a single fan-out callback that dispatches to matching listeners
+  wasmSetLogCallback((level: string, target: string, message: string) => {
+    const lvl = levelIndex(level);
+    for (const listener of logListeners.values()) {
+      if (lvl >= listener.levelIdx) {
+        listener.callback(level, target, message);
+      }
+    }
+  });
 }

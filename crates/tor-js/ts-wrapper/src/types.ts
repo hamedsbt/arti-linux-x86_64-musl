@@ -23,13 +23,22 @@ export interface TorClientOptions {
    */
   brokerUrl?: string;
 
-  /** Optional logger instance */
+  /**
+   * Optional logger instance.
+   * Note: WASM logging is global, so all TorClient instances receive all WASM
+   * log events, not just their own.
+   * TODO: Link wasm-bindgen github issue(s).
+   */
   log?: Log;
 
   /** Optional storage for persistent state (implements TorStorage). */
   storage?: TorStorage;
 
-  /** Minimum log level for WASM internals. Defaults to 'debug'. */
+  /**
+   * Minimum log level for this client's log listener. Defaults to 'debug'.
+   * Can be changed at runtime via `TorClient.setLogLevel()`.
+   * The WASM subscriber auto-widens to the broadest level across all clients.
+   */
   logLevel?: LogLevel;
 
   // Accepted for API compatibility with original tor-js, silently ignored

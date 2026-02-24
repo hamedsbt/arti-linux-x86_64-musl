@@ -2,15 +2,18 @@ import {
   ensureWasmInitialized,
   WasmTorClient,
   WasmTorClientOptions,
-  wasmSetLogCallback,
+  addLogListener,
+  setListenerLevel,
 } from './wasm.js';
-import type { TorClientOptions, FetchInit } from './types.js';
+import type { TorClientOptions, FetchInit, LogLevel } from './types.js';
 import { Log } from './Log.js';
 import { createAutoStorage } from './storage/index.js';
 
 export class TorClient {
   private log: Log;
   private clientPromise: Promise<WasmTorClient>;
+  private removeLogListener: (() => void) | null = null;
+  private wasmCallback: ((level: string, target: string, message: string) => void) | null = null;
   private closed = false;
 
   constructor(options: TorClientOptions) {
@@ -19,10 +22,12 @@ export class TorClient {
   }
 
   private async bootstrap(options: TorClientOptions): Promise<WasmTorClient> {
-    await ensureWasmInitialized(options.logLevel);
+    await ensureWasmInitialized();
 
-    // Wire up logging
-    wasmSetLogCallback(this.log._makeWasmCallback());
+    // Register log listener with per-client level filtering.
+    // The WASM subscriber auto-widens to the broadest level across all listeners.
+    this.wasmCallback = this.log._makeWasmCallback();
+    this.removeLogListener = addLogListener(this.wasmCallback, options.logLevel);
 
     // Create WASM options
     let wasmOptions: WasmTorClientOptions;
@@ -63,11 +68,24 @@ export class TorClient {
   }
 
   /**
+   * Change the log level for this client's listener.
+   * Also re-syncs the global WASM filter to the broadest level across all clients.
+   */
+  setLogLevel(level: LogLevel): void {
+    if (this.wasmCallback) {
+      setListenerLevel(this.wasmCallback, level);
+    }
+  }
+
+  /**
    * Close the TorClient and release resources.
    */
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.removeLogListener?.();
+    this.removeLogListener = null;
+    this.wasmCallback = null;
     this.clientPromise.then(client => client.close()).catch(() => {});
   }
 
