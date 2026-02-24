@@ -17,7 +17,7 @@ export class TorClient {
   private closed = false;
 
   constructor(options: TorClientOptions) {
-    this.log = (options.log ?? new Log()).child('Tor');
+    this.log = (options.log ?? new Log({ rawLog: () => {} }));
     this.clientPromise = this.bootstrap(options);
   }
 
