@@ -52,7 +52,7 @@
   - [ ] Isolated clients (share network caching)
   - [ ] WebSocket
   - [ ] Regular sockets
-- [ ] Try making npm module small
+- [ ] Make wasm small
 - [ ] Fix performance issue(s) affecting normal bootstrap
   - [ ] Microdesc stalls when batch size or parallelism is higher
   - [ ] Downloads unblocked by ping loop
