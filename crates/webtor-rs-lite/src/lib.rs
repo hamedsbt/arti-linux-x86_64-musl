@@ -3,6 +3,8 @@
 //! This crate provides the minimal Snowflake WebSocket transport stack needed
 //! for arti-client integration, without the full webtor-rs Tor client.
 
+#![allow(clippy::result_large_err)] // temporary workaround for arti#587
+
 #[cfg(test)]
 pub mod test_util;
 
