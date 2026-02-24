@@ -1,11 +1,11 @@
-// Entry point: tor-js/wasm-cdn (also the default tor-js entry)
+// Entry point: tor-js (default), tor-js/wasm-cdn
 // Downloads WASM from CDN with SHA256 hash verification.
 // Caches the downloaded WASM using createAutoStorage for faster subsequent loads.
 // The GitHub CDN source stores AES-256-GCM encrypted files keyed by the WASM hash,
 // with filenames derived from hash(hash) so the key isn't revealed by the URL.
 
-import { setWasmSourceProvider } from './wasm.js';
-import { createAutoStorage } from './storage/index.js';
+import { setWasmSourceProvider } from '../../wasm.js';
+import { createAutoStorage } from '../../storage/index.js';
 
 const CACHE_KEY = 'wasm';
 
@@ -151,8 +151,8 @@ setWasmSourceProvider(async () => {
   throw new Error(`Failed to load WASM from any CDN:\n  ${errors.join('\n  ')}`);
 });
 
-export { TorClient } from './TorClient.js';
-export type { TorClientOptions, FetchInit, TorStorage } from './types.js';
-export { Log, type LogLevel } from './Log.js';
-export * as storage from './storage/index.js';
-export { setWasmUrl } from './wasm.js';
+export { TorClient } from '../../TorClient.js';
+export type { TorClientOptions, FetchInit, TorStorage } from '../../types.js';
+export { Log, type LogLevel } from '../../Log.js';
+export * as storage from '../../storage/index.js';
+export { setWasmUrl } from '../../wasm.js';

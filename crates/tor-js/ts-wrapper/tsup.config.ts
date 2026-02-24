@@ -6,12 +6,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkgDir = resolve(__dirname, '../pkg');
 
 export default defineConfig({
-  entry: [
-    'src/index.ts',
-    'src/wasm-file.ts',
-    'src/wasm-cdn.ts',
-    'src/wasm-base64.ts',
-  ],
+  entry: {
+    'entryPoints/wasm-cdn/index': 'src/entryPoints/wasm-cdn/index.ts',
+    'entryPoints/wasm-cdn/singleton': 'src/entryPoints/wasm-cdn/singleton.ts',
+    'entryPoints/wasm-base64/index': 'src/entryPoints/wasm-base64/index.ts',
+    'entryPoints/wasm-base64/singleton': 'src/entryPoints/wasm-base64/singleton.ts',
+    'entryPoints/wasm-file/index': 'src/entryPoints/wasm-file/index.ts',
+    'entryPoints/wasm-file/singleton': 'src/entryPoints/wasm-file/singleton.ts',
+  },
   format: ['esm'],
   dts: true,
   sourcemap: true,

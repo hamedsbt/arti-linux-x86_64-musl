@@ -9,7 +9,7 @@
 // Uses in-memory storage (state is lost when the process exits).
 // For persistent storage, see tor-fetch.js.
 
-import { TorClient, Log, storage } from '../crates/tor-js/ts-wrapper/dist/wasm-base64.js';
+import { TorClient, Log, storage } from '../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/index.js';
 
 async function main() {
   const url = process.argv[2] ?? 'https://check.torproject.org/api/ip';

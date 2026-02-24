@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
@@ -58,3 +58,24 @@ copyFileSync(resolve(pkgDir, 'tor_js.js'), resolve(distWasm, 'tor_js.js'));
 copyFileSync(resolve(pkgDir, 'tor_js.d.ts'), resolve(distWasm, 'tor_js.d.ts'));
 copyFileSync(resolve(pkgDir, 'tor_js_bg.wasm'), resolve(distDir, 'tor_js_bg.wasm'));
 console.log('Copied WASM runtime files to dist/');
+
+// 8. Verify declaration maps exist for all exported entry points
+const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8'));
+const errors = [];
+for (const [exportPath, conditions] of Object.entries(pkg.exports)) {
+  const dtsPath = resolve(__dirname, conditions.types);
+  const dts = readFileSync(dtsPath, 'utf-8');
+  if (!dts.includes('//# sourceMappingURL=')) {
+    errors.push(`${conditions.types} missing sourceMappingURL comment`);
+  }
+  const mapPath = dtsPath + '.map';
+  if (!existsSync(mapPath)) {
+    errors.push(`${conditions.types}.map does not exist`);
+  }
+}
+if (errors.length > 0) {
+  console.error('Declaration map verification failed:');
+  for (const err of errors) console.error(`  - ${err}`);
+  process.exit(1);
+}
+console.log('Verified declaration maps for all exports');

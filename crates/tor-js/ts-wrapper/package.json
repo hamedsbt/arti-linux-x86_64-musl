@@ -3,24 +3,40 @@
   "version": "0.3.0",
   "description": "TypeScript Tor client using arti via WASM",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/entryPoints/wasm-cdn/index.js",
+  "types": "dist/entryPoints/wasm-cdn/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist/entryPoints/wasm-cdn/index.d.ts",
+      "import": "./dist/entryPoints/wasm-cdn/index.js"
     },
     "./wasm-cdn": {
-      "types": "./dist/wasm-cdn.d.ts",
-      "import": "./dist/wasm-cdn.js"
+      "types": "./dist/entryPoints/wasm-cdn/index.d.ts",
+      "import": "./dist/entryPoints/wasm-cdn/index.js"
     },
     "./wasm-file": {
-      "types": "./dist/wasm-file.d.ts",
-      "import": "./dist/wasm-file.js"
+      "types": "./dist/entryPoints/wasm-file/index.d.ts",
+      "import": "./dist/entryPoints/wasm-file/index.js"
     },
     "./wasm-base64": {
-      "types": "./dist/wasm-base64.d.ts",
-      "import": "./dist/wasm-base64.js"
+      "types": "./dist/entryPoints/wasm-base64/index.d.ts",
+      "import": "./dist/entryPoints/wasm-base64/index.js"
+    },
+    "./singleton": {
+      "types": "./dist/entryPoints/wasm-cdn/singleton.d.ts",
+      "import": "./dist/entryPoints/wasm-cdn/singleton.js"
+    },
+    "./wasm-cdn/singleton": {
+      "types": "./dist/entryPoints/wasm-cdn/singleton.d.ts",
+      "import": "./dist/entryPoints/wasm-cdn/singleton.js"
+    },
+    "./wasm-file/singleton": {
+      "types": "./dist/entryPoints/wasm-file/singleton.d.ts",
+      "import": "./dist/entryPoints/wasm-file/singleton.js"
+    },
+    "./wasm-base64/singleton": {
+      "types": "./dist/entryPoints/wasm-base64/singleton.d.ts",
+      "import": "./dist/entryPoints/wasm-base64/singleton.js"
     }
   },
   "imports": {
