@@ -76,6 +76,13 @@ export interface TorStorage {
     keys(prefix: string): Promise<string[]>;
 
     /**
+     * Get all key-value pairs matching a prefix.
+     * @param prefix - The key prefix to match
+     * @returns Array of [key, value] pairs
+     */
+    getAll(prefix: string): Promise<[string, string][]>;
+
+    /**
      * Try to acquire an exclusive write lock.
      * @returns true if newly acquired, false if already held.
      * Implement using Web Locks API (browser) or lock files (Node.js).

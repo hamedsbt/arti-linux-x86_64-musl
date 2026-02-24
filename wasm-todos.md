@@ -42,7 +42,7 @@
 - [ ] Check incremental build logic in tor-js (rerun-if-changed prevents ordinary cache invalidation? intent was to build only more often, never skip)
 - [ ] Confirm trace logging works in js
 - [x] Fix wasm-base64 (should be self-contained, but requires `<script type="importmap">` in showcase index.html)
-- [ ] Fix slow js storage startup (loading '000s items into memory - fix with parallelism or chunked storage of microdescs)
+- [x] Fix slow js storage startup (loading '000s items into memory - fix with parallelism or chunked storage of microdescs)
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm
@@ -58,3 +58,4 @@
   - [ ] Microdesc stalls when batch size or parallelism is higher
   - [ ] Downloads unblocked by ping loop
 - [ ] Fix tor-fetch.js slow exit (prints response and hangs for a long time)
+- [ ] Fix slow-ish js storage startup (much improved, but still 0.5-1s due to '000s of files/indexeddb entries)

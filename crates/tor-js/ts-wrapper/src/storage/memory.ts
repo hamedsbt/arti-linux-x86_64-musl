@@ -19,6 +19,16 @@ export class MemoryStorage implements TorStorage {
     return [...this.data.keys()].filter(k => k.startsWith(prefix)).sort();
   }
 
+  async getAll(prefix: string): Promise<[string, string][]> {
+    const result: [string, string][] = [];
+    for (const [key, value] of this.data) {
+      if (key.startsWith(prefix)) {
+        result.push([key, value]);
+      }
+    }
+    return result;
+  }
+
   async tryLock(): Promise<boolean> {
     return true;
   }

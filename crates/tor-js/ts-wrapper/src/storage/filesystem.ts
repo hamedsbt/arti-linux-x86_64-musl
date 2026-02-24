@@ -150,6 +150,25 @@ export class FilesystemStorage implements TorStorage {
     }
   }
 
+  async getAll(prefix: string): Promise<[string, string][]> {
+    const { fs } = await getNodeDeps();
+    await this.ensureDir();
+    try {
+      const files = await fs.readdir(await this.resolvedDir());
+      const keys = files.map(unmangleKey).filter(k => k.startsWith(prefix));
+      const entries = await Promise.all(
+        keys.map(async (key): Promise<[string, string] | null> => {
+          const value = await this.get(key);
+          return value !== null ? [key, value] : null;
+        })
+      );
+      return entries.filter((e): e is [string, string] => e !== null);
+    } catch (err) {
+      if (isNodeError(err) && err.code === 'ENOENT') return [];
+      throw err;
+    }
+  }
+
   // FIXME: Stub — use a lock file (e.g. proper-lockfile) for real
   // cross-process locking on the filesystem storage directory.
   async tryLock(): Promise<boolean> {

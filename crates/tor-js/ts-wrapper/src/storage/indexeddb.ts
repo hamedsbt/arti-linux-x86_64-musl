@@ -75,6 +75,28 @@ export class IndexedDBStorage implements TorStorage {
     });
   }
 
+  async getAll(prefix: string): Promise<[string, string][]> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(this.storeName, 'readonly');
+      const store = tx.objectStore(this.storeName);
+      const keysReq = store.getAllKeys();
+      const valsReq = store.getAll();
+      tx.onerror = () => reject(tx.error);
+      tx.oncomplete = () => {
+        const keys = keysReq.result as string[];
+        const vals = valsReq.result as string[];
+        const result: [string, string][] = [];
+        for (let i = 0; i < keys.length; i++) {
+          if (keys[i].startsWith(prefix)) {
+            result.push([keys[i], vals[i]]);
+          }
+        }
+        resolve(result);
+      };
+    });
+  }
+
   async tryLock(): Promise<boolean> {
     return true;
   }

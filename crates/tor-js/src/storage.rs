@@ -50,6 +50,11 @@ extern "C" {
     #[wasm_bindgen(method, catch)]
     fn keys(this: &JsStorageInterface, prefix: &str) -> Result<Promise, JsValue>;
 
+    /// Get all key-value pairs matching a prefix.
+    /// Returns an array of [key, value] pairs.
+    #[wasm_bindgen(method, catch, js_name = "getAll")]
+    fn get_all(this: &JsStorageInterface, prefix: &str) -> Result<Promise, JsValue>;
+
     /// Try to acquire an exclusive write lock.
     /// Returns a boolean: true if newly acquired, false if already held.
     #[wasm_bindgen(method, catch, js_name = "tryLock")]
@@ -131,6 +136,23 @@ impl JsStorage {
             }
         }
         Ok(keys)
+    }
+
+    /// Get all key-value pairs matching a prefix.
+    pub async fn get_all(&self, prefix: &str) -> Result<Vec<(String, String)>, JsValue> {
+        let promise = self.inner.get_all(prefix)?;
+        let result = JsFuture::from(promise).await?;
+
+        // Convert JS array of [key, value] pairs to Vec<(String, String)>
+        let array = js_sys::Array::from(&result);
+        let mut entries = Vec::with_capacity(array.length() as usize);
+        for i in 0..array.length() {
+            let pair = js_sys::Array::from(&array.get(i));
+            if let (Some(key), Some(value)) = (pair.get(0).as_string(), pair.get(1).as_string()) {
+                entries.push((key, value));
+            }
+        }
+        Ok(entries)
     }
 
     /// Try to acquire an exclusive write lock.
@@ -234,29 +256,21 @@ impl CachedJsStorage {
     }
 
     /// Pre-load all data from JS storage into the cache.
+    ///
+    /// Uses bulk `getAll()` to fetch all key-value pairs per prefix in a single
+    /// JS call, avoiding thousands of sequential WASM-JS round-trips.
     async fn preload_all(&self) -> Result<(), JsValue> {
-        // Collect all entries before acquiring the lock to avoid holding it across await points.
-        let mut entries = Vec::new();
-
-        let state_keys = self.js_storage.keys("state:").await?;
-        for key in state_keys {
-            if let Some(value) = self.js_storage.get(&key).await? {
-                entries.push((key, value));
-            }
-        }
-
-        let dir_keys = self.js_storage.keys("dir:").await?;
-        for key in dir_keys {
-            if let Some(value) = self.js_storage.get(&key).await? {
-                entries.push((key, value));
-            }
-        }
+        let state_entries = self.js_storage.get_all("state:").await?;
+        let dir_entries = self.js_storage.get_all("dir:").await?;
 
         let mut cache = self
             .cache
             .write()
             .map_err(|_| JsValue::from_str("cache lock poisoned"))?;
-        for (key, value) in entries {
+        for (key, value) in state_entries {
+            cache.insert(key, value);
+        }
+        for (key, value) in dir_entries {
             cache.insert(key, value);
         }
 
