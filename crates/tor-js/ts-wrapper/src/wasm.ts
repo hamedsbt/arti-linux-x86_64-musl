@@ -12,6 +12,7 @@ type WasmSourceProvider = () => Promise<BufferSource | Uint8Array>;
 let initPromise: Promise<void> | null = null;
 let customWasmUrl: string | URL | undefined;
 let wasmSourceProvider: WasmSourceProvider | undefined;
+let configuredLogLevel: string | undefined;
 
 /**
  * Override the WASM binary URL. Must be called before any TorClient is created.
@@ -37,9 +38,11 @@ export function setWasmSourceProvider(provider: WasmSourceProvider): void {
 
 /**
  * Ensures the WASM module is loaded and initialized. Idempotent.
+ * The logLevel from the first call wins (subsequent calls are no-ops).
  */
-export async function ensureWasmInitialized(): Promise<void> {
+export async function ensureWasmInitialized(logLevel?: string): Promise<void> {
   if (initPromise) return initPromise;
+  configuredLogLevel = logLevel;
   initPromise = doInit();
   return initPromise;
 }
@@ -60,5 +63,5 @@ async function doInit(): Promise<void> {
     // Browser: use URL relative to this module
     await initWasm({ module_or_path: new URL('./tor_js_bg.wasm', import.meta.url) });
   }
-  wasmInit();
+  wasmInit(configuredLogLevel);
 }

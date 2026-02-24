@@ -996,6 +996,7 @@
                         brokerUrl: useWebRtc ? brokerUrlInput.value.trim() : undefined,
                         log,
                         storage: new storage.IndexedDBStorage(),
+                        // logLevel: 'trace',
                     });
                     await torClient.ready();
 

@@ -40,7 +40,7 @@
 - [ ] Add singleton entry points
 - [ ] README for npm package
 - [ ] Check incremental build logic in tor-js (rerun-if-changed prevents ordinary cache invalidation? intent was to build only more often, never skip)
-- [ ] Confirm trace logging works in js
+- [x] Confirm trace logging works in js
 - [x] Fix wasm-base64 (should be self-contained, but requires `<script type="importmap">` in showcase index.html)
 - [x] Fix slow js storage startup (loading '000s items into memory - fix with parallelism or chunked storage of microdescs)
 - [ ] Code review

@@ -19,7 +19,7 @@ export class TorClient {
   }
 
   private async bootstrap(options: TorClientOptions): Promise<WasmTorClient> {
-    await ensureWasmInitialized();
+    await ensureWasmInitialized(options.logLevel);
 
     // Wire up logging
     wasmSetLogCallback(this.log._makeWasmCallback());

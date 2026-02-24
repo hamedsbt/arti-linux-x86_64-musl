@@ -67,14 +67,30 @@ thread_local! {
 ///
 /// This must be called before creating any TorClient instances.
 /// Sets up panic hooks and logging infrastructure.
+///
+/// The optional `log_level` parameter sets the minimum log level:
+/// "trace", "debug", "info", "warn", or "error". Defaults to "debug".
 #[wasm_bindgen]
-pub fn init() -> Result<(), JsValue> {
+pub fn init(log_level: Option<String>) -> Result<(), JsValue> {
     // Set up panic handler for better error messages
     console_error_panic_hook::set_once();
 
     // Set up tracing with custom layer that forwards to JS callback
     let js_layer = JsLogLayer;
-    let filter = tracing_subscriber::filter::LevelFilter::DEBUG;
+    let filter = match log_level.as_deref() {
+        Some("trace") => tracing_subscriber::filter::LevelFilter::TRACE,
+        Some("debug") => tracing_subscriber::filter::LevelFilter::DEBUG,
+        Some("info") => tracing_subscriber::filter::LevelFilter::INFO,
+        Some("warn") => tracing_subscriber::filter::LevelFilter::WARN,
+        Some("error") => tracing_subscriber::filter::LevelFilter::ERROR,
+        Some(other) => {
+            return Err(JsValue::from_str(&format!(
+                "Invalid log level: {:?}. Must be trace, debug, info, warn, or error.",
+                other
+            )));
+        },
+        None => tracing_subscriber::filter::LevelFilter::DEBUG
+    };
 
     // Use try_init() to avoid panicking if init() is called more than once
     let _ = tracing_subscriber::registry()

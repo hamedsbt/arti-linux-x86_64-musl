@@ -207,7 +207,7 @@ export class TorClientOptions {
  * This must be called before creating any TorClient instances.
  * Sets up panic hooks and logging infrastructure.
  */
-export function init(): void;
+export function init(log_level?: string): void;
 
 /**
  * Set a callback function to receive log messages

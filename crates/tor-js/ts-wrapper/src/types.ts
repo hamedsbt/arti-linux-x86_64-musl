@@ -1,7 +1,7 @@
 import type { Log } from './Log.js';
 import type { TorStorage } from '#wasm';
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 
 export interface TorClientOptions {
   /** Snowflake WebSocket bridge URL (e.g., "wss://snowflake.pse.dev/"). Used in 'websocket' mode. */
@@ -28,6 +28,9 @@ export interface TorClientOptions {
 
   /** Optional storage for persistent state (implements TorStorage). */
   storage?: TorStorage;
+
+  /** Minimum log level for WASM internals. Defaults to 'debug'. */
+  logLevel?: LogLevel;
 
   // Accepted for API compatibility with original tor-js, silently ignored
   // (arti manages these internally):
