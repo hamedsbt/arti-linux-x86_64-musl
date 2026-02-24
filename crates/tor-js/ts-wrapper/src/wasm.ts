@@ -1,3 +1,4 @@
+import './polyfills.js';
 import initWasm, {
   init as wasmInit,
   setLogCallback as wasmSetLogCallback,

@@ -43,7 +43,7 @@
 - [x] Confirm trace logging works in js
 - [x] Fix wasm-base64 (should be self-contained, but requires `<script type="importmap">` in showcase index.html)
 - [x] Fix slow js storage startup (loading '000s items into memory - fix with parallelism or chunked storage of microdescs)
-- [ ] Symbol dispose polyfill
+- [x] Symbol dispose polyfill
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm
