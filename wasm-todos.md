@@ -37,13 +37,15 @@
   - Sometimes it recovers (can complete request), other times it gets stuck
 - [x] Fix sourcemaps
 - [x] Check npm pack content
-- [ ] Add singleton entry points
+- [x] Add singleton entry points
 - [ ] README for npm package
 - [ ] Check incremental build logic in tor-js (rerun-if-changed prevents ordinary cache invalidation? intent was to build only more often, never skip)
 - [x] Confirm trace logging works in js
 - [x] Fix wasm-base64 (should be self-contained, but requires `<script type="importmap">` in showcase index.html)
 - [x] Fix slow js storage startup (loading '000s items into memory - fix with parallelism or chunked storage of microdescs)
 - [x] Symbol dispose polyfill
+- [ ] Fail more helpfully when required TorClient options are missing
+- [ ] Fail fast when websocket does not connect
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm
