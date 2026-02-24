@@ -36,7 +36,7 @@ full = [
     "caret/full",
 ]
 
-pt-client = ["tor-linkspec/pt-client"]
+pt-client = ["tor-linkspec/pt-client", "tor-proto/pt-client"]
 
 relay = ["__is_experimental", "tor-proto/relay", "tor-rtcompat/tls-server"]
 testing = ["__is_experimental"]
@@ -47,7 +47,7 @@ async-trait = "0.1.54"
 tor-async-compat = { path = "../tor-async-compat", version = "0.39.0" }
 caret = { path = "../caret", version = "0.8.0" }
 cfg-if = "1.0.0"
-derive_builder = { version = "0.11.2", package = "derive_builder_fork_arti" }
+derive-deftly = { version = "~1.6.0", features = ["full", "beta"] }
 derive_more = { version = "2.0.1", features = ["full"] }
 educe = "0.4.22"
 futures = "0.3.14"
