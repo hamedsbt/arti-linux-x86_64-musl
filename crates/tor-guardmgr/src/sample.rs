@@ -956,21 +956,27 @@ impl GuardSet {
         let maximum = std::cmp::max(params.data_parallelism, MINIMUM);
         let data_usage = GuardUsage::default();
 
-        // Here we duplicate some but not all of the restrictions above in
-        // pick_guard_id.  We skip those restrictions that are specific to only
-        // certain kinds of circuits, and those that are temporary restrictions
-        // encouraging us to try more guards.
+        // Always keep descriptors for primary guards, even if they are
+        // temporarily unreachable. Discarding a primary bridge's descriptor
+        // creates a chicken-and-egg problem: the guard becomes "unsuitable to
+        // purpose" (dir_info_missing) until re-fetched, but we may need
+        // the descriptor to test reachability.
         //
-        // TODO: we may want to refactor this code and the code in pick_guard_id
-        // above to share a single function.  Before we do that, however, I want
-        // to experiment with this logic a bit to make sure that it works and
-        // doesn't give us surprising results.
+        // Non-primary guards still get the reachability filter so we don't
+        // hold descriptors for bridges we've given up on.
         self.preference_order()
-            .filter(|(_, g)| {
-                g.usable()
-                    && g.reachable() != Reachable::Unreachable
+            .filter(|(src, g)| {
+                // Permanently unusable or filtered out by config — always skip.
+                if !g.usable() || !self.active_filter.permits(*g) {
+                    return false;
+                }
+                // Primary guards bypass reachability checks (see above).
+                if src.is_primary() {
+                    return true;
+                }
+                // Non-primary: only keep if currently reachable.
+                g.reachable() != Reachable::Unreachable
                     && g.ready_for_usage(&data_usage, now)
-                    && self.active_filter.permits(*g)
             })
             .take(maximum)
             .map(|(_, g)| g)
