@@ -854,7 +854,7 @@
                 debugOutput.className = 'output-box loading';
                 debugOutput.textContent = 'Deleting...';
                 try {
-                    const dbName = 'tor-js-tor-js'; // IndexedDBStorage default: `tor-js-${name}` with name='tor-js'
+                    const dbName = 'tor-js';
                     const db = await new Promise((resolve, reject) => {
                         const req = indexedDB.open(dbName, 1);
                         req.onerror = () => reject(req.error);

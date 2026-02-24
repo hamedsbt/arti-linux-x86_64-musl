@@ -6,7 +6,7 @@ export class IndexedDBStorage implements TorStorage {
   private dbPromise: Promise<IDBDatabase> | null = null;
 
   constructor(name: string = 'tor-js') {
-    this.dbName = `tor-js-${name}`;
+    this.dbName = name;
   }
 
   private getDB(): Promise<IDBDatabase> {
