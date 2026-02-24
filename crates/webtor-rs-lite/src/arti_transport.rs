@@ -213,7 +213,8 @@ impl SnowflakeChannelFactory {
             + tor_rtcompat::CertifiedConn
             + 'static,
     {
-        use tor_proto::channel::ChannelBuilder;
+        use tor_proto::ClientChannelBuilder;
+        use tor_proto::peer::PeerAddr;
 
         let runtime = WasmRuntime::default();
 
@@ -236,10 +237,10 @@ impl SnowflakeChannelFactory {
         debug!("Got peer certificate: {} bytes", peer_cert.len());
 
         // Launch Tor channel handshake
-        let mut builder = ChannelBuilder::new();
+        let mut builder = ClientChannelBuilder::new();
         builder.set_declared_method(target.chan_method());
         debug!("Launching Tor channel client handshake...");
-        let handshake = builder.launch_client(stream, runtime, chan_account);
+        let handshake = builder.launch(stream, runtime, chan_account);
 
         debug!("Starting handshake connect...");
 
@@ -275,7 +276,8 @@ impl SnowflakeChannelFactory {
                 clock_skew: None,
             })?;
 
-        let (chan, reactor) = verified.finish().await.map_err(|e| tor_chanmgr::Error::Proto {
+        let peer_addr = PeerAddr::Direct("0.0.0.0:0".parse().unwrap());
+        let (chan, reactor) = verified.finish(peer_addr).await.map_err(|e| tor_chanmgr::Error::Proto {
             source: e,
             peer: peer.to_logged(),
             clock_skew: None,

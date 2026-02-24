@@ -12,8 +12,10 @@ use tor_chanmgr::factory::{AbstractPtError, AbstractPtMgr, BootstrapReporter, Ch
 use tor_error::{ErrorKind, HasKind, HasRetryTime, RetryTime};
 use tor_linkspec::{HasRelayIds, IntoOwnedChanTarget, OwnedChanTarget, OwnedChanTargetBuilder, PtTransportName};
 use tor_llcrypto::pk::rsa::RsaIdentity;
-use tor_proto::channel::{Channel, ChannelBuilder};
+use tor_proto::channel::Channel;
 use tor_proto::memquota::ChannelAccount;
+use tor_proto::peer::PeerAddr;
+use tor_proto::ClientChannelBuilder;
 use tor_rtcompat::{Runtime, SpawnExt};
 use tor_time::SystemTime;
 use tracing::{debug, info};
@@ -86,9 +88,9 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
         debug!("Got peer certificate: {} bytes", peer_cert.len());
 
         // Launch Tor channel handshake
-        let builder = ChannelBuilder::new();
+        let builder = ClientChannelBuilder::new();
         debug!("Launching Tor channel client handshake...");
-        let handshake = builder.launch_client(stream, self.runtime.clone(), memquota);
+        let handshake = builder.launch(stream, self.runtime.clone(), memquota);
 
         debug!("Starting handshake connect...");
 
@@ -123,7 +125,8 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
                 clock_skew: None,
             })?;
 
-        let (chan, reactor) = verified.finish().await.map_err(|e| tor_chanmgr::Error::Proto {
+        let peer_addr = PeerAddr::Direct("0.0.0.0:0".parse().unwrap());
+        let (chan, reactor) = verified.finish(peer_addr).await.map_err(|e| tor_chanmgr::Error::Proto {
             source: e,
             peer: peer.to_logged(),
             clock_skew: None,
