@@ -64,17 +64,23 @@ export class TorClient {
   async fetch(url: string, init?: FetchInit): Promise<Response> {
     if (this.closed) throw new Error('TorClient is closed');
     const client = await this.clientPromise;
+    await this.ready();
     this.log.info(`Fetching ${url}`);
     return client.fetch(url, init);
   }
 
   /**
-   * Wait for the Tor client to be ready to make requests (ie finish bootstrapping).
-   * (fetch will wait for this automatically)
+   * Wait for the Tor client to be ready for traffic
+   * (guard connected, usable consensus, and sufficient microdescs).
    */
   async ready(): Promise<void> {
     if (this.closed) throw new Error('TorClient is closed');
-    await this.clientPromise;
+    const startTime = Date.now();
+    this.log.info('Waiting for client');
+    const client = await this.clientPromise;
+    this.log.info('Waiting for client to be ready');
+    await client.ready();
+    this.log.info(`Client ready in ${Date.now() - startTime}ms`);
   }
 
   /**

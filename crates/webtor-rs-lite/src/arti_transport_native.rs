@@ -42,9 +42,12 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
     async fn build_channel(
         &self,
         _target: &OwnedChanTarget,
+        reporter: &BootstrapReporter,
         memquota: ChannelAccount,
     ) -> tor_chanmgr::Result<Arc<Channel>> {
         info!("Building native Snowflake channel via WebSocket: {}", self.url);
+
+        reporter.record_attempt();
 
         // Configure WebSocket Snowflake
         let config = SnowflakeWsConfig::new(&self.url, self.fingerprint.clone());
@@ -57,6 +60,10 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
                 peer: None,
                 source: std::io::Error::other(e.to_string()).into(),
             })?;
+
+        // The Snowflake stream handles transport + TLS internally
+        reporter.record_tcp_success();
+        reporter.record_tls_finished();
 
         // Parse fingerprint to RSA identity — fail immediately if format is invalid
         let rsa_id = hex::decode(&self.fingerprint)
@@ -140,6 +147,8 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
             cause: Arc::new(e),
         })?;
 
+        reporter.record_handshake_done();
+
         // Explicitly verify the bridge's RSA identity matches our expected fingerprint.
         // The Tor handshake verify() may not enforce RSA identity strictly (ed25519 is
         // primary in modern Tor), so we do our own strict check here.
@@ -173,10 +182,10 @@ impl<R: Runtime> ChannelFactory for SnowflakeChannelFactory<R> {
     async fn connect_via_transport(
         &self,
         target: &OwnedChanTarget,
-        _reporter: BootstrapReporter,
+        reporter: BootstrapReporter,
         memquota: ChannelAccount,
     ) -> tor_chanmgr::Result<Arc<Channel>> {
-        self.build_channel(target, memquota).await
+        self.build_channel(target, &reporter, memquota).await
     }
 }
 

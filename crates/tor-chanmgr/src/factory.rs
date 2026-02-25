@@ -13,14 +13,39 @@ use tracing::{debug, instrument};
 #[cfg(feature = "relay")]
 use {safelog::Sensitive, std::net::IpAddr};
 
-/// An opaque type that lets a `ChannelFactory` update the `ChanMgr` about bootstrap progress.
+/// Lets a [`ChannelFactory`] report bootstrap progress back to the [`ChanMgr`](crate::ChanMgr).
 ///
-/// A future release of this crate might make this type less opaque.
-// FIXME(eta): Do that.
+/// Custom `ChannelFactory` implementations (e.g. pluggable transports) should
+/// call these methods at the appropriate points during channel establishment so
+/// that [`ConnStatus`](crate::ConnStatus) tracks connectivity correctly.
 #[derive(Clone)]
 pub struct BootstrapReporter(pub(crate) Arc<Mutex<ChanMgrEventSender>>);
 
 impl BootstrapReporter {
+    /// Record that a channel-build attempt has started.
+    pub fn record_attempt(&self) {
+        self.0.lock().expect("Lock poisoned").record_attempt();
+    }
+
+    /// Record that we successfully established a transport-level connection
+    /// (TCP, WebSocket, WebRTC, etc.) to a relay.
+    pub fn record_tcp_success(&self) {
+        self.0.lock().expect("Lock poisoned").record_tcp_success();
+    }
+
+    /// Record that we completed a TLS handshake with a relay.
+    pub fn record_tls_finished(&self) {
+        self.0.lock().expect("Lock poisoned").record_tls_finished();
+    }
+
+    /// Record that we completed the full Tor handshake with a relay.
+    pub fn record_handshake_done(&self) {
+        self.0
+            .lock()
+            .expect("Lock poisoned")
+            .record_handshake_done();
+    }
+
     #[cfg(test)]
     /// Create a useless version of this type to satisfy some test.
     pub(crate) fn fake() -> Self {

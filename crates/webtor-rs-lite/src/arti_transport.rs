@@ -106,9 +106,12 @@ impl SnowflakeChannelFactory {
         url: &str,
         fingerprint: &str,
         target: &OwnedChanTarget,
+        reporter: &BootstrapReporter,
         memquota: ChannelAccount,
     ) -> tor_chanmgr::Result<Arc<Channel>> {
         info!("Building Snowflake channel via WebSocket: {}", url);
+
+        reporter.record_attempt();
 
         // Configure WebSocket Snowflake
         let config = SnowflakeWsConfig::new(url, fingerprint.to_string());
@@ -121,6 +124,10 @@ impl SnowflakeChannelFactory {
                 peer: None,
                 source: std::io::Error::other(e.to_string()).into(),
             })?;
+
+        // The Snowflake stream handles transport + TLS internally
+        reporter.record_tcp_success();
+        reporter.record_tls_finished();
 
         // Parse fingerprint to RSA identity — fail immediately if format is invalid
         let rsa_id = hex::decode(fingerprint)
@@ -136,7 +143,7 @@ impl SnowflakeChannelFactory {
             })?;
 
         // Build channel from the stream
-        let chan = self.create_channel_from_stream(stream, Some(rsa_id), target, memquota)
+        let chan = self.create_channel_from_stream(stream, Some(rsa_id), target, reporter, memquota)
             .await?;
 
         // Explicitly verify the bridge's RSA identity matches our expected fingerprint.
@@ -153,12 +160,15 @@ impl SnowflakeChannelFactory {
         broker_url: &str,
         fingerprint: &str,
         target: &OwnedChanTarget,
+        reporter: &BootstrapReporter,
         memquota: ChannelAccount,
     ) -> tor_chanmgr::Result<Arc<Channel>> {
         info!(
             "Building Snowflake channel via WebRTC broker: {}",
             broker_url
         );
+
+        reporter.record_attempt();
 
         // Configure WebRTC Snowflake
         let config = SnowflakeConfig::new(broker_url.to_string(), fingerprint.to_string());
@@ -170,6 +180,10 @@ impl SnowflakeChannelFactory {
             peer: None,
             source: std::io::Error::other(e.to_string()).into(),
         })?;
+
+        // The Snowflake stream handles transport + TLS internally
+        reporter.record_tcp_success();
+        reporter.record_tls_finished();
 
         // Parse fingerprint to RSA identity — fail immediately if format is invalid
         let rsa_id = hex::decode(fingerprint)
@@ -185,7 +199,7 @@ impl SnowflakeChannelFactory {
             })?;
 
         // Build channel from the stream
-        let chan = self.create_channel_from_stream(stream, Some(rsa_id), target, memquota)
+        let chan = self.create_channel_from_stream(stream, Some(rsa_id), target, reporter, memquota)
             .await?;
 
         // Explicitly verify the bridge's RSA identity matches our expected fingerprint.
@@ -202,6 +216,7 @@ impl SnowflakeChannelFactory {
         stream: S,
         rsa_id: Option<RsaIdentity>,
         target: &OwnedChanTarget,
+        reporter: &BootstrapReporter,
         chan_account: ChannelAccount,
     ) -> tor_chanmgr::Result<Arc<Channel>>
     where
@@ -288,6 +303,8 @@ impl SnowflakeChannelFactory {
             let _ = reactor.run().await;
         });
 
+        reporter.record_handshake_done();
+
         Ok(chan)
     }
 }
@@ -297,19 +314,19 @@ impl ChannelFactory for SnowflakeChannelFactory {
     async fn connect_via_transport(
         &self,
         target: &OwnedChanTarget,
-        _reporter: BootstrapReporter,
+        reporter: BootstrapReporter,
         memquota: ChannelAccount,
     ) -> tor_chanmgr::Result<Arc<Channel>> {
         match &self.mode {
             SnowflakeMode::WebSocket { url, fingerprint } => {
-                self.build_ws_channel(url, fingerprint, target, memquota)
+                self.build_ws_channel(url, fingerprint, target, &reporter, memquota)
                     .await
             }
             SnowflakeMode::WebRtc {
                 broker_url,
                 fingerprint,
             } => {
-                self.build_webrtc_channel(broker_url, fingerprint, target, memquota)
+                self.build_webrtc_channel(broker_url, fingerprint, target, &reporter, memquota)
                     .await
             }
         }

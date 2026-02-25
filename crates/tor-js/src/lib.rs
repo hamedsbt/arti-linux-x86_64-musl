@@ -322,6 +322,38 @@ impl TorClient {
         })
     }
 
+    /// Wait until the client is ready for traffic (connection usable + valid directory).
+    #[wasm_bindgen(js_name = ready)]
+    pub fn ready(&self) -> js_sys::Promise {
+        let client = match &self.inner {
+            Some(c) => Arc::clone(c),
+            None => {
+                return wasm_bindgen_futures::future_to_promise(async {
+                    Err(JsTorError::not_initialized().into_js_value())
+                });
+            }
+        };
+
+        wasm_bindgen_futures::future_to_promise(async move {
+            // Fast path: already ready
+            if client.bootstrap_status().ready_for_traffic() {
+                return Ok(JsValue::undefined());
+            }
+
+            // Poll bootstrap events until ready
+            use futures::StreamExt;
+            let mut events = client.bootstrap_events();
+            while let Some(status) = events.next().await {
+                if status.ready_for_traffic() {
+                    return Ok(JsValue::undefined());
+                }
+            }
+
+            // Stream ended without becoming ready
+            Err(JsTorError::bootstrap("Client failed to become ready for traffic").into_js_value())
+        })
+    }
+
     /// Close the TorClient and release resources
     #[wasm_bindgen(js_name = close)]
     pub fn close(&mut self) -> js_sys::Promise {
