@@ -4,6 +4,9 @@
 import { setWasmSourceProvider } from '../../wasm.js';
 import { wasmBase64 } from '#wasm-base64-data';
 
+export { TorClient } from '../../TorClient.js';
+export * from '../../commonExports.js';
+
 setWasmSourceProvider(async () => {
   const binaryString = atob(wasmBase64);
   const bytes = new Uint8Array(binaryString.length);
@@ -12,9 +15,3 @@ setWasmSourceProvider(async () => {
   }
   return bytes;
 });
-
-export { TorClient } from '../../TorClient.js';
-export type { TorClientOptions, FetchInit, TorStorage } from '../../types.js';
-export { Log, type LogLevel } from '../../Log.js';
-export * as storage from '../../storage/index.js';
-export { setWasmUrl } from '../../wasm.js';

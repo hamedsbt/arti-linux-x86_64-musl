@@ -7,6 +7,9 @@
 import { setWasmSourceProvider } from '../../wasm.js';
 import { createAutoStorage } from '../../storage/index.js';
 
+export { TorClient } from '../../TorClient.js';
+export * from '../../commonExports.js';
+
 const CACHE_KEY = 'wasm';
 
 function hexToBytes(hex: string): Uint8Array {
@@ -150,9 +153,3 @@ setWasmSourceProvider(async () => {
 
   throw new Error(`Failed to load WASM from any CDN:\n  ${errors.join('\n  ')}`);
 });
-
-export { TorClient } from '../../TorClient.js';
-export type { TorClientOptions, FetchInit, TorStorage } from '../../types.js';
-export { Log, type LogLevel } from '../../Log.js';
-export * as storage from '../../storage/index.js';
-export { setWasmUrl } from '../../wasm.js';

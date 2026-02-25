@@ -3,6 +3,9 @@
 
 import { setWasmSourceProvider } from '../../wasm.js';
 
+export { TorClient } from '../../TorClient.js';
+export * from '../../commonExports.js';
+
 setWasmSourceProvider(async () => {
   if (typeof process !== 'undefined' && process.versions?.node) {
     const { readFile } = await import('node:fs/promises');
@@ -14,9 +17,3 @@ setWasmSourceProvider(async () => {
   if (!resp.ok) throw new Error(`Failed to fetch WASM: HTTP ${resp.status}`);
   return new Uint8Array(await resp.arrayBuffer());
 });
-
-export { TorClient } from '../../TorClient.js';
-export type { TorClientOptions, FetchInit, TorStorage } from '../../types.js';
-export { Log, type LogLevel } from '../../Log.js';
-export * as storage from '../../storage/index.js';
-export { setWasmUrl } from '../../wasm.js';
