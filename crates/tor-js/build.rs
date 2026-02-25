@@ -59,8 +59,12 @@ fn main() {
     };
     println!("cargo:rustc-env=TOR_JS_GIT_INFO={git_info}");
 
-    println!("cargo:rerun-if-changed=ts-wrapper/package.json");
-    // .git/HEAD changes on branch switch; .git/index changes on every commit/stage
-    println!("cargo:rerun-if-changed=../../.git/HEAD");
-    println!("cargo:rerun-if-changed=../../.git/index");
+    // Always rerun: git dirty status and timestamps are volatile and can't be
+    // tracked by specific files. Pointing at a non-existent path forces Cargo
+    // to always rerun (it sees the dep as perpetually missing/changed).
+    // Note: Just means we rebuild this build.rs - not a full rebuild.
+    println!("cargo:rerun-if-changed=.force-rebuild");
+
+    // Not necessary because we always rerun
+    // println!("cargo:rerun-if-changed=ts-wrapper/package.json");
 }
