@@ -13,7 +13,7 @@ const url = process.argv[2] ?? 'https://check.torproject.org/api/ip';
 console.log(`Fetching ${url} via Tor...`);
 
 tor.configure({
-  snowflakeUrl: 'wss://snowflake.pse.dev/',
+  bridge: 'wss://snowflake.pse.dev/',
   fingerprint: '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194',
   // log: new Log(),
 });

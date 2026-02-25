@@ -4,7 +4,7 @@ import type { TorClientOptions, FetchInit } from './types.js';
 let client: TorClient | undefined;
 
 let config: TorClientOptions = {
-  snowflakeUrl: 'wss://snowflake.torproject.net/',
+  bridge: 'wss://snowflake.torproject.net/',
   fingerprint: '2B280B23E1107BB62ABFC40DDCC8824814F80A72',
 };
 

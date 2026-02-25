@@ -8,6 +8,7 @@ import {
 import type { TorClientOptions, FetchInit, LogLevel } from './types.js';
 import { Log } from './Log.js';
 import { createAutoStorage } from './storage/index.js';
+import { never } from './helpers.js';
 
 export class TorClient {
   private log: Log;
@@ -29,13 +30,14 @@ export class TorClient {
     this.wasmCallback = this.log._makeWasmCallback();
     this.removeLogListener = addLogListener(this.wasmCallback, options.logLevel);
 
-    // Create WASM options
+    // Create WASM options — infer transport mode from which URL field is set
     let wasmOptions: WasmTorClientOptions;
-    if (options.mode === 'webrtc') {
-      if (!options.brokerUrl) throw new Error('brokerUrl is required for webrtc mode');
-      wasmOptions = WasmTorClientOptions.snowflakeWebRtc(options.brokerUrl, options.fingerprint);
+    if ('bridge' in options) {
+      wasmOptions = new WasmTorClientOptions(options.bridge, options.fingerprint);
+    } else if ('broker' in options) {
+      wasmOptions = WasmTorClientOptions.snowflakeWebRtc(options.broker, options.fingerprint);
     } else {
-      wasmOptions = new WasmTorClientOptions(options.snowflakeUrl, options.fingerprint);
+      never(options);
     }
 
     wasmOptions = wasmOptions.withStorage(options.storage ?? createAutoStorage());

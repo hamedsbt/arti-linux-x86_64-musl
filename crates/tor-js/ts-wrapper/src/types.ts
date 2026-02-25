@@ -3,25 +3,23 @@ import type { TorStorage } from '#wasm';
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 
-export interface TorClientOptions {
-  /** Snowflake WebSocket bridge URL (e.g., "wss://snowflake.pse.dev/"). Used in 'websocket' mode. */
-  snowflakeUrl: string;
-
-  /** Bridge fingerprint for identity verification (40-char hex string). */
+/**
+ * Options for creating a TorClient.
+ *
+ * Provide exactly one of `bridge` (WebSocket mode) or `broker` (WebRTC mode).
+ * The transport mode is inferred from which field is set.
+ */
+export type TorClientOptions = (
+  {
+    /** Snowflake WebSocket bridge URL (e.g., `"wss://snowflake.torproject.net/"`). */
+    bridge: string;
+  } | {
+    /** Snowflake broker URL for WebRTC mode (e.g., `"https://snowflake-broker.torproject.net/"`). */
+    broker: string;
+  }
+) & {
+  /** Bridge fingerprint for identity verification (40-char hex string, e.g., `"2B280B23E1107BB62ABFC40DDCC8824814F80A72"`). */
   fingerprint: string;
-
-  /**
-   * Transport mode: 'websocket' (default) or 'webrtc'.
-   * When 'websocket', uses snowflakeUrl to connect directly to the bridge.
-   * When 'webrtc', uses brokerUrl (or the default Tor Project broker) for signaling.
-   */
-  mode?: 'websocket' | 'webrtc';
-
-  /**
-   * Snowflake broker URL for WebRTC mode (e.g., "https://snowflake-broker.torproject.net/").
-   * Only used when mode is 'webrtc'. Defaults to the Tor Project's broker if omitted.
-   */
-  brokerUrl?: string;
 
   /**
    * Optional logger instance.
@@ -41,14 +39,7 @@ export interface TorClientOptions {
    * The WASM subscriber auto-widens to the broadest level across all clients.
    */
   logLevel?: LogLevel;
-
-  // Accepted for API compatibility with original tor-js, silently ignored
-  // (arti manages these internally):
-  connectionTimeout?: number;
-  circuitTimeout?: number;
-  circuitBuffer?: number;
-  maxCircuitLifetime?: number;
-}
+};
 
 export type { TorStorage } from '#wasm';
 

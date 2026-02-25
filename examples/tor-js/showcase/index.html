@@ -1006,10 +1006,10 @@
                 try {
                     const startTime = performance.now();
                     torClient = new TorClient({
-                        snowflakeUrl: bridgeUrlSelect.value,
+                        ...(useWebRtc
+                            ? { broker: brokerUrlInput.value.trim() }
+                            : { bridge: bridgeUrlSelect.value }),
                         fingerprint,
-                        mode: useWebRtc ? 'webrtc' : 'websocket',
-                        brokerUrl: useWebRtc ? brokerUrlInput.value.trim() : undefined,
                         log,
                         logLevel: logLevelSelect.value,
                     });
