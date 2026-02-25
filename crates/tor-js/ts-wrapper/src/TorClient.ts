@@ -30,6 +30,14 @@ export class TorClient {
     this.wasmCallback = this.log._makeWasmCallback();
     this.removeLogListener = addLogListener(this.wasmCallback, options.logLevel);
 
+    // Validate required options (types enforce this at compile time, but JS callers may not)
+    if (!('bridge' in options) && !('broker' in options)) {
+      throw new Error('TorClientOptions requires either "bridge" (WebSocket URL) or "broker" (WebRTC broker URL)');
+    }
+    if (!options.fingerprint) {
+      throw new Error('TorClientOptions requires "fingerprint" (40-char hex bridge fingerprint)');
+    }
+
     // Create WASM options — infer transport mode from which URL field is set
     let wasmOptions: WasmTorClientOptions;
     if ('bridge' in options) {

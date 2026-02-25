@@ -44,7 +44,7 @@
 - [x] Fix wasm-base64 (should be self-contained, but requires `<script type="importmap">` in showcase index.html)
 - [x] Fix slow js storage startup (loading '000s items into memory - fix with parallelism or chunked storage of microdescs)
 - [x] Symbol dispose polyfill
-- [ ] Fail more helpfully when required TorClient options are missing
+- [x] Fail more helpfully when required TorClient options are missing
 - [ ] Fail fast when websocket does not connect
 - [ ] Fix wasm-file fallback - throw if wasm source isn't configured
 - [ ] Make ready() more meaningful/strict - need guard connection + usable consensus + sufficient microdescs
