@@ -150,6 +150,12 @@ impl KeyValueStore for FileStore {
         *self.locked.write().map_err(|e| e.to_string())? = false;
         Ok(())
     }
+
+    fn wait_for_unlock(
+        &self,
+    ) -> std::pin::Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>> {
+        Box::pin(futures::future::ready(()))
+    }
 }
 
 #[tokio::main]

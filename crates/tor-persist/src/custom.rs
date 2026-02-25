@@ -9,6 +9,7 @@ use crate::{Error, ErrorSource, LockStatus, Result, StateMgr};
 #[cfg(not(target_arch = "wasm32"))]
 use futures::future::Either;
 use serde::{de::DeserializeOwned, Serialize};
+use std::pin::Pin;
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -69,6 +70,13 @@ pub trait StringStore: Send + Sync {
 
     /// Release the lock.
     fn unlock(&self) -> Result<()>;
+
+    /// Return a future that resolves when this store is dropped/unlocked.
+    ///
+    /// Callers use this to wait until exclusive access becomes available.
+    fn wait_for_unlock(
+        &self,
+    ) -> Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>>;
 }
 
 /// A state manager that dispatches between the native filesystem backend
@@ -121,25 +129,27 @@ impl AnyStateMgr {
     /// Return a future that resolves when this manager is dropped/unlocked.
     ///
     /// For filesystem-backed managers, this waits for the lock file to be released.
-    /// For custom backends, this resolves immediately. FIXME: Seems wrong.
+    /// For custom backends, this defers to [`StringStore::wait_for_unlock`].
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait_for_unlock(
         &self,
     ) -> impl futures::Future<Output = ()> + Send + Sync + 'static {
         match self {
             Self::Fs(fs) => Either::Left(fs.wait_for_unlock()),
-            Self::Custom(_) => Either::Right(futures::future::ready(())),
+            Self::Custom(s) => Either::Right(s.wait_for_unlock()),
         }
     }
 
     /// Return a future that resolves when this manager is dropped/unlocked.
     ///
-    /// On WASM, only custom backends are available, and they resolve immediately.
+    /// Defers to [`StringStore::wait_for_unlock`].
     #[cfg(target_arch = "wasm32")]
     pub fn wait_for_unlock(
         &self,
     ) -> impl futures::Future<Output = ()> + Send + Sync + 'static {
-        futures::future::ready(())
+        match self {
+            Self::Custom(s) => s.wait_for_unlock(),
+        }
     }
 
     /// Helper to create an error for a given key and action.
@@ -278,6 +288,12 @@ mod tests {
         fn unlock(&self) -> Result<()> {
             *self.locked.write().unwrap() = false;
             Ok(())
+        }
+
+        fn wait_for_unlock(
+            &self,
+        ) -> Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>> {
+            Box::pin(futures::future::ready(()))
         }
     }
 

@@ -11,8 +11,10 @@
 //! [`KeyValueStore`]: arti_client::storage::KeyValueStore
 
 use arti_client::storage::{KeyValueStore, StorageError};
+use futures::FutureExt as _;
 use js_sys::Promise;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -201,6 +203,10 @@ pub struct CachedJsStorage {
     cache: Arc<RwLock<HashMap<String, String>>>,
     /// Whether we currently hold the write lock.
     locked: Arc<RwLock<bool>>,
+    /// Fires after the JS lock is released in `Drop`. `Option` so `Drop` can take it.
+    drop_tx: Option<futures::channel::oneshot::Sender<()>>,
+    /// Cloneable handle that resolves when the JS lock is released.
+    drop_rx: futures::future::Shared<futures::channel::oneshot::Receiver<()>>,
 }
 
 // SAFETY: WASM is single-threaded, so it's safe to send CachedJsStorage between "threads"
@@ -242,10 +248,14 @@ impl CachedJsStorage {
             ))
         })?;
 
+        let (drop_tx, drop_rx) = futures::channel::oneshot::channel();
+        let drop_rx = drop_rx.shared();
         let storage = Self {
             js_storage,
             cache: Arc::new(RwLock::new(HashMap::new())),
             locked: Arc::new(RwLock::new(true)),
+            drop_tx: Some(drop_tx),
+            drop_rx,
         };
 
         storage.preload_all().await?;
@@ -293,6 +303,20 @@ impl CachedJsStorage {
             if let Err(e) = js_storage.delete(&key).await {
                 tracing::warn!("CachedJsStorage: failed to delete key {}: {:?}", key, e);
             }
+        });
+    }
+}
+
+impl Drop for CachedJsStorage {
+    fn drop(&mut self) {
+        let js_storage = self.js_storage.clone();
+        let drop_tx = self.drop_tx.take();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(e) = js_storage.unlock().await {
+                tracing::warn!("CachedJsStorage: failed to release JS lock on drop: {:?}", e);
+            }
+            // Signal waiters *after* the JS lock is released.
+            drop(drop_tx);
         });
     }
 }
@@ -376,5 +400,11 @@ impl KeyValueStore for CachedJsStorage {
             .map_err(|_| -> StorageError { "lock state poisoned".into() })?;
         *locked = false;
         Ok(())
+    }
+
+    fn wait_for_unlock(
+        &self,
+    ) -> Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>> {
+        Box::pin(self.drop_rx.clone().map(|_| ()))
     }
 }

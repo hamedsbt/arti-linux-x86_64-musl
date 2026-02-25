@@ -27,6 +27,7 @@
 //!     .await?;
 //! ```
 
+use std::pin::Pin;
 use std::sync::Arc;
 use tor_dirmgr::CustomDirStore;
 use tor_persist::{LockStatus, StringStore};
@@ -70,6 +71,13 @@ pub trait KeyValueStore: Send + Sync {
 
     /// Release the write lock.
     fn unlock(&self) -> Result<(), StorageError>;
+
+    /// Return a future that resolves when this store is dropped/unlocked.
+    ///
+    /// Callers use this to wait until exclusive access becomes available.
+    fn wait_for_unlock(
+        &self,
+    ) -> Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>>;
 }
 
 /// Split a single [`KeyValueStore`] into both a state manager and a directory store.
@@ -143,6 +151,12 @@ impl StringStore for KvStateAdapter {
         self.store
             .unlock()
             .map_err(|e| tor_persist::Error::unlock_error(std::io::Error::other(e)))
+    }
+
+    fn wait_for_unlock(
+        &self,
+    ) -> Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>> {
+        self.store.wait_for_unlock()
     }
 }
 
@@ -282,6 +296,12 @@ mod tests {
         fn unlock(&self) -> Result<(), StorageError> {
             *self.locked.write().unwrap() = false;
             Ok(())
+        }
+
+        fn wait_for_unlock(
+            &self,
+        ) -> Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>> {
+            Box::pin(futures::future::ready(()))
         }
     }
 

@@ -2153,14 +2153,15 @@ impl<R: Runtime> TorClient<R> {
     /// Return a [`Future`] which resolves
     /// once this TorClient has stopped.
     ///
-    /// On WASM, custom backends have no filesystem lock, so this resolves immediately.
-    /// FIXME: Wrong. JS needs proper locking.
+    /// Defers to the custom storage backend's [`StringStore::wait_for_unlock`].
+    ///
+    /// [`StringStore::wait_for_unlock`]: tor_persist::StringStore::wait_for_unlock
     #[cfg(feature = "experimental-api")]
     #[cfg(target_arch = "wasm32")]
     pub fn wait_for_stop(
         &self,
-    ) -> impl futures::Future<Output = ()> + Send + Sync + 'static + use<R> {
-        futures::future::ready(())
+    ) -> impl futures::Future<Output = ()> + Send + Sync + 'static + use<'_, R> {
+        self.statemgr.wait_for_unlock()
     }
 
     /// Getter for keymgr.

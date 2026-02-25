@@ -48,7 +48,7 @@
 - [ ] Fail fast when websocket does not connect
 - [ ] Fix wasm-file fallback - throw if wasm source isn't configured
 - [ ] Make ready() more meaningful/strict - need guard connection + usable consensus + sufficient microdescs
-- [ ] Fix stubbed wait_for_unlock in custom storage (and any/all associated TODO/FIXME)
+- [x] Fix stubbed wait_for_unlock in custom storage (and any/all associated TODO/FIXME)
 - [ ] Remove completed TODO/FIXME
 - [ ] Code review
 - [ ] Merge
