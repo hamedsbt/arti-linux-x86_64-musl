@@ -26,8 +26,9 @@ export interface TorClientOptions {
   /**
    * Optional logger instance.
    * Note: WASM logging is global, so all TorClient instances receive all WASM
-   * log events, not just their own.
-   * TODO: Link wasm-bindgen github issue(s).
+   * log events, not just their own. This is because wasm-bindgen generates a
+   * single module-level instance (`let wasm;`), so all Rust global state
+   * (including the tracing subscriber) is shared.
    */
   log?: Log;
 
