@@ -383,6 +383,7 @@ dependencies = [
  "tor-relay-selection",
  "tor-rpcbase",
  "tor-rtcompat",
+ "tor-snowflake",
  "tor-time",
  "tracing",
  "tracing-subscriber",
@@ -392,7 +393,6 @@ dependencies = [
  "void",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "webtor-rs-lite",
 ]
 
 [[package]]
@@ -7448,6 +7448,7 @@ dependencies = [
  "tor-dirmgr",
  "tor-persist",
  "tor-rtcompat",
+ "tor-snowflake",
  "tracing",
  "tracing-subscriber",
  "tracing-wasm",
@@ -7458,7 +7459,6 @@ dependencies = [
  "wasm-streams",
  "web-sys",
  "webpki-roots 1.0.5",
- "webtor-rs-lite",
 ]
 
 [[package]]
@@ -8068,6 +8068,49 @@ dependencies = [
  "tracing",
  "tracing-test",
  "void",
+]
+
+[[package]]
+name = "tor-snowflake"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "futures-rustls",
+ "gloo-timers",
+ "hex",
+ "js-sys",
+ "kcp",
+ "rand 0.9.2",
+ "rustls",
+ "rustls-pki-types",
+ "rustls-rustcrypto",
+ "rustls-webpki 0.103.9",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tor-async-compat",
+ "tor-async-utils",
+ "tor-basic-utils",
+ "tor-chanmgr",
+ "tor-error",
+ "tor-linkspec",
+ "tor-llcrypto",
+ "tor-memquota",
+ "tor-netdoc",
+ "tor-proto",
+ "tor-rtcompat",
+ "tor-time",
+ "tracing",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -8834,49 +8877,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12bed680863276c63889429bfd6cab3b99943659923822de1c8a39c49e4d722c"
 dependencies = [
  "rustls-pki-types",
-]
-
-[[package]]
-name = "webtor-rs-lite"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "futures",
- "futures-rustls",
- "gloo-timers",
- "hex",
- "js-sys",
- "kcp",
- "rand 0.9.2",
- "rustls",
- "rustls-pki-types",
- "rustls-rustcrypto",
- "rustls-webpki 0.103.9",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tokio-rustls",
- "tokio-tungstenite",
- "tokio-util",
- "tor-async-compat",
- "tor-async-utils",
- "tor-basic-utils",
- "tor-chanmgr",
- "tor-error",
- "tor-linkspec",
- "tor-llcrypto",
- "tor-memquota",
- "tor-netdoc",
- "tor-proto",
- "tor-rtcompat",
- "tor-time",
- "tracing",
- "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]

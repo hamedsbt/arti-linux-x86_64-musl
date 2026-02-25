@@ -200,8 +200,8 @@ impl RetryPolicy {
 ///
 /// # Example
 /// ```no_run
-/// use webtor_rs_lite::error::{TorError, Result};
-/// use webtor_rs_lite::retry::{retry_with_backoff, RetryPolicy};
+/// use tor_snowflake::error::{TorError, Result};
+/// use tor_snowflake::retry::{retry_with_backoff, RetryPolicy};
 ///
 /// async fn example() -> Result<String> {
 ///     retry_with_backoff(
@@ -302,8 +302,8 @@ pub async fn sleep(duration: Duration) {
 ///
 /// # Example
 /// ```no_run
-/// use webtor_rs_lite::error::Result;
-/// use webtor_rs_lite::retry::with_timeout;
+/// use tor_snowflake::error::Result;
+/// use tor_snowflake::retry::with_timeout;
 /// use std::time::Duration;
 ///
 /// async fn example() -> Result<String> {
@@ -357,8 +357,8 @@ where
 ///
 /// # Example
 /// ```no_run
-/// use webtor_rs_lite::error::Result;
-/// use webtor_rs_lite::retry::{with_cancellation, CancellationToken};
+/// use tor_snowflake::error::Result;
+/// use tor_snowflake::retry::{with_cancellation, CancellationToken};
 ///
 /// async fn example() -> Result<String> {
 ///     let token = CancellationToken::new();

@@ -50,7 +50,7 @@
 - [x] Make ready() more meaningful/strict - need guard connection + usable consensus + sufficient microdescs
 - [x] Fix stubbed wait_for_unlock in custom storage (and any/all associated TODO/FIXME)
 - [x] Remove completed TODO/FIXME
-- [ ] Rename webtor-rs-lite
+- [x] Rename webtor-rs-lite → tor-snowflake
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm

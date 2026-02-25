@@ -198,7 +198,7 @@ scripts/tor-js/build.sh --release
 
 tor-js wraps [arti-client](https://gitlab.torproject.org/tpo/core/arti) (the official Tor implementation in Rust) with:
 
-- **Snowflake transport** via [webtor-rs-lite](../webtor-rs-lite) - pluggable transport for censorship circumvention
+- **Snowflake transport** via [tor-snowflake](../tor-snowflake) - pluggable transport for censorship circumvention
 - **TLS 1.3** via [subtle-tls](../subtle-tls) - pure Rust/WASM TLS using WebCrypto
 - **WASM runtime** via [tor-rtcompat](../tor-rtcompat) - async runtime for WebAssembly
 

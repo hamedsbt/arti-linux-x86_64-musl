@@ -6,7 +6,7 @@
 ## Overview
 
 This branch adds WebAssembly/browser support to the Arti Tor client. Major new
-crates: `tor-js` (WASM bindings), `webtor-rs-lite` (Snowflake transport),
+crates: `tor-js` (WASM bindings), `tor-snowflake` (Snowflake transport),
 `tor-wasm-compat` (async trait compat), `tor-time` (cross-platform time).
 Extensive modifications to core Arti crates for WASM compatibility. Traffic
 routes through Snowflake pluggable transports (WebRTC or WebSocket), uses
@@ -73,7 +73,7 @@ exercised by the test suite, which only tests the batch path.
 
 ### M1. SMUX keepalive interval 500ms (comment says 5 seconds)
 
-`crates/webtor-rs-lite/src/smux.rs:239-240`
+`crates/tor-snowflake/src/smux.rs:239-240`
 
 The constant is `500` (ms) but the comment says "send NOP every 5 seconds".
 The Go Snowflake client uses 10 seconds. This is 20x too aggressive, wasting
@@ -81,7 +81,7 @@ bandwidth over Tor.
 
 ### M2. SMUX NOP echo creates ping-pong risk
 
-`crates/webtor-rs-lite/src/smux.rs:469-477`
+`crates/tor-snowflake/src/smux.rs:469-477`
 
 Received NOPs are echoed back. The Go Snowflake implementation does NOT echo
 NOPs. If the server also echoes, this creates unbounded network traffic.
@@ -137,14 +137,14 @@ Justified for single-threaded WASM but will become unsound if WASM threads
 
 ### M9. WASM `Instant::now()` panics if `performance` API unavailable
 
-`crates/webtor-rs-lite/src/time.rs:16`
+`crates/tor-snowflake/src/time.rs:16`
 
 `unwrap()` on `performance` access. In environments without the Performance API
 (some Web Workers, non-browser WASM hosts), every `Instant::now()` call panics.
 
 ### M10. No timeout on native broker HTTP request
 
-`crates/webtor-rs-lite/src/snowflake_broker.rs:293-362`
+`crates/tor-snowflake/src/snowflake_broker.rs:293-362`
 
 No timeout on `TcpStream::connect` or `tls_stream.read_to_end`. A
 non-responsive broker hangs the client indefinitely.
@@ -185,14 +185,14 @@ line.
 
 ### L1. SMUX payload truncation
 
-`crates/webtor-rs-lite/src/smux.rs:125`
+`crates/tor-snowflake/src/smux.rs:125`
 
 Payload length encoded as `u16` — data > 65535 bytes silently truncates. No
 runtime guard.
 
 ### L2. Unbounded channels in WebSocket/WebRTC
 
-`crates/webtor-rs-lite/src/websocket.rs:40` and `webrtc_stream.rs:92`
+`crates/tor-snowflake/src/websocket.rs:40` and `webrtc_stream.rs:92`
 
 `mpsc::unbounded()` for incoming data with no backpressure at this layer.
 
@@ -203,7 +203,7 @@ runtime guard.
 
 ### L4. `create_snowflake_stream` ignores its parameters
 
-`crates/webtor-rs-lite/src/snowflake.rs:326-333`
+`crates/tor-snowflake/src/snowflake.rs:326-333`
 
 Both `broker_url` and `connection_timeout` are accepted but ignored. A separate
 `create_snowflake_stream_with_config()` exists for full configuration.
@@ -217,8 +217,8 @@ returns `INVALID_METHOD`.
 
 ### L6. `#[allow(dead_code)]` on multiple struct fields
 
-- `webtor-rs-lite/src/kcp_stream.rs:108-114`
-- `webtor-rs-lite/src/webrtc_stream.rs:57,63-68`
+- `tor-snowflake/src/kcp_stream.rs:108-114`
+- `tor-snowflake/src/webrtc_stream.rs:57,63-68`
 
 ### L7. `Blocking` trait panics on WASM
 
@@ -236,7 +236,7 @@ diverges from persistent storage. Errors are only logged.
 
 ### L9. Bridge fingerprint logged at INFO level
 
-`crates/webtor-rs-lite/src/snowflake.rs:125`, `snowflake_ws.rs:102`,
+`crates/tor-snowflake/src/snowflake.rs:125`, `snowflake_ws.rs:102`,
 `tor-js/src/lib.rs:321`
 
 In contexts where the bridge is private or unlisted, this leaks which bridge the
@@ -247,7 +247,7 @@ user is connecting to.
 ## Testing Gaps
 
 1. **Production streaming download path** (`#[cfg(not(test))]`) never tested
-2. **No unit tests for webtor-rs-lite** — entire crate has zero `#[test]`
+2. **No unit tests for tor-snowflake** — entire crate has zero `#[test]`
    functions
 
 ---
@@ -259,7 +259,7 @@ user is connecting to.
 - `wasm_compat::Send` pattern for removing `Send` bounds on WASM is elegant
 - Good error types in tor-js with retryability info
 - `unsafe impl Send/Sync` for WASM types are correctly justified (single-threaded)
-- Extensive fuzz testing in webtor-rs-lite
+- Extensive fuzz testing in tor-snowflake
 - Clean `tor-time` crate consolidating cross-platform time handling
 - `portable_test` / `portable_test_async` macros enable cross-platform test authoring
 - TLS handled by well-audited `rustls` library rather than custom implementation

@@ -1,10 +1,9 @@
 [package]
-name = "webtor-rs-lite"
+name = "tor-snowflake"
 version = "0.1.0"
 edition = "2021"
-authors = ["Webtor Contributors"]
 license = "MIT"
-description = "Lightweight Snowflake transport for arti-client integration"
+description = "Snowflake pluggable transport for Arti"
 keywords = ["tor", "arti", "snowflake", "transport"]
 categories = ["network-programming"]
 repository = "https://gitlab.torproject.org/tpo/core/arti.git/"

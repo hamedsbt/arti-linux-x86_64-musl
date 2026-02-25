@@ -1,7 +1,7 @@
-//! Webtor-rs-lite - Lightweight Snowflake transport for arti-client integration
+//! Snowflake pluggable transport for Arti.
 //!
-//! This crate provides the minimal Snowflake WebSocket transport stack needed
-//! for arti-client integration, without the full webtor-rs Tor client.
+//! Implements a Snowflake client that works on both native platforms and WASM,
+//! enabling Tor connections through Snowflake proxies for censorship circumvention.
 
 #![allow(clippy::result_large_err)] // temporary workaround for arti#587
 

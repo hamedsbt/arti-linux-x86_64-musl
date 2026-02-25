@@ -51,7 +51,7 @@ use tracing::{debug, info, error};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use wasm_bindgen::prelude::*;
-use webtor_rs_lite::arti_transport::{SnowflakeMode, SnowflakePtMgr};
+use tor_snowflake::arti_transport::{SnowflakeMode, SnowflakePtMgr};
 
 // Global log callback (WASM is single-threaded, so thread_local is fine)
 thread_local! {
@@ -370,7 +370,7 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
     debug!("tor-js {} (git: {})", env!("TOR_JS_VERSION"), env!("TOR_JS_GIT_INFO"));
     info!("Creating TorClient with arti-client...");
 
-    // 1. Create Snowflake PT manager from webtor-rs-lite
+    // 1. Create Snowflake PT manager from tor-snowflake
     // Extract fingerprint before moving mode into SnowflakePtMgr.
     let bridge_fingerprint = match &options.mode {
         SnowflakeMode::WebSocket { fingerprint, .. } => fingerprint.clone(),

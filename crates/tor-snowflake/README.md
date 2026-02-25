@@ -1,6 +1,6 @@
-# webtor-rs-lite
+# tor-snowflake
 
-Snowflake transport for arti-client integration.
+Snowflake pluggable transport for Arti.
 
 ## Overview
 
