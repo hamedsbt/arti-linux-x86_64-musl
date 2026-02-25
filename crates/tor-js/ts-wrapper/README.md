@@ -169,6 +169,14 @@ Known public Snowflake bridges:
 
 The pse.dev bridge accepts both browser and Node.js connections. The torproject.net bridge may reject non-browser connections.
 
+## Broker
+
+For WebRTC mode, use the Snowflake broker instead of a direct WebSocket bridge:
+
+| Broker | URL | Fingerprint |
+|---|---|---|
+| torproject.net | `https://snowflake-broker.torproject.net/` | `2B280B23E1107BB62ABFC40DDCC8824814F80A72` |
+
 ## License
 
 MIT OR Apache-2.0
