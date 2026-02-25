@@ -2,6 +2,7 @@ import type { TorStorage } from '#wasm';
 
 export class MemoryStorage implements TorStorage {
   private data = new Map<string, string>();
+  private locked = false;
 
   async get(key: string): Promise<string | null> {
     return this.data.get(key) ?? null;
@@ -30,8 +31,12 @@ export class MemoryStorage implements TorStorage {
   }
 
   async tryLock(): Promise<boolean> {
+    if (this.locked) return false;
+    this.locked = true;
     return true;
   }
 
-  async unlock(): Promise<void> {}
+  async unlock(): Promise<void> {
+    this.locked = false;
+  }
 }

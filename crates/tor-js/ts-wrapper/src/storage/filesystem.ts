@@ -1,4 +1,4 @@
-import type { TorStorage } from '#wasm';
+import type { TorStorageSimple } from './locking.js';
 import { getNodeDeps } from './node-deps.js';
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {
@@ -64,7 +64,7 @@ function unmangleKey(filename: string): string {
   return result;
 }
 
-export class FilesystemStorage implements TorStorage {
+export class FilesystemStorage implements TorStorageSimple {
   private dirPath: string | null;
   private name: string | null;
   private resolvedDirPath: string | null = null;
@@ -168,12 +168,4 @@ export class FilesystemStorage implements TorStorage {
       throw err;
     }
   }
-
-  // FIXME: Stub — use a lock file (e.g. proper-lockfile) for real
-  // cross-process locking on the filesystem storage directory.
-  async tryLock(): Promise<boolean> {
-    return true;
-  }
-
-  async unlock(): Promise<void> {}
 }

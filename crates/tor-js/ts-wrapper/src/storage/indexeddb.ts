@@ -1,6 +1,6 @@
-import type { TorStorage } from '#wasm';
+import type { TorStorageSimple } from './locking.js';
 
-export class IndexedDBStorage implements TorStorage {
+export class IndexedDBStorage implements TorStorageSimple {
   private dbName: string;
   private storeName = 'keyvalue';
   private dbPromise: Promise<IDBDatabase> | null = null;
@@ -96,10 +96,4 @@ export class IndexedDBStorage implements TorStorage {
       };
     });
   }
-
-  async tryLock(): Promise<boolean> {
-    return true;
-  }
-
-  async unlock(): Promise<void> {}
 }

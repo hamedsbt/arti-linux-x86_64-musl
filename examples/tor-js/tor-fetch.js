@@ -22,8 +22,8 @@ async function main() {
   const startTime = performance.now();
 
   const client = new TorClient({
-    snowflakeUrl: 'wss://snowflake.torproject.net/',
-    fingerprint: '2B280B23E1107BB62ABFC40DDCC8824814F80A72',
+    snowflakeUrl: 'wss://snowflake.pse.dev/',
+    fingerprint: '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194',
     log,
   });
 

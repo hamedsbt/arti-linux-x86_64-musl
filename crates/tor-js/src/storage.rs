@@ -192,10 +192,8 @@ impl JsStorage {
 /// we can't cycle locks at runtime. The JS lock is acquired once in [`new()`]
 /// and never released (until the tab/worker closes).
 ///
-/// TODO: Consider making the lock trait methods async to enable true cross-tab
-/// lock cycling, or specialize on cache-only storage where locking isn't
-/// needed — just serve whatever cached data is available without requiring
-/// exclusive write access.
+/// This is eased in JS by using an in-memory overlay when needed so locks can
+/// always be granted. See addLocking.
 pub struct CachedJsStorage {
     /// The underlying JS storage (for async write-back).
     js_storage: JsStorage,
@@ -354,10 +352,6 @@ impl KeyValueStore for CachedJsStorage {
         // The JS-side lock is acquired once in CachedJsStorage::new() and held
         // for the client's lifetime. These sync methods only track local state
         // for arti's internal lock protocol — no JS calls are made here.
-        //
-        // TODO: Consider option B (async lock trait methods) to enable true
-        // cross-tab lock cycling, or specialize on cache-only storage where
-        // locking isn't needed — just serve whatever data is available.
         let mut locked = self
             .locked
             .write()

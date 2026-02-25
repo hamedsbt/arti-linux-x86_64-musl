@@ -678,11 +678,12 @@ const TS_TYPES: &str = r#"
  *   async keys(prefix: string): Promise<string[]> {
  *     // List keys matching prefix
  *   }
- *   // FIXME: Use the Web Locks API for real cross-tab locking:
- *   //   await navigator.locks.request('tor-storage', {ifAvailable: true}, ...)
- *   // These stubs always succeed, which is fine for single-tab use.
  *   async tryLock(): Promise<boolean> {
- *     return true;
+ *     // addLocking is available in tor-js to solve locking with in-memory
+ *     // overlay
+ *     // true:   newly acquired
+ *     // false:  already held
+ *     // reject: couldn't lock
  *   }
  *   async unlock(): Promise<void> {
  *   }
@@ -700,6 +701,13 @@ export interface TorStorage {
      * @returns The stored value as a string, or null if not found
      */
     get(key: string): Promise<string | null>;
+
+    /**
+     * Get all key-value pairs matching a prefix.
+     * @param prefix - The key prefix to match
+     * @returns Array of [key, value] pairs
+     */
+    getAll(prefix: string): Promise<[string, string][]>;
 
     /**
      * Set a value by key.

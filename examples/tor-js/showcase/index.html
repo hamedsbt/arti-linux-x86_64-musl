@@ -1011,7 +1011,6 @@
                         mode: useWebRtc ? 'webrtc' : 'websocket',
                         brokerUrl: useWebRtc ? brokerUrlInput.value.trim() : undefined,
                         log,
-                        storage: new storage.IndexedDBStorage(),
                         logLevel: logLevelSelect.value,
                     });
                     await torClient.ready();

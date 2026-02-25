@@ -29,7 +29,7 @@
   - [x] 606f3ab63
   - [ ] (Probably needed again later)
 - [x] Fix/deprioritize TODO/FIXMEs added
-- [ ] Implement/fix missing storage locking in JS
+- [x] Implement/fix missing storage locking in JS
 - [x] Provide tiny module variant via hash-checked download
   - jsdelivr/unpkg/githubusercontent
 - [x] WebRTC demo
@@ -46,6 +46,8 @@
 - [x] Symbol dispose polyfill
 - [ ] Fail more helpfully when required TorClient options are missing
 - [ ] Fail fast when websocket does not connect
+- [ ] Fix wasm-file fallback - throw if wasm source isn't configured
+- [ ] Make ready() more meaningful/strict - need guard connection + usable consensus + sufficient microdescs
 - [ ] Code review
 - [ ] Merge
 - [ ] Publish on npm
@@ -62,3 +64,6 @@
   - [ ] Downloads unblocked by ping loop
 - [ ] Fix tor-fetch.js slow exit (prints response and hangs for a long time)
 - [ ] Fix slow-ish js storage startup (much improved, but still 0.5-1s due to '000s of files/indexeddb entries)
+- [ ] Add event IDs to logging (or just write proposal?)
+  - Hard to debug logs without seeing what triggered them
+  - When requests stall/fail, want to see all logs related to that request
