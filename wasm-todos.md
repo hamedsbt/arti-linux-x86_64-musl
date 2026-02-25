@@ -46,7 +46,7 @@
 - [x] Symbol dispose polyfill
 - [x] Fail more helpfully when required TorClient options are missing
 - [ ] Fail fast when websocket does not connect
-- [ ] Fix wasm-file fallback - throw if wasm source isn't configured
+- [x] Fix wasm-file fallback - throw if wasm source isn't configured
 - [ ] Make ready() more meaningful/strict - need guard connection + usable consensus + sufficient microdescs
 - [x] Fix stubbed wait_for_unlock in custom storage (and any/all associated TODO/FIXME)
 - [x] Remove completed TODO/FIXME

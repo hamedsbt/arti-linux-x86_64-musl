@@ -114,16 +114,12 @@ async function doInit(): Promise<void> {
     await initWasm({ module_or_path: customWasmUrl });
   } else if (wasmSourceProvider) {
     await initWasm({ module_or_path: await wasmSourceProvider() });
-  } else if (typeof process !== 'undefined' && process.versions?.node) {
-    // Node.js: read WASM binary from filesystem
-    const { readFile } = await import('node:fs/promises');
-    const { fileURLToPath } = await import('node:url');
-    const wasmPath = fileURLToPath(new URL('./tor_js_bg.wasm', import.meta.url));
-    const bytes = await readFile(wasmPath);
-    await initWasm({ module_or_path: bytes });
   } else {
-    // Browser: use URL relative to this module
-    await initWasm({ module_or_path: new URL('./tor_js_bg.wasm', import.meta.url) });
+    throw new Error(
+      'No WASM source configured. Import from a specific entry point '
+      + '(tor-js/wasm-base64, tor-js/wasm-cdn, or tor-js/wasm-file) '
+      + 'or call setWasmUrl() before creating a TorClient.',
+    );
   }
   wasmInit();
 
