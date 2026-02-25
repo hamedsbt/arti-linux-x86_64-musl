@@ -38,7 +38,7 @@
 - [x] Fix sourcemaps
 - [x] Check npm pack content
 - [x] Add singleton entry points
-- [ ] README for npm package
+- [x] README for npm package
 - [x] Check incremental build logic in tor-js (rerun-if-changed prevents ordinary cache invalidation? intent was to build only more often, never skip)
 - [x] Confirm trace logging works in js
 - [x] Fix wasm-base64 (should be self-contained, but requires `<script type="importmap">` in showcase index.html)
