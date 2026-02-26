@@ -24,6 +24,7 @@ export function addLocking(inner: TorStorageSimple, name: string): TorStorage {
 
   // Web Locks state
   let releaseLock: (() => void) | undefined;
+  let lockRequestDone: Promise<unknown> | undefined;
 
   // Filesystem lock state
   let lockPath: string | null = null;
@@ -39,7 +40,7 @@ export function addLocking(inner: TorStorageSimple, name: string): TorStorage {
       let resolveAcquired!: (v: boolean) => void;
       const acquired = new Promise<boolean>(r => { resolveAcquired = r; });
 
-      navigator.locks.request(
+      lockRequestDone = navigator.locks.request(
         `tor-js:${name}`,
         { ifAvailable: true },
         (lock) => {
@@ -100,10 +101,13 @@ export function addLocking(inner: TorStorageSimple, name: string): TorStorage {
   }
 
   async function releaseReal(): Promise<void> {
-    // Web Locks
+    // Web Locks — resolve the held promise, then wait for the browser
+    // to actually free the lock before returning.
     if (releaseLock) {
       releaseLock();
       releaseLock = undefined;
+      await lockRequestDone;
+      lockRequestDone = undefined;
     }
 
     // Filesystem
