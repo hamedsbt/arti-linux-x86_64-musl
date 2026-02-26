@@ -533,6 +533,8 @@
                     <div class="btn-group" style="flex-wrap: wrap; gap: 8px;">
                         <button id="deleteStateBtn" class="secondary" style="padding: 6px 12px;">Delete state (except microdescs)</button>
                         <button id="downloadDebugBtn" class="secondary" style="padding: 6px 12px;">Download debug zip</button>
+                        <button id="loadStateBtn" class="secondary" style="padding: 6px 12px;">Load debug state</button>
+                        <input type="file" id="loadStateFile" accept=".zip" style="display: none;">
                     </div>
                     <div class="output-box" id="debugOutput"></div>
                 </div>
@@ -753,6 +755,27 @@
             return new Blob([...localParts, ...cdParts, eocd], { type: 'application/zip' });
         }
 
+        // ── Minimal ZIP reader (store/no-compression only) ──────────────────────
+        function readZip(arrayBuffer) {
+            const view = new DataView(arrayBuffer);
+            const dec = new TextDecoder();
+            const files = {};
+            let offset = 0;
+
+            while (offset + 30 <= arrayBuffer.byteLength) {
+                if (view.getUint32(offset, true) !== 0x04034b50) break;
+                const nameLen = view.getUint16(offset + 26, true);
+                const extraLen = view.getUint16(offset + 28, true);
+                const compSize = view.getUint32(offset + 18, true);
+                const name = dec.decode(new Uint8Array(arrayBuffer, offset + 30, nameLen));
+                const dataStart = offset + 30 + nameLen + extraLen;
+                files[name] = new Uint8Array(arrayBuffer, dataStart, compSize);
+                offset = dataStart + compSize;
+            }
+
+            return files;
+        }
+
         // ── Log instance ───────────────────────────────────────────────────────
         const log = new Log({
             rawLog: (level, ...args) => {
@@ -805,6 +828,8 @@
             const logOutput = document.getElementById('logOutput');
             const deleteStateBtn = document.getElementById('deleteStateBtn');
             const downloadDebugBtn = document.getElementById('downloadDebugBtn');
+            const loadStateBtn = document.getElementById('loadStateBtn');
+            const loadStateFile = document.getElementById('loadStateFile');
             const debugOutput = document.getElementById('debugOutput');
 
             // Toggle config sections based on transport mode
@@ -915,7 +940,7 @@
 
                     // Collect all key-value pairs from the Tor state DB
                     const stateDb = await new Promise((resolve, reject) => {
-                        const req = indexedDB.open('tor-js-tor-js', 1);
+                        const req = indexedDB.open('tor-js', 1);
                         req.onerror = () => reject(req.error);
                         req.onsuccess = () => resolve(req.result);
                         req.onupgradeneeded = (e) => {
@@ -942,7 +967,6 @@
                     });
                     const stateJson = JSON.stringify({
                         version: 1,
-                        database: 'tor-js-tor-js',
                         captured_at: new Date().toISOString(),
                         entries: stateEntries,
                     }, null, 2);
@@ -969,6 +993,69 @@
                     log.error('Debug: download zip failed: ' + (e.message || e));
                 }
                 downloadDebugBtn.disabled = false;
+            });
+
+            // Debug: load state from a previously downloaded debug zip
+            loadStateBtn.addEventListener('click', () => {
+                loadStateFile.value = '';
+                loadStateFile.click();
+            });
+
+            loadStateFile.addEventListener('change', async () => {
+                const file = loadStateFile.files[0];
+                if (!file) return;
+
+                loadStateBtn.disabled = true;
+                debugOutput.className = 'output-box loading';
+                debugOutput.textContent = 'Reading zip...';
+                try {
+                    const buf = await file.arrayBuffer();
+                    const files = readZip(buf);
+
+                    if (!files['state.json']) {
+                        throw new Error('No state.json found in zip');
+                    }
+
+                    const stateJson = JSON.parse(new TextDecoder().decode(files['state.json']));
+                    const entries = stateJson.entries;
+                    if (!entries || typeof entries !== 'object') {
+                        throw new Error('Invalid state.json: missing entries object');
+                    }
+
+                    const dbName = 'tor-js';
+                    const db = await new Promise((resolve, reject) => {
+                        const req = indexedDB.open(dbName, 1);
+                        req.onerror = () => reject(req.error);
+                        req.onsuccess = () => resolve(req.result);
+                        req.onupgradeneeded = (e) => {
+                            const db = e.target.result;
+                            if (!db.objectStoreNames.contains('keyvalue')) {
+                                db.createObjectStore('keyvalue');
+                            }
+                        };
+                    });
+
+                    const keys = Object.keys(entries);
+                    const tx = db.transaction('keyvalue', 'readwrite');
+                    const store = tx.objectStore('keyvalue');
+                    for (const key of keys) {
+                        store.put(entries[key], key);
+                    }
+
+                    await new Promise((resolve, reject) => {
+                        tx.oncomplete = () => resolve();
+                        tx.onerror = () => reject(tx.error);
+                    });
+
+                    debugOutput.className = 'output-box success';
+                    debugOutput.textContent = `Loaded ${keys.length} state keys from ${file.name} (captured ${stateJson.captured_at || 'unknown'})`;
+                    log.info(`Debug: loaded ${keys.length} state keys from ${file.name}`);
+                } catch (e) {
+                    debugOutput.className = 'output-box error';
+                    debugOutput.textContent = e.message || String(e);
+                    log.error('Debug: load state failed: ' + (e.message || e));
+                }
+                loadStateBtn.disabled = false;
             });
 
             // Load previous session logs before showing "Ready"
