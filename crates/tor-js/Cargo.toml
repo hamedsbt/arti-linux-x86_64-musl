@@ -50,6 +50,7 @@ serde-wasm-bindgen = "0.6"
 
 # Async runtime
 futures = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
 
 # Logging
 tracing = "0.1"

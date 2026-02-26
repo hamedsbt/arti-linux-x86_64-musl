@@ -24,7 +24,7 @@
 //! chanmgr.set_pt_mgr(Arc::new(pt_mgr));
 //! ```
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tor_chanmgr::factory::{AbstractPtError, AbstractPtMgr, BootstrapReporter, ChannelFactory};
 use tor_error::{ErrorKind, HasKind, HasRetryTime, RetryTime};
@@ -92,12 +92,15 @@ fn verify_bridge_fingerprint(chan: &Channel, expected_fingerprint: &str) -> tor_
 /// Snowflake channel factory that builds Tor channels over Snowflake transport
 pub struct SnowflakeChannelFactory {
     mode: SnowflakeMode,
+    /// Shared state: set to `Some(error)` on WS connection failure, cleared on success.
+    /// Checked by `TorClient::ready()` to fail fast when the bridge is unreachable.
+    ws_connect_error: Arc<Mutex<Option<String>>>,
 }
 
 impl SnowflakeChannelFactory {
     /// Create a new Snowflake channel factory
-    pub fn new(mode: SnowflakeMode) -> Self {
-        Self { mode }
+    pub fn new(mode: SnowflakeMode, ws_connect_error: Arc<Mutex<Option<String>>>) -> Self {
+        Self { mode, ws_connect_error }
     }
 
     /// Build a channel using WebSocket Snowflake
@@ -117,13 +120,21 @@ impl SnowflakeChannelFactory {
         let config = SnowflakeWsConfig::new(url, fingerprint.to_string());
 
         // Connect via WebSocket
-        let stream = SnowflakeWsStream::connect(config)
-            .await
-            .map_err(|e| tor_chanmgr::Error::Io {
-                action: "Snowflake WebSocket connect",
-                peer: None,
-                source: std::io::Error::other(e.to_string()).into(),
-            })?;
+        let stream = match SnowflakeWsStream::connect(config).await {
+            Ok(s) => {
+                *self.ws_connect_error.lock().unwrap() = None;
+                s
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                *self.ws_connect_error.lock().unwrap() = Some(msg.clone());
+                return Err(tor_chanmgr::Error::Io {
+                    action: "Snowflake WebSocket connect",
+                    peer: None,
+                    source: std::io::Error::other(msg).into(),
+                });
+            }
+        };
 
         // The Snowflake stream handles transport + TLS internally
         reporter.record_tcp_success();
@@ -367,12 +378,13 @@ impl AbstractPtError for SnowflakePtError {}
 /// for arti-client without requiring an external PT binary.
 pub struct SnowflakePtMgr {
     mode: SnowflakeMode,
+    ws_connect_error: Arc<Mutex<Option<String>>>,
 }
 
 impl SnowflakePtMgr {
     /// Create a new Snowflake PT manager
-    pub fn new(mode: SnowflakeMode) -> Self {
-        Self { mode }
+    pub fn new(mode: SnowflakeMode, ws_connect_error: Arc<Mutex<Option<String>>>) -> Self {
+        Self { mode, ws_connect_error }
     }
 }
 
@@ -391,7 +403,7 @@ impl AbstractPtMgr for SnowflakePtMgr {
                 "Creating Snowflake channel factory for transport: {}",
                 transport_name
             );
-            let factory = SnowflakeChannelFactory::new(self.mode.clone());
+            let factory = SnowflakeChannelFactory::new(self.mode.clone(), Arc::clone(&self.ws_connect_error));
             Ok(Some(Arc::new(factory)))
         } else {
             // Unknown transport
@@ -407,13 +419,14 @@ mod tests {
 
     #[test]
     fn test_pt_mgr_creation() {
+        let err = Arc::new(Mutex::new(None));
         let _mgr = SnowflakePtMgr::new(SnowflakeMode::WebSocket {
             url: "wss://snowflake.torproject.net/".to_string(),
             fingerprint: "2B280B23E1107BB62ABFC40DDCC8824814F80A72".to_string(),
-        });
+        }, Arc::clone(&err));
         let _mgr = SnowflakePtMgr::new(SnowflakeMode::WebRtc {
             broker_url: "https://snowflake-broker.torproject.net/".to_string(),
             fingerprint: "2B280B23E1107BB62ABFC40DDCC8824814F80A72".to_string(),
-        });
+        }, err);
     }
 }

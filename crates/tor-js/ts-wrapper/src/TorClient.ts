@@ -16,6 +16,7 @@ export class TorClient {
   private removeLogListener: (() => void) | null = null;
   private wasmCallback: ((level: string, target: string, message: string) => void) | null = null;
   private closed = false;
+  private readyPromise: Promise<void> | null = null;
 
   constructor(options: TorClientOptions) {
     this.log = (options.log ?? new Log({ rawLog: () => {} }));
@@ -72,15 +73,27 @@ export class TorClient {
   /**
    * Wait for the Tor client to be ready for traffic
    * (guard connected, usable consensus, and sufficient microdescs).
+   *
+   * Parallel callers share the same underlying promise — a single WS
+   * connection failure rejects all waiters. The cached promise is cleared
+   * on settle so the next call creates a fresh attempt.
    */
   async ready(): Promise<void> {
     if (this.closed) throw new Error('TorClient is closed');
-    const startTime = Date.now();
-    this.log.info('Waiting for client');
-    const client = await this.clientPromise;
-    this.log.info('Waiting for client to be ready');
-    await client.ready();
-    this.log.info(`Client ready in ${Date.now() - startTime}ms`);
+    if (this.readyPromise) return this.readyPromise;
+
+    const p = (async () => {
+      const startTime = Date.now();
+      this.log.info('Waiting for client');
+      const client = await this.clientPromise;
+      this.log.info('Waiting for client to be ready');
+      await client.ready();
+      this.log.info(`Client ready in ${Date.now() - startTime}ms`);
+    })();
+
+    this.readyPromise = p;
+    p.finally(() => { this.readyPromise = null; });
+    return p;
   }
 
   /**

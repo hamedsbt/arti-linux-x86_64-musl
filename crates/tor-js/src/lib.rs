@@ -41,7 +41,7 @@ use error::JsTorError;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use arti_client::config::{BridgeConfigBuilder, CfgPath, pt::TransportConfigBuilder};
 use arti_client::{TorClient as ArtiTorClient, TorClientConfig};
@@ -283,6 +283,9 @@ impl TorClientOptions {
 pub struct TorClient {
     inner: Option<Arc<ArtiTorClient<WasmRuntime>>>,
     tls_config: Arc<futures_rustls::rustls::ClientConfig>,
+    /// Set by SnowflakeChannelFactory when WebSocket connection fails/succeeds.
+    /// Checked by ready() to fail fast when the bridge is unreachable.
+    ws_connect_error: Arc<Mutex<Option<String>>>,
 }
 
 #[wasm_bindgen]
@@ -323,6 +326,9 @@ impl TorClient {
     }
 
     /// Wait until the client is ready for traffic (connection usable + valid directory).
+    ///
+    /// Fails fast if the WebSocket connection to the bridge has failed. The error
+    /// is consumed so the next call will wait again (allowing retry).
     #[wasm_bindgen(js_name = ready)]
     pub fn ready(&self) -> js_sys::Promise {
         let client = match &self.inner {
@@ -333,24 +339,45 @@ impl TorClient {
                 });
             }
         };
+        let ws_error = Arc::clone(&self.ws_connect_error);
 
         wasm_bindgen_futures::future_to_promise(async move {
+            use futures::future::{select, Either};
+            use futures::StreamExt;
+            use std::pin::pin;
+
             // Fast path: already ready
             if client.bootstrap_status().ready_for_traffic() {
                 return Ok(JsValue::undefined());
             }
 
-            // Poll bootstrap events until ready
-            use futures::StreamExt;
+            // Poll bootstrap events until ready, checking for WS errors periodically
             let mut events = client.bootstrap_events();
-            while let Some(status) = events.next().await {
-                if status.ready_for_traffic() {
-                    return Ok(JsValue::undefined());
+            loop {
+                // Check for WS connection failure (consume the error)
+                if let Some(msg) = ws_error.lock().unwrap().take() {
+                    return Err(JsTorError::connection(
+                        format!("WebSocket connection failed: {}", msg)
+                    ).into_js_value());
+                }
+
+                // Wait for next bootstrap event, with periodic timeout to recheck WS error
+                let next = pin!(events.next());
+                let timeout = pin!(gloo_timers::future::TimeoutFuture::new(500));
+                match select(next, timeout).await {
+                    Either::Left((Some(status), _)) => {
+                        if status.ready_for_traffic() {
+                            return Ok(JsValue::undefined());
+                        }
+                    }
+                    Either::Left((None, _)) => {
+                        return Err(JsTorError::bootstrap(
+                            "Client failed to become ready for traffic"
+                        ).into_js_value());
+                    }
+                    Either::Right(_) => continue, // timeout → loop back to check WS error
                 }
             }
-
-            // Stream ended without becoming ready
-            Err(JsTorError::bootstrap("Client failed to become ready for traffic").into_js_value())
         })
     }
 
@@ -376,7 +403,8 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
         SnowflakeMode::WebSocket { fingerprint, .. } => fingerprint.clone(),
         SnowflakeMode::WebRtc { fingerprint, .. } => fingerprint.clone(),
     };
-    let snowflake_mgr = SnowflakePtMgr::new(options.mode);
+    let ws_connect_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let snowflake_mgr = SnowflakePtMgr::new(options.mode, Arc::clone(&ws_connect_error));
     info!("Created Snowflake PT manager");
 
     // 2. Configure arti-client with Snowflake bridge
@@ -459,6 +487,7 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
     Ok(TorClient {
         inner: Some(Arc::new(tor_client)),
         tls_config: make_tls_config(),
+        ws_connect_error,
     })
 }
 
