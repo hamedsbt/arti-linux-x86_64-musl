@@ -36,6 +36,7 @@
 - [ ] Fix: Repeated "Unable to select a guard relay" issues when changing bridges (sometimes?)
   - Sometimes it recovers (can complete request), other times it gets stuck
   - Workaround: delete state:guards on startup (has FIXME comment) (update: seems to be incomplete fix)
+    - Update 2: Seems fixed since storage bug fixed. Test again when stored consensus is stale.
 - [x] Fix sourcemaps
 - [x] Check npm pack content
 - [x] Add singleton entry points
