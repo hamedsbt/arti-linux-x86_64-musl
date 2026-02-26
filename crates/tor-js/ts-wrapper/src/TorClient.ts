@@ -49,7 +49,13 @@ export class TorClient {
       never(options);
     }
 
-    wasmOptions = wasmOptions.withStorage(options.storage ?? createAutoStorage());
+    const storage = options.storage ?? createAutoStorage();
+
+    // FIXME: This is a workaround for an underlying bug where guards
+    // are marked unusable when switching bridges.
+    await storage.delete('state:guards');
+
+    wasmOptions = wasmOptions.withStorage(storage);
 
     // Create client (WASM constructor returns a Promise)
     this.log.info('Bootstrapping...');
