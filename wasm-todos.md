@@ -21,7 +21,7 @@
   - [x] IndexedDb storage
   - [x] In-memory storage
   - [x] Platform-dependent (browser/nodejs) default storage
-- [ ] Fix slow bootstrap (via non-tor sources if needed)
+- [x] Fix slow bootstrap (via non-tor sources if needed)
 - Sync with arti main branch
   - [x] 206e629
   - [x] 9306eec
@@ -33,7 +33,7 @@
 - [x] Provide tiny module variant via hash-checked download
   - jsdelivr/unpkg/githubusercontent
 - [x] WebRTC demo
-- [ ] Fix: Repeated "Unable to select a guard relay" issues when changing bridges (sometimes?)
+- [x] Fix: Repeated "Unable to select a guard relay" issues when changing bridges (sometimes?)
   - Sometimes it recovers (can complete request), other times it gets stuck
   - Workaround: delete state:guards on startup (has FIXME comment) (update: seems to be incomplete fix)
     - Update 2: Seems fixed since storage bug fixed. Test again when stored consensus is stale.
