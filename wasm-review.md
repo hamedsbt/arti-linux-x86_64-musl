@@ -151,11 +151,13 @@ separately) -- other casings like `"user-agent"` with mixed case would bypass.
 than a `new Error(...)`. `instanceof Error` checks fail, `.stack` is missing,
 and console output shows `[object Object]`.
 
-### M6. `unsafe impl Send/Sync` for JsStorage / CachedJsStorage
+### M6. `unsafe impl Send/Sync` across WASM types
 
-`crates/tor-js/src/storage.rs:93-94, 215-216`
+`crates/tor-js/src/storage.rs:93-94, 215-216`,
+`crates/tor-snowflake/src/snowflake.rs` (SnowflakeStream)
 
-Justified for single-threaded WASM but will become unsound if WASM threads
+Multiple types use `unsafe impl Send` (and/or `Sync`) with the rationale "WASM
+is single-threaded." Justified today but will become unsound if WASM threads
 (`SharedArrayBuffer` + atomics) are enabled. Consider gating behind
 `#[cfg(not(target_feature = "atomics"))]`.
 
@@ -224,7 +226,71 @@ Changed from a fixed 10-second total timeout to a 120-second idle timeout.
 This affects native too, not just WASM. 120s of idle time could mask stalled
 connections on native.
 
-### M15. `rustls-rustcrypto` is alpha
+### M15. Abort signal not raced into connect/TLS/header-read awaits
+
+`crates/tor-js/src/fetch.rs`
+
+`AbortSignal` is checked before connect, before sending the request, and between
+response-body chunks, but is not raced into the connect / TLS handshake /
+header-read awaits themselves. An abort remains "stuck" until the next explicit
+checkpoint rather than cancelling promptly.
+
+### M16. Duplicate and collapsed HTTP headers in fetch
+
+`crates/tor-js/src/fetch.rs`
+
+The request builder always writes `Host`, then caller-supplied headers verbatim,
+then appends `Content-Length` -- so duplicate `Host` / `Content-Length` headers
+are possible if the caller also sets them. On the response side, headers are
+collected into a `HashMap<String, String>`, which collapses repeated headers
+(e.g. `Set-Cookie`) instead of preserving them as the HTTP spec requires.
+
+### M17. 1xx interim responses not handled
+
+`crates/tor-js/src/fetch.rs`
+
+The parser classifies `1xx`, `204`, `304` as bodyless, but does not continue
+past an interim `1xx` to read the final response. A server sending `100
+Continue` before the real response would cause the fetch to return early with
+a 1xx status.
+
+### M18. `connection_timeout` config field not enforced
+
+`crates/tor-snowflake/src/snowflake.rs`
+
+`SnowflakeConfig` exposes `connection_timeout` and a `with_timeout()` builder,
+but `SnowflakeBridge::connect()` doesn't use it. The WebRTC stack uses hardcoded
+step timeouts instead (ICE gathering 10s, DataChannel open 30s). The config
+field should wrap the entire connect sequence as an overall deadline.
+
+### M19. WebSocket vs WebRTC naming/docs contradictory
+
+`crates/tor-snowflake/src/snowflake.rs`, `arti_transport.rs`, README
+
+`snowflake.rs` says clients must use WebRTC via the broker and that direct
+WebSocket is for volunteer proxies, not clients. But `arti_transport.rs` exposes
+`SnowflakeMode::WebSocket` as a first-class client mode pointing at
+`wss://snowflake.torproject.net/`. The README's platform table is also
+confusing (labels native WebRTC as `tokio-tungstenite`, which is WebSocket).
+Should clarify what is production vs dev-only and rename accordingly.
+
+### M20. Retry logic based on substring matching
+
+`crates/tor-snowflake/src/snowflake.rs`
+
+Retrying WebRTC negotiation depends on `err_str.contains("timeout")` --
+brittle against upstream error string changes, localization, or different
+timeout wordings. Should use structured error kinds instead.
+
+### M21. Chunked decoder silently accepts truncated bodies
+
+`crates/tor-js/src/fetch.rs`
+
+If EOF occurs during chunked body reading and some data was already read, the
+decoder returns `Ok(None)` rather than an error. This silently accepts truncated
+responses instead of surfacing the incomplete transfer.
+
+### M22. `rustls-rustcrypto` is alpha
 
 `crates/tor-rtcompat/Cargo.toml`
 
@@ -322,6 +388,40 @@ for a bridge-switching bug. Causes unnecessary reconnection latency.
 
 `poll_write()` treats partial writes as `WriteZero` (fatal). TCP can
 legitimately write less than the full frame size under backpressure.
+
+### L14. `Vec::drain` O(n) in hot paths
+
+Several stream adapters drain from the front of a `Vec`, which is O(n) due to
+memmove and can become expensive under steady throughput:
+- `webrtc_stream.rs`: `self.buffer.drain(..len)`
+- `websocket.rs`: `self.buffer.drain(0..len)`
+- `turbo.rs`: `self.read_buffer.drain(..consumed)`
+- `smux.rs`: frequent drain and copy
+
+Consider `bytes::BytesMut` + `split_to()` or a ring buffer.
+
+### L15. `init()` reload handle can desync from active subscriber
+
+`crates/tor-js/src/lib.rs:106-110`
+
+`init()` creates a reload handle and stores it globally even when `try_init()`
+means the subscriber was not installed (because one already exists). After
+repeated `init()` calls, `setLogLevel()` can end up talking to a handle that
+is not attached to the active subscriber.
+
+### L16. README out of sync with code
+
+`crates/tor-js/README.md`
+
+Documents a `JsHttpResponse` API and shows `response.text()` used
+synchronously, while the implementation now builds a real `web_sys::Response`.
+
+### L17. Unused DataChannel error closure
+
+`crates/tor-snowflake/src/webrtc_stream.rs`
+
+Allocates `_on_error_open` closure but never installs it on the DataChannel
+(dropped immediately). Should wire up or remove.
 
 ---
 
