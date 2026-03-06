@@ -243,7 +243,8 @@ fn store_authcerts(
                     .within(authcert_text)
                     .unwrap_or("");
 
-                // Skip signature and time checks — we trust the bootstrap server's data. // TODO: Do not trust
+                // Skip signature and time checks for metadata extraction only.
+                // Arti re-verifies everything when loading from storage (see state.rs add_from_cache impls).
                 let cert = unchecked
                     .dangerously_assume_wellsigned()
                     .dangerously_assume_timely();
