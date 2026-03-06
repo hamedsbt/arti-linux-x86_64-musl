@@ -7,28 +7,27 @@
 
 | Category | Files | Insertions | Deletions |
 |----------|------:|----------:|----------:|
-| **Overall** | 308 | 22,052 | 700 |
+| **Overall** | 287 | 19,314 | 700 |
 | tor-time + tor-async-compat related | 189 | 2,761 | 645 |
-| Core WASM work (excl. time/async-compat) | 119 | ~19,291 | ~55 |
+| Core WASM work (excl. time/async-compat) | 98 | ~16,553 | ~55 |
 
 > "tor-time/tor-async-compat related" includes the crate sources **plus** all
 > files across the codebase that reference `tor_time`/`tor_async_compat` (i.e.
 > migration of `std::time`/`async_trait` imports). The partition is approximate
 > since some files contain both time migration and WASM changes.
 
-**Core WASM work breakdown** (~19.3k insertions):
+**Core WASM work breakdown** (~16.6k insertions):
 
 | Lines | Directory | Description |
 |------:|-----------|-------------|
 | 6,462 | `crates/tor-snowflake` | Snowflake transport (SMUX, KCP, WebRTC, broker) |
 | 6,073 | `crates/tor-js` | WASM bindings, TS wrapper, fetch, storage |
-| 2,940 | `tests/webtor` | Integration tests |
 | 1,598 | `examples/tor-js-showcase` | Browser demo app |
 | 703 | `crates/tor-dirmgr` | Custom storage backend, bootstrap yielding |
 | 631 | `crates/arti-client` | KeyValueStore trait, builder, WASM cfg guards |
 | 362 | `crates/tor-persist` | StringStore trait, AnyStateMgr |
 | 216 | `scripts/` | Build/check scripts |
-| 306 | other | Review docs, small crate tweaks |
+| 508 | other | Review docs, small crate tweaks |
 
 ## Overview
 
