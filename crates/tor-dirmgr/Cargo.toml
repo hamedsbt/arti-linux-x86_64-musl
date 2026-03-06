@@ -108,6 +108,9 @@ tor-rtcompat = { path = "../tor-rtcompat", version = "0.39.0" }
 tor-time = { path = "../tor-time", version = "0.39.0" }
 tracing = "0.1.36"
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { version = "0.3", features = ["futures"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 fslock = { version = "0.2.0" }
 rusqlite = { version = "0.38.0", features = ["time"] }

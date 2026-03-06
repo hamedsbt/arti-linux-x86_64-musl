@@ -388,7 +388,9 @@ impl<R: Runtime> DirMgr<R> {
         // TODO: add some way to return a directory that isn't up-to-date
         let attempt = AttemptId::next();
         trace!(%attempt, "Trying to load a full directory from cache");
-        let outcome = dirmgr.load_directory(attempt);
+        // load_directory is async (to allow yielding on WASM), but in this
+        // sync offline-mode API we just block on it.
+        let outcome = futures::executor::block_on(dirmgr.load_directory(attempt));
         trace!(%attempt, "Load result: {outcome:?}");
         let _success = outcome?;
 
@@ -498,7 +500,7 @@ impl<R: Runtime> DirMgr<R> {
         // Try to load from the cache.
         let attempt_id = AttemptId::next();
         trace!(attempt=%attempt_id, "Starting to bootstrap directory");
-        let have_directory = self.load_directory(attempt_id)?;
+        let have_directory = self.load_directory(attempt_id).await?;
 
         let (mut sender, receiver) = if have_directory {
             info!("Loaded a good directory from cache.");
@@ -647,7 +649,7 @@ impl<R: Runtime> DirMgr<R> {
             {
                 let dirmgr = upgrade_weak_ref(weak)?;
                 trace!("Trying to load from the directory cache");
-                if dirmgr.load_directory(attempt_id)? {
+                if dirmgr.load_directory(attempt_id).await? {
                     // Successfully loaded a bootstrapped directory.
                     if let Some(send_done) = on_complete.take() {
                         let _ = send_done.send(());
@@ -963,7 +965,7 @@ impl<R: Runtime> DirMgr<R> {
     /// cache, if it is newer than the one we have.
     ///
     /// Return false if there is no such consensus.
-    fn load_directory(self: &Arc<Self>, attempt_id: AttemptId) -> Result<bool> {
+    async fn load_directory(self: &Arc<Self>, attempt_id: AttemptId) -> Result<bool> {
         let state = state::GetConsensusState::new(
             self.runtime.clone(),
             self.config.get(),
@@ -974,7 +976,7 @@ impl<R: Runtime> DirMgr<R> {
                 .clone()
                 .unwrap_or_else(|| Arc::new(crate::filter::NilFilter)),
         );
-        let _ = bootstrap::load(self, Box::new(state), attempt_id)?;
+        let _ = bootstrap::load(self, Box::new(state), attempt_id).await?;
 
         Ok(self.netdir.get().is_some())
     }
