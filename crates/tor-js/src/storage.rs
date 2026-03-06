@@ -296,6 +296,31 @@ impl CachedJsStorage {
         });
     }
 
+    /// Insert many key-value pairs into the cache and schedule a single async
+    /// batch persist to JS storage.  Much faster than calling `set()` in a loop
+    /// because it acquires the RwLock once and spawns one `spawn_local()` task.
+    pub fn set_many(&self, entries: Vec<(String, String)>) -> Result<(), StorageError> {
+        {
+            let mut cache = self
+                .cache
+                .write()
+                .map_err(|_| -> StorageError { "cache lock poisoned".into() })?;
+            for (k, v) in &entries {
+                cache.insert(k.clone(), v.clone());
+            }
+        }
+
+        let js_storage = self.js_storage.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            for (key, value) in entries {
+                if let Err(e) = js_storage.set(&key, &value).await {
+                    tracing::warn!("CachedJsStorage: failed to persist key {}: {:?}", key, e);
+                }
+            }
+        });
+        Ok(())
+    }
+
     /// Schedule an async delete from JS storage.
     fn schedule_delete(&self, key: String) {
         let js_storage = self.js_storage.clone();

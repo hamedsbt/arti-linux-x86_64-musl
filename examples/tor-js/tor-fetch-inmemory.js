@@ -26,6 +26,7 @@ async function main() {
     fingerprint: '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194',
     log,
     storage: new storage.MemoryStorage(),
+    fastBootstrap: 'https://tor-fast-bootstrap.voltrevo.com',
   });
 
   await client.ready();

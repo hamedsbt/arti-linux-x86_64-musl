@@ -32,6 +32,7 @@
 #![cfg(target_arch = "wasm32")]
 
 mod error;
+mod fast_bootstrap;
 mod fetch;
 mod storage;
 
@@ -222,6 +223,8 @@ pub struct TorClientOptions {
     mode: SnowflakeMode,
     /// Custom storage implementation (optional)
     storage: Option<JsStorageInterface>,
+    /// Optional callback returning bootstrap.zip bytes for fast directory pre-population
+    fast_bootstrap: Option<js_sys::Function>,
 }
 
 #[wasm_bindgen]
@@ -239,6 +242,7 @@ impl TorClientOptions {
                 fingerprint,
             },
             storage: None,
+            fast_bootstrap: None,
         }
     }
 
@@ -255,6 +259,7 @@ impl TorClientOptions {
                 fingerprint,
             },
             storage: None,
+            fast_bootstrap: None,
         }
     }
 
@@ -270,6 +275,19 @@ impl TorClientOptions {
     #[wasm_bindgen(js_name = withStorage)]
     pub fn with_storage(mut self, storage: JsStorageInterface) -> Self {
         self.storage = Some(storage);
+        self
+    }
+
+    /// Set a callback that provides bootstrap.zip bytes for fast directory pre-population.
+    ///
+    /// The callback should be `() => Promise<Uint8Array>` returning the uncompressed
+    /// bootstrap.zip bytes (from a tor-fast-bootstrap server).
+    ///
+    /// When set and storage has no cached consensus, the zip is parsed and the
+    /// directory cache is pre-populated before bootstrap begins.
+    #[wasm_bindgen(js_name = withFastBootstrap)]
+    pub fn with_fast_bootstrap(mut self, callback: js_sys::Function) -> Self {
+        self.fast_bootstrap = Some(callback);
         self
     }
 }
@@ -459,6 +477,13 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
             .map_err(|e| {
                 JsTorError::internal(format!("Failed to initialize storage: {:?}", e)).into_js_value()
             })?;
+
+        // Pre-populate directory cache from fast bootstrap if available and storage is empty
+        if let Some(callback) = options.fast_bootstrap {
+            if let Err(e) = fast_bootstrap::maybe_fast_bootstrap(&cached_storage, callback).await {
+                tracing::warn!("Fast bootstrap failed (continuing normally): {:?}", e);
+            }
+        }
 
         builder = builder.storage(cached_storage);
         info!("Storage configured (state + directory cache)");

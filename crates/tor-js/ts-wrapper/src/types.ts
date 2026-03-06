@@ -34,6 +34,13 @@ export type TorClientOptions = (
   storage?: TorStorage;
 
   /**
+   * Base URL of a tor-fast-bootstrap server (e.g. "https://tor-fast-bootstrap.voltrevo.com").
+   * When set and storage is empty, fetches bootstrap.zip to pre-populate the directory cache
+   * for faster bootstrap.
+   */
+  fastBootstrap?: string;
+
+  /**
    * Minimum log level for this client's log listener. Defaults to 'debug'.
    * Can be changed at runtime via `TorClient.setLogLevel()`.
    * The WASM subscriber auto-widens to the broadest level across all clients.

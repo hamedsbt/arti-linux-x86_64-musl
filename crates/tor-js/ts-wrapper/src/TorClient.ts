@@ -57,6 +57,26 @@ export class TorClient {
 
     wasmOptions = wasmOptions.withStorage(storage);
 
+    if (options.fastBootstrap) {
+      const baseUrl = options.fastBootstrap.replace(/\/+$/, '');
+      wasmOptions = wasmOptions.withFastBootstrap(async (): Promise<Uint8Array> => {
+        this.log.info('Fast bootstrap: fetching bootstrap.zip.br...');
+        const res = await fetch(`${baseUrl}/bootstrap.zip.br`);
+        if (!res.ok) {
+          throw new Error(`Fast bootstrap fetch failed: ${res.status} ${res.statusText}`);
+        }
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/zip')) {
+          throw new Error(
+            `Fast bootstrap: expected content-type application/zip, got "${contentType}"`,
+          );
+        }
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        this.log.info(`Fast bootstrap: received ${bytes.byteLength} bytes`);
+        return bytes;
+      });
+    }
+
     // Create client (WASM constructor returns a Promise)
     this.log.info('Bootstrapping...');
     const client = await WasmTorClient.create(wasmOptions);

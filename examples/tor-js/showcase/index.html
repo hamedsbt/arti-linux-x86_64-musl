@@ -1099,6 +1099,7 @@
                         fingerprint,
                         log,
                         logLevel: logLevelSelect.value,
+                        fastBootstrap: 'https://tor-fast-bootstrap.voltrevo.com',
                     });
                     await torClient.ready();
 
@@ -1162,6 +1163,20 @@
                 }
                 fetchBtn.disabled = false;
             });
+        }
+
+        // ── Main-thread sync checker ──────────────────────────────────────
+        // Reports when the main thread is blocked for >500ms.
+        {
+            let last = performance.now();
+            setInterval(() => {
+                const now = performance.now();
+                const dt = now - last;
+                last = now;
+                if (dt > 500) {
+                    log.warn(`[sync-check] Main thread blocked for ${dt.toFixed(0)}ms`);
+                }
+            }, 100);
         }
 
         if (document.readyState === 'loading') {
