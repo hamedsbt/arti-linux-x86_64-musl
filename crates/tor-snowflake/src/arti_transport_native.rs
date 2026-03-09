@@ -5,9 +5,11 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use safelog::{Sensitive, MaybeSensitive};
 use tor_chanmgr::factory::{AbstractPtError, AbstractPtMgr, BootstrapReporter, ChannelFactory};
 use tor_error::{ErrorKind, HasKind, HasRetryTime, RetryTime};
 use tor_linkspec::{HasRelayIds, IntoOwnedChanTarget, OwnedChanTarget, OwnedChanTargetBuilder, PtTransportName};
@@ -57,7 +59,9 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
             .await
             .map_err(|e| tor_chanmgr::Error::Io {
                 action: "Snowflake WebSocket connect",
-                peer: None,
+                peer: MaybeSensitive::not_sensitive(PeerAddr::Direct(
+                    SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0),
+                )),
                 source: std::io::Error::other(e.to_string()).into(),
             })?;
 
@@ -71,7 +75,9 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
             .and_then(|bytes| RsaIdentity::from_bytes(&bytes))
             .ok_or_else(|| tor_chanmgr::Error::Io {
                 action: "parse bridge fingerprint",
-                peer: None,
+                peer: MaybeSensitive::not_sensitive(PeerAddr::Direct(
+                    SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0),
+                )),
                 source: std::io::Error::other(format!(
                     "Invalid bridge fingerprint '{}': must be a 40-char hex string",
                     self.fingerprint
@@ -81,13 +87,17 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
         // Get peer certificate from TLS stream
         let peer_cert = stream.peer_certificate().map_err(|e| tor_chanmgr::Error::Io {
             action: "get peer certificate",
-            peer: None,
+            peer: MaybeSensitive::not_sensitive(PeerAddr::Direct(
+                SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0),
+            )),
             source: e.into(),
         })?;
 
         let peer_cert = peer_cert.ok_or_else(|| tor_chanmgr::Error::Io {
             action: "get peer certificate",
-            peer: None,
+            peer: MaybeSensitive::not_sensitive(PeerAddr::Direct(
+                SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0),
+            )),
             source: std::io::Error::other("No peer certificate from TLS")
                 .into(),
         })?;
@@ -132,7 +142,7 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
                 clock_skew: None,
             })?;
 
-        let peer_addr = PeerAddr::Direct("0.0.0.0:0".parse().unwrap());
+        let peer_addr = Sensitive::new(PeerAddr::Direct("0.0.0.0:0".parse().unwrap()));
         let (chan, reactor) = verified.finish(peer_addr).await.map_err(|e| tor_chanmgr::Error::Proto {
             source: e,
             peer: peer.to_logged(),
@@ -155,7 +165,9 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
         let actual_rsa_id = chan.target().rsa_identity()
             .ok_or_else(|| tor_chanmgr::Error::Io {
                 action: "verify bridge fingerprint",
-                peer: None,
+                peer: MaybeSensitive::not_sensitive(PeerAddr::Direct(
+                    SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0),
+                )),
                 source: std::io::Error::other("Bridge did not present an RSA identity").into(),
             })?;
 
@@ -165,7 +177,9 @@ impl<R: Runtime> SnowflakeChannelFactory<R> {
         if actual_fp != expected_fp {
             return Err(tor_chanmgr::Error::Io {
                 action: "verify bridge fingerprint",
-                peer: None,
+                peer: MaybeSensitive::not_sensitive(PeerAddr::Direct(
+                    SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0),
+                )),
                 source: std::io::Error::other(format!(
                     "Bridge fingerprint mismatch: expected {}, got {}",
                     expected_fp, actual_fp

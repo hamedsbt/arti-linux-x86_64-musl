@@ -23,6 +23,7 @@ tor-netdoc = { path = "../tor-netdoc", default-features = false }
 tor-linkspec = { path = "../tor-linkspec" }
 tor-llcrypto = { path = "../tor-llcrypto" }
 tor-error = { path = "../tor-error" }
+safelog = { path = "../safelog", version = "0.8.0" }
 tor-memquota = { path = "../tor-memquota" }
 tor-chanmgr = { path = "../tor-chanmgr" }
 tor-async-compat = { path = "../tor-async-compat", version = "0.40.0" }
