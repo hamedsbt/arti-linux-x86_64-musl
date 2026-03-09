@@ -78,7 +78,7 @@ impl<S> CertifiedConn for futures_rustls::client::TlsStream<S> {
     ) -> IoResult<Vec<u8>> {
         let (_, session) = self.get_ref();
         session
-            .export_keying_material(Vec::with_capacity(len), label, context)
+            .export_keying_material(vec![0_u8; len], label, context)
             .map_err(|e| IoError::new(io::ErrorKind::InvalidData, e))
     }
 
@@ -190,7 +190,7 @@ impl RustlsProvider {
         // misnamed: it overrides not only how certificates are verified, but
         // also how certificates are used to check the signatures in a TLS
         // handshake.
-        let config = futures_rustls::rustls::client::ClientConfig::builder()
+        let mut config = futures_rustls::rustls::client::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(Verifier(
                 CryptoProvider::get_default()
@@ -198,6 +198,12 @@ impl RustlsProvider {
                     .signature_verification_algorithms,
             )))
             .with_no_client_auth();
+
+        // tor-spec:
+        // > Implementations SHOULD NOT allow TLS session resumption – it can exacerbate some
+        // > attacks (e.g. the “Triple Handshake” attack from Feb 2013), and it plays havoc with
+        // > forward secrecy guarantees.
+        config.resumption = futures_rustls::rustls::client::Resumption::disabled();
 
         RustlsProvider {
             config: Arc::new(config),

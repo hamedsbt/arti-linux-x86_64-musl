@@ -17,7 +17,7 @@ tracing = "0.1"
 
 # Tor protocol implementation
 tor-rtcompat = { path = "../tor-rtcompat", default-features = false }
-tor-time = { path = "../tor-time", version = "0.39.0" }
+tor-time = { path = "../tor-time", version = "0.40.0" }
 tor-proto = { path = "../tor-proto", default-features = false }
 tor-netdoc = { path = "../tor-netdoc", default-features = false }
 tor-linkspec = { path = "../tor-linkspec" }
@@ -25,8 +25,8 @@ tor-llcrypto = { path = "../tor-llcrypto" }
 tor-error = { path = "../tor-error" }
 tor-memquota = { path = "../tor-memquota" }
 tor-chanmgr = { path = "../tor-chanmgr" }
-tor-async-compat = { path = "../tor-async-compat", version = "0.39.0" }
-tor-async-utils = { path = "../tor-async-utils", version = "0.39.0" }
+tor-async-compat = { path = "../tor-async-compat", version = "0.40.0" }
+tor-async-utils = { path = "../tor-async-utils", version = "0.40.0" }
 
 # Cryptography
 hex = "0.4"
@@ -106,7 +106,7 @@ webpki-roots = "0.26"
 async-trait = "0.1"
 
 [dev-dependencies]
-tor-basic-utils = { path = "../tor-basic-utils", version = "0.39.0" }
+tor-basic-utils = { path = "../tor-basic-utils", version = "0.40.0" }
 
 [features]
 default = []

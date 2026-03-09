@@ -7,6 +7,7 @@ use anyhow::Context;
 use futures::StreamExt;
 use safelog::Sensitive;
 use tor_chanmgr::ChanMgr;
+use tor_error::debug_report;
 use tor_log_ratelim::log_ratelim;
 use tor_rtcompat::{NetStreamListener, NetStreamProvider, Runtime, SpawnExt as _};
 use tracing::debug;
@@ -17,7 +18,6 @@ pub(crate) async fn or_listener<R: Runtime>(
     runtime: R,
     chan_mgr: Arc<ChanMgr<R>>,
     listeners: impl IntoIterator<Item = <R as NetStreamProvider<SocketAddr>>::Listener>,
-    advertised_addresses: crate::config::Advertise,
 ) -> anyhow::Result<void::Void> {
     // a list of listening streams
     let incoming: Vec<_> = listeners
@@ -61,17 +61,19 @@ pub(crate) async fn or_listener<R: Runtime>(
 
         // Spawn a task to handle the incoming connection (for example the channel handshake).
         let chan_mgr = Arc::clone(&chan_mgr);
-        let my_addrs = advertised_addresses.all_ips();
         runtime
             .spawn(async move {
-                match chan_mgr
-                    .handle_incoming(remote_addr, my_addrs, stream)
-                    .await
-                {
+                match chan_mgr.handle_incoming(remote_addr, stream).await {
                     Ok(_chan) => {
                         // TODO: do we need to do anything else here?
                     }
-                    Err(e) => debug!("Unable to handle incoming OR connection: {e}"),
+                    // We don't want to make this too loud since it could be triggered by a bad
+                    // client (for example a client that disconnects mid-handshake, or a port scan).
+                    // This will log at "warn" level if it's an internal error
+                    // (see `ErrorKind::is_always_a_warning()`),
+                    // but if there are internal errors we should fix them so that networking/
+                    // protocol errors will only be logged at "debug" level.
+                    Err(e) => debug_report!(e, "Unable to handle incoming OR connection"),
                 }
             })
             .context("Failed to spawn incoming channel handler")?;

@@ -6,20 +6,19 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use tokio::task::JoinSet;
+use tor_proto::RelayIdentities;
 use tracing::{debug, warn};
 
 use fs_mistrust::Mistrust;
+use tor_basic_utils::iter_join;
 use tor_chanmgr::{ChanMgr, ChanMgrConfig, Dormancy};
 use tor_config_path::CfgPathResolver;
 use tor_dirmgr::DirMgrConfig;
-use tor_keymgr::{
-    ArtiEphemeralKeystore, ArtiNativeKeystore, KeyMgr, KeyMgrBuilder, KeystoreSelector,
-};
+use tor_keymgr::{ArtiNativeKeystore, KeyMgr, KeyMgrBuilder};
 use tor_memquota::MemoryQuotaTracker;
 use tor_netdir::params::NetParameters;
 use tor_persist::state_dir::StateDirectory;
 use tor_persist::{FsStateMgr, StateMgr};
-use tor_relay_crypto::pk::{RelayIdentityKeypair, RelayIdentityKeypairSpecifier};
 use tor_rtcompat::{NetStreamProvider, Runtime};
 
 use crate::client::RelayClient;
@@ -30,7 +29,7 @@ use crate::config::TorRelayConfig;
 /// This intentionally does not have access to the runtime to prevent it from doing network io.
 ///
 /// The idea is that we can build up the relay's components in an `InertTorRelay` without a runtime,
-/// and then call `bootstrap()` on it and provide a runtime to turn it into a network-capable relay.
+/// and then call `init()` on it and provide a runtime to turn it into a network-capable relay.
 /// This gives us two advantages:
 ///
 /// - We can initialize the internal data structures in the `InertTorRelay` (load the keystores,
@@ -124,18 +123,16 @@ impl InertTorRelay {
     /// Connect the [`InertTorRelay`] to the Tor network.
     pub(crate) async fn init<R: Runtime>(self, runtime: R) -> anyhow::Result<TorRelay<R>> {
         // Attempt to generate any missing keys/cert from the KeyMgr.
-        Self::try_generate_keys(&self.keymgr).context("Failed to generate keys")?;
+        let identities = crate::tasks::crypto::try_generate_keys(&self.keymgr)
+            .context("Failed to generate keys")?;
 
-        TorRelay::init(runtime, self).await
+        TorRelay::init(runtime, self, identities).await
     }
 
     /// Create the [key manager](KeyMgr).
     fn create_keymgr(state_path: &Path, mistrust: &Mistrust) -> anyhow::Result<Arc<KeyMgr>> {
         let key_store_dir = state_path.join("keystore");
 
-        // Store for the short-term keys that we don't need to keep on disk. The store identifier
-        // is relay explicit because it can be used in other crates for channel and circuit.
-        let ephemeral_store = ArtiEphemeralKeystore::new("relay-ephemeral".into());
         let persistent_store = ArtiNativeKeystore::from_path_and_mistrust(&key_store_dir, mistrust)
             .context("Failed to construct the native keystore")?;
 
@@ -145,7 +142,6 @@ impl InertTorRelay {
 
         let keymgr = KeyMgrBuilder::default()
             .primary_store(Box::new(persistent_store))
-            .set_secondary_stores(vec![Box::new(ephemeral_store)])
             .build()
             .context("Failed to build the 'KeyMgr'")?;
         let keymgr = Arc::new(keymgr);
@@ -153,35 +149,6 @@ impl InertTorRelay {
         // TODO: support C-tor keystore
 
         Ok(keymgr)
-    }
-
-    /// Generate the relay keys.
-    fn try_generate_keys(keymgr: &KeyMgr) -> anyhow::Result<()> {
-        let mut rng = tor_llcrypto::rng::CautiousRng;
-
-        // Attempt to get the relay long-term identity key from the key manager. If not present,
-        // generate it. We need this key to sign the signing certificates.
-        let _kp_relay_id = keymgr
-            .get_or_generate::<RelayIdentityKeypair>(
-                &RelayIdentityKeypairSpecifier::new(),
-                KeystoreSelector::default(),
-                &mut rng,
-            )
-            .context("Failed to get or generate the long-term identity key")?;
-
-        // TODO #1598: We need to get_or_generate RSA keys here, but that currently fails because
-        // upstream ssh-key doesn't support 1024 bit keys. Once they do, we should add that here.
-
-        // TODO: Once certificate supports is added to the KeyMgr, we need to get/gen the
-        // RelaySigning (KP_relaysign_ed) certs from the native persistent store.
-        //
-        // If present, rotate it if expired. Else, generate it. Rotation or creation require the
-        // relay identity keypair (above) in order to sign the RelaySigning.
-        //
-        // We then need to generate the RelayLink (KP_link_ed) certificate which is in turn signed
-        // by the RelaySigning cert.
-
-        Ok(())
     }
 }
 
@@ -201,17 +168,10 @@ pub(crate) struct TorRelay<R: Runtime> {
     chanmgr: Arc<ChanMgr<R>>,
 
     /// See [`InertTorRelay::keymgr`].
-    #[expect(unused)] // TODO RELAY remove
     keymgr: Arc<KeyMgr>,
 
     /// Listening OR ports.
     or_listeners: Vec<<R as NetStreamProvider<SocketAddr>>::Listener>,
-
-    /// Advertised IP address(es) found in the config file.
-    ///
-    /// They are kept here so they can be passed on to the OR listener task which in turn uses them
-    /// for new inbound channels to send them in the NETINFO cell.
-    advertised_addresses: crate::config::Advertise,
 }
 
 impl<R: Runtime> TorRelay<R> {
@@ -221,14 +181,21 @@ impl<R: Runtime> TorRelay<R> {
     /// Doing work with these components should happen in [`TorRelay::run()`].
     ///
     /// Expected to be called from [`InertTorRelay::init()`].
-    async fn init(runtime: R, inert: InertTorRelay) -> anyhow::Result<Self> {
+    async fn init(
+        runtime: R,
+        inert: InertTorRelay,
+        identities: RelayIdentities,
+    ) -> anyhow::Result<Self> {
         let memquota = MemoryQuotaTracker::new(&runtime, inert.config.system.memory.clone())
             .context("Failed to initialize memquota tracker")?;
 
+        let config = ChanMgrConfig::new(inert.config.channel.clone())
+            .with_my_addrs(inert.config.relay.advertise.all_ips())
+            .with_identities(Arc::new(identities));
         let chanmgr = Arc::new(
             ChanMgr::new(
                 runtime.clone(),
-                ChanMgrConfig::new(inert.config.channel.clone()),
+                config,
                 Dormancy::Active,
                 &NetParameters::default(),
                 memquota.clone(),
@@ -289,7 +256,7 @@ impl<R: Runtime> TorRelay<R> {
         if or_listeners.is_empty() {
             return Err(anyhow::anyhow!(
                 "Could not listen at any OR port addresses: {}",
-                crate::util::iter_join(", ", inert.config.relay.listen.addrs()),
+                iter_join(", ", inert.config.relay.listen.addrs()),
             ));
         }
 
@@ -300,7 +267,6 @@ impl<R: Runtime> TorRelay<R> {
             chanmgr,
             keymgr: inert.keymgr,
             or_listeners,
-            advertised_addresses: inert.config.relay.advertise,
         })
     }
 
@@ -327,14 +293,21 @@ impl<R: Runtime> TorRelay<R> {
             let chanmgr = Arc::clone(&self.chanmgr);
             async {
                 // TODO: Should we give all tasks a `start` method?
-                crate::tasks::listeners::or_listener(
-                    runtime,
-                    chanmgr,
-                    self.or_listeners,
-                    self.advertised_addresses,
-                )
-                .await
-                .context("Failed to run OR listener task")
+                crate::tasks::listeners::or_listener(runtime, chanmgr, self.or_listeners)
+                    .await
+                    .context("Failed to run OR listener task")
+            }
+        });
+
+        // Start the key rotation tasks.
+        task_handles.spawn({
+            let runtime = self.runtime.clone();
+            let keymgr = self.keymgr.clone();
+            let chanmgr = self.chanmgr.clone();
+            async {
+                crate::tasks::crypto::rotate_keys_task(runtime, keymgr, chanmgr)
+                    .await
+                    .context("Failed to run key rotation task")
             }
         });
 

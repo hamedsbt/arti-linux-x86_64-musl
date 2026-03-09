@@ -16,23 +16,25 @@ use safelog::Sensitive;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
-use tor_linkspec::OwnedChanTarget;
 
 use tor_cell::chancell::msg;
+use tor_cert::rsa::EncodedRsaCrosscert;
 use tor_cert::x509::TlsKeyAndCert;
-use tor_cert::{Ed25519Cert, rsa::RsaCrosscert};
+use tor_cert::{CertType, EncodedEd25519Cert};
 use tor_error::internal;
+use tor_linkspec::{HasRelayIds, OwnedChanTarget, RelayIdRef, RelayIdType};
 use tor_llcrypto as ll;
 use tor_llcrypto::pk::{
     ed25519::{Ed25519Identity, Ed25519SigningKey},
+    rsa,
     rsa::RsaIdentity,
 };
 use tor_relay_crypto::pk::RelayLinkSigningKeypair;
 use tor_rtcompat::{CertifiedConn, SleepProvider, StreamOps};
 use tor_time::CoarseTimeProvider;
 
-use crate::channel::ChannelType;
 use crate::channel::handshake::VerifiedChannel;
+use crate::peer::PeerAddr;
 use crate::relay::channel::handshake::{AUTHTYPE_ED25519_SHA256_RFC5705, RelayResponderHandshake};
 use crate::{Error, Result, channel::RelayInitiatorHandshake, memquota::ChannelAccount};
 
@@ -46,42 +48,51 @@ pub(crate) static LINK_AUTH: &[u16] = &[AUTHTYPE_ED25519_SHA256_RFC5705];
 ///
 /// We use this intermediary object in order to not have tor-proto crate have access to the KeyMgr
 /// meaning access to all keys. This restricts the view to what is needed.
-#[expect(unused)] // TODO(relay). remove
 pub struct RelayIdentities {
-    /// As a relay, our RSA identity key: KP_relayid_rsa
+    /// The SHA256(DER(KP_relayid_rsa)) digest for the AUTHENTICATE cell CID.
+    pub(crate) rsa_id_der_digest: [u8; 32],
+    /// Our RSA identity `KP_relayid_rsa` (SHA1). Needed for HasRelayIds which is required to
+    /// compare this with a [`tor_linkspec::ChanTarget`].
     pub(crate) rsa_id: RsaIdentity,
-    /// As a relay, our Ed identity key: KP_relayid_ed
+    /// Our Ed identity key (KP_relayid_ed). For the [`msg::Authenticate`] cell CID_ED field.
     pub(crate) ed_id: Ed25519Identity,
-    /// As a relay, our link signing keypair.
+    /// Our link signing keypair. Used to sign the [`msg::Authenticate`] cell.
     pub(crate) link_sign_kp: RelayLinkSigningKeypair,
-    /// The Ed25519 identity signing cert (CertType 4)
-    pub(crate) cert_id_sign_ed: Ed25519Cert,
-    /// The Ed25519 signing TLS cert (CertType 5)
-    pub(crate) cert_sign_tls_ed: Ed25519Cert,
-    /// The Ed25519 signing link auth cert (CertType 6)
-    pub(crate) cert_sign_link_auth_ed: Ed25519Cert,
-    /// Legacy: the RSA identity X509 cert (CertType 2). We only have the bytes here as
-    /// create_legacy_rsa_id_cert() takes a key and gives us back the encoded cert.
+    /// The Ed25519 identity signing cert (CertType 4) for the [`msg::Certs`] cell.
+    pub(crate) cert_id_sign_ed: EncodedEd25519Cert,
+    /// The Ed25519 signing TLS cert (CertType 5) for the [`msg::Certs`] cell.
+    pub(crate) cert_sign_tls_ed: EncodedEd25519Cert,
+    /// The Ed25519 signing link auth cert (CertType 6) for the [`msg::Certs`] cell.
+    pub(crate) cert_sign_link_auth_ed: EncodedEd25519Cert,
+    /// Legacy: the RSA identity X509 cert (CertType 2) for the [`msg::Certs`] cell.
+    ///
+    /// We only have the bytes here as create_legacy_rsa_id_cert() takes a key and gives us back
+    /// the encoded cert.
     pub(crate) cert_id_x509_rsa: Vec<u8>,
-    /// Legacy: the RSA identity cert (CertType 7)
-    pub(crate) cert_id_rsa: RsaCrosscert,
+    /// Legacy: the RSA identity cert (CertType 7) for the [`msg::Certs`] cell.
+    pub(crate) cert_id_rsa: EncodedRsaCrosscert,
+    /// Tls key and cert. This is for the TLS acceptor object needed to be a responder (TLS server
+    /// side).
+    pub(crate) tls_key_and_cert: TlsKeyAndCert,
 }
 
 impl RelayIdentities {
     /// Constructor.
     #[allow(clippy::too_many_arguments)] // Yes, plethora of keys...
     pub fn new(
-        rsa_id: RsaIdentity,
+        rsa_id_pk: &rsa::PublicKey,
         ed_id: Ed25519Identity,
         link_sign_kp: RelayLinkSigningKeypair,
-        cert_id_sign_ed: Ed25519Cert,
-        cert_sign_tls_ed: Ed25519Cert,
-        cert_sign_link_auth_ed: Ed25519Cert,
+        cert_id_sign_ed: EncodedEd25519Cert,
+        cert_sign_tls_ed: EncodedEd25519Cert,
+        cert_sign_link_auth_ed: EncodedEd25519Cert,
         cert_id_x509_rsa: Vec<u8>,
-        cert_id_rsa: RsaCrosscert,
+        cert_id_rsa: EncodedRsaCrosscert,
+        tls_key_and_cert: TlsKeyAndCert,
     ) -> Self {
         Self {
-            rsa_id,
+            rsa_id_der_digest: ll::d::Sha256::digest(rsa_id_pk.to_der()).into(),
+            rsa_id: rsa_id_pk.to_rsa_identity(),
             ed_id,
             link_sign_kp,
             cert_id_sign_ed,
@@ -89,26 +100,30 @@ impl RelayIdentities {
             cert_sign_link_auth_ed,
             cert_id_x509_rsa,
             cert_id_rsa,
+            tls_key_and_cert,
         }
     }
 
     /// Return the TLS key and certificate to use for the underlying TLS provider.
     ///
     /// This is used by the TLS acceptor that acts as the TLS server provider.
-    pub fn tls_key_and_cert(&self) -> TlsKeyAndCert {
-        // TODO(relay) Hold the TlsKeyAndCert in the struct as it is created by arti-relay at
-        // startup.
-        todo!()
+    pub fn tls_key_and_cert(&self) -> &TlsKeyAndCert {
+        &self.tls_key_and_cert
     }
 
     /// Return our Ed identity key (KP_relayid_ed) as bytes.
     pub(crate) fn ed_id_bytes(&self) -> [u8; 32] {
         self.ed_id.into()
     }
+}
 
-    /// Return the digest of the RSA x509 certificate (CertType 2) as bytes.
-    pub(crate) fn rsa_x509_digest(&self) -> [u8; 32] {
-        ll::d::Sha256::digest(&self.cert_id_x509_rsa).into()
+impl HasRelayIds for RelayIdentities {
+    fn identity(&self, key_type: RelayIdType) -> Option<RelayIdRef<'_>> {
+        match key_type {
+            RelayIdType::Ed25519 => Some(RelayIdRef::from(&self.ed_id)),
+            RelayIdType::Rsa => Some(RelayIdRef::from(&self.rsa_id)),
+            _ => None, // Non-exhaustive...
+        }
     }
 }
 
@@ -149,7 +164,7 @@ impl RelayChannelBuilder {
     /// Accept a new handshake over a TLS stream.
     pub fn accept<T, S>(
         self,
-        peer: Sensitive<std::net::SocketAddr>,
+        peer_addr: Sensitive<PeerAddr>,
         my_addrs: Vec<IpAddr>,
         tls: T,
         sleep_prov: S,
@@ -160,14 +175,7 @@ impl RelayChannelBuilder {
         T: AsyncRead + AsyncWrite + CertifiedConn + StreamOps + Send + Unpin + 'static,
         S: CoarseTimeProvider + SleepProvider,
     {
-        RelayResponderHandshake::new(
-            peer.into_inner().into(),
-            my_addrs,
-            tls,
-            sleep_prov,
-            identities,
-            memquota,
-        )
+        RelayResponderHandshake::new(peer_addr, my_addrs, tls, sleep_prov, identities, memquota)
     }
 }
 
@@ -193,7 +201,6 @@ pub(crate) struct ChannelAuthenticationData {
     pub(crate) scert: [u8; 32],
 }
 
-#[expect(unused)] // TODO(relay). remove
 impl ChannelAuthenticationData {
     /// Helper: return the authentication type string from the given link auth version.
     const fn auth_type_bytes(link_auth: u16) -> Result<&'static [u8]> {
@@ -239,7 +246,6 @@ impl ChannelAuthenticationData {
         body.extend_from_slice(tls_secrets.as_slice());
 
         // Add the random bytes.
-        let mut rng = rand::rng();
         let random: [u8; 24] = rand::rng().random();
         body.extend_from_slice(&random);
 
@@ -287,23 +293,13 @@ impl ChannelAuthenticationData {
             .max()
             .ok_or(Error::BadCellAuth)?;
         // The ordering matter based on if initiator or responder.
-        let cid = identities.rsa_x509_digest();
-        let sid = verified
-            .rsa_id_cert_digest
-            .ok_or(Error::from(internal!(
-                "Verified channel without a RSA identity"
-            )))?
-            .1;
+        let cid = identities.rsa_id_der_digest;
+        let sid = verified.rsa_id_digest;
         let cid_ed = identities.ed_id_bytes();
-        let sid_ed = verified
-            .ed25519_id
-            .ok_or(Error::from(internal!(
-                "Verified channel without an ed25519 identity"
-            )))?
-            .into();
+        let sid_ed = verified.ed25519_id.into();
         // Both values are consumed from the underlying codec.
-        let clog = verified.framed_tls.codec_mut().get_clog_digest()?;
-        let slog = verified.framed_tls.codec_mut().get_slog_digest()?;
+        let send_log = verified.framed_tls.codec_mut().take_send_log_digest()?;
+        let recv_log = verified.framed_tls.codec_mut().take_recv_log_digest()?;
 
         let (cid, sid, cid_ed, sid_ed) = if is_responder {
             // Reverse when responder as in CID becomes SID, and so on.
@@ -314,11 +310,13 @@ impl ChannelAuthenticationData {
         };
 
         let (clog, slog) = if is_responder {
-            // Reverse as the SLOG is the responder log digest meaning the clog as a responder.
-            (slog, clog)
+            // We're the responder (acting like a server),
+            // so the SLOG is the digest of the bytes we sent.
+            (recv_log, send_log)
         } else {
-            // Keep ordering.
-            (clog, slog)
+            // We're the initiator (acting like a client),
+            // so the CLOG is the digest of the bytes we sent.
+            (send_log, recv_log)
         };
 
         let scert = if is_responder {
@@ -345,7 +343,7 @@ impl ChannelAuthenticationData {
 /// Both relay initiator and responder handshake use this.
 pub(crate) fn build_certs_cell(
     identities: &Arc<RelayIdentities>,
-    _chan_type: ChannelType,
+    is_responder: bool,
 ) -> msg::Certs {
     let mut certs = msg::Certs::new_empty();
     // Push into the cell the CertType 2 RSA
@@ -353,36 +351,29 @@ pub(crate) fn build_certs_cell(
         tor_cert::CertType::RSA_ID_X509,
         identities.cert_id_x509_rsa.clone(),
     );
-    /* TODO(relay): Need to push these into the CERTS. The current types in RelayIdentities are
-     * wrong as they are not encodable. The types returned by the KeyMgr has encodable cert types
-     * so we'll use then when addressing this.
 
     // Push into the cell the CertType 7 RSA
-    certs.push_cert_body(
-        self.identities.cert_id_rsa.cert_type(),
-        &self.identities.cert_id_rsa,
-    );
+    certs.push_cert_body(CertType::RSA_ID_V_IDENTITY, identities.cert_id_rsa.clone());
 
     // Push into the cell the CertType 4 Ed25519
     certs.push_cert_body(
-        self.identities.cert_id_sign_ed.cert_type(),
-        &self.identities.cert_id_sign_ed,
+        CertType::IDENTITY_V_SIGNING,
+        identities.cert_id_sign_ed.clone(),
     );
     // Push into the cell the CertType 5/6 Ed25519
-    if chan_type.is_responder() {
+    if is_responder {
         // Responder has CertType 5
         certs.push_cert_body(
-            self.identities.cert_sign_tls_ed.cert_type(),
-            &self.identities.cert_sign_tls_ed,
+            CertType::SIGNING_V_TLS_CERT,
+            identities.cert_sign_tls_ed.clone(),
         );
     } else {
         // Initiator has CertType 6
         certs.push_cert_body(
-            self.identities.cert_sign_link_auth_ed.cert_type(),
-            &self.identities.cert_sign_link_auth_ed,
+            CertType::SIGNING_V_LINK_AUTH,
+            identities.cert_sign_link_auth_ed.clone(),
         );
     }
-    */
     certs
 }
 

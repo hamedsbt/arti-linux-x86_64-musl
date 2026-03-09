@@ -10,8 +10,9 @@ use tor_linkspec::{HasChanMethod, OwnedChanTarget, PtTransportName};
 use tor_proto::channel::Channel;
 use tor_proto::memquota::ChannelAccount;
 use tracing::{debug, instrument};
+
 #[cfg(feature = "relay")]
-use {safelog::Sensitive, std::net::IpAddr};
+use safelog::Sensitive;
 
 /// Lets a [`ChannelFactory`] report bootstrap progress back to the [`ChanMgr`](crate::ChanMgr).
 ///
@@ -103,7 +104,6 @@ pub trait IncomingChannelFactory: Send + Sync {
     async fn accept_from_transport(
         &self,
         peer: Sensitive<std::net::SocketAddr>,
-        my_addrs: Vec<IpAddr>,
         stream: Self::Stream,
         memquota: ChannelAccount,
     ) -> crate::Result<Arc<Channel>>;
@@ -134,13 +134,11 @@ where
     async fn build_channel_using_incoming(
         &self,
         peer: Sensitive<std::net::SocketAddr>,
-        my_addrs: Vec<IpAddr>,
         stream: Self::Stream,
         memquota: ChannelAccount,
     ) -> crate::Result<Arc<tor_proto::channel::Channel>> {
         debug!("Attempting to open a new channel from {peer}");
-        self.accept_from_transport(peer, my_addrs, stream, memquota)
-            .await
+        self.accept_from_transport(peer, stream, memquota).await
     }
 }
 
@@ -242,12 +240,11 @@ impl<CF: IncomingChannelFactory> IncomingChannelFactory for CompoundFactory<CF> 
     async fn accept_from_transport(
         &self,
         peer: Sensitive<std::net::SocketAddr>,
-        my_addrs: Vec<IpAddr>,
         stream: Self::Stream,
         memquota: ChannelAccount,
     ) -> crate::Result<Arc<Channel>> {
         self.default_factory
-            .accept_from_transport(peer, my_addrs, stream, memquota)
+            .accept_from_transport(peer, stream, memquota)
             .await
     }
 }
@@ -270,5 +267,17 @@ impl<CF: ChannelFactory + 'static> CompoundFactory<CF> {
     /// Replace the PtMgr in this object.
     pub(crate) fn replace_ptmgr(&mut self, ptmgr: Arc<dyn AbstractPtMgr + 'static>) {
         self.ptmgr = Some(ptmgr);
+    }
+
+    /// Return a reference to the default channel factory.
+    #[cfg(feature = "relay")]
+    pub(crate) fn default_factory(&self) -> &CF {
+        &self.default_factory
+    }
+
+    /// Replace the default channel factory.
+    #[cfg(feature = "relay")]
+    pub(crate) fn replace_default_factory(&mut self, factory: Arc<CF>) {
+        self.default_factory = factory;
     }
 }

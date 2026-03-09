@@ -1,29 +1,29 @@
 //! Implement a concrete type to build channels over a transport.
 
+use async_trait::async_trait;
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tracing::instrument;
 
 use crate::factory::{BootstrapReporter, ChannelFactory, IncomingChannelFactory};
 use crate::transport::TransportImplHelper;
 use crate::{Error, event::ChanMgrEventSender};
 
-use tor_async_compat::async_trait;
-use std::time::Duration;
+use safelog::{MaybeSensitive, Sensitive};
 use tor_basic_utils::rand_hostname;
 use tor_error::internal;
-use tor_linkspec::{BridgeAddr, HasChanMethod, IntoOwnedChanTarget, OwnedChanTarget};
+use tor_linkspec::{HasChanMethod, IntoOwnedChanTarget, OwnedChanTarget};
 use tor_proto::channel::ChannelType;
 use tor_proto::channel::kist::KistParams;
 use tor_proto::channel::params::ChannelPaddingInstructionsUpdates;
 use tor_proto::memquota::ChannelAccount;
 use tor_rtcompat::SpawnExt;
 use tor_rtcompat::{Runtime, TlsProvider, tls::TlsConnector};
-use tracing::instrument;
 
 #[cfg(feature = "relay")]
 use {
     futures::{AsyncRead, AsyncWrite},
-    safelog::Sensitive,
     std::net::IpAddr,
     tor_proto::{RelayIdentities, peer::PeerAddr},
     tor_rtcompat::{CertifiedConn, StreamOps},
@@ -57,6 +57,11 @@ where
     /// Relay identities needed for relay channels.
     #[cfg(feature = "relay")]
     identities: Option<Arc<RelayIdentities>>,
+    /// Our address(es) to use in the NETINFO cell.
+    // TODO: We might want one day to support updating the addresses here in the same way we
+    // support updating the identities. One use case for this is the relay config reload.
+    #[cfg(feature = "relay")]
+    my_addrs: Vec<IpAddr>,
 }
 
 impl<R: Runtime, H: TransportImplHelper> ChanBuilder<R, H>
@@ -74,6 +79,8 @@ where
             tls_acceptor: None,
             #[cfg(feature = "relay")]
             identities: None,
+            #[cfg(feature = "relay")]
+            my_addrs: Vec::new(),
         }
     }
 
@@ -83,12 +90,13 @@ where
         runtime: R,
         transport: H,
         identities: Arc<RelayIdentities>,
+        my_addrs: Vec<IpAddr>,
     ) -> crate::Result<Self> {
         use tor_error::into_internal;
         use tor_rtcompat::tls::TlsAcceptorSettings;
 
         // Build the TLS acceptor.
-        let tls_settings = TlsAcceptorSettings::new(identities.tls_key_and_cert())
+        let tls_settings = TlsAcceptorSettings::new(identities.tls_key_and_cert().clone())
             .map_err(into_internal!("Unable to build TLS acceptor setting"))?;
         let tls_acceptor = <R as TlsProvider<H::Stream>>::tls_acceptor(&runtime, tls_settings)
             .map_err(into_internal!("Unable to build TLS acceptor"))?;
@@ -97,8 +105,25 @@ where
         let mut builder = Self::new_client(runtime, transport);
         builder.identities = Some(identities);
         builder.tls_acceptor = Some(tls_acceptor);
+        builder.my_addrs = my_addrs;
 
         Ok(builder)
+    }
+
+    /// Build a new `ChanBuilder` with the given `identities`, cloning our runtime and transport.
+    ///
+    /// This is needed because the relay identities rotate over time.
+    #[cfg(feature = "relay")]
+    pub fn rebuild_with_identities(&self, identities: Arc<RelayIdentities>) -> crate::Result<Self>
+    where
+        H: Clone,
+    {
+        Self::new_relay(
+            self.runtime.clone(),
+            self.transport.clone(),
+            identities,
+            self.my_addrs.clone(),
+        )
     }
 
     /// Return the outbound channel type of this config.
@@ -158,7 +183,6 @@ where
     async fn accept_from_transport(
         &self,
         peer: Sensitive<std::net::SocketAddr>,
-        my_addrs: Vec<IpAddr>,
         stream: Self::Stream,
         memquota: ChannelAccount,
     ) -> crate::Result<Arc<tor_proto::channel::Channel>> {
@@ -169,11 +193,14 @@ where
             .addrs(vec![peer.into_inner()])
             .build()
             .map_err(|e| internal!("Unable to build chan target from peer sockaddr: {e}"))?;
+        // Convert into a PeerAddr but keep it sensitive, this can be a client/bridge.
+        let peer_addr: MaybeSensitive<PeerAddr> =
+            MaybeSensitive::sensitive(peer.into_inner().into());
 
         // Helpers: For error mapping.
         let map_ioe = |ioe, action| Error::Io {
             action,
-            peer: Some(BridgeAddr::new_addr_from_sockaddr(peer.into_inner()).into()),
+            peer: peer_addr.clone(),
             source: ioe,
         };
         let map_proto = |source, target: &OwnedChanTarget, clock_skew| Error::Proto {
@@ -214,8 +241,8 @@ where
 
         let unverified = builder
             .accept(
-                peer,
-                my_addrs,
+                Sensitive::new(peer_addr.inner()),
+                self.my_addrs.clone(),
                 tls,
                 self.runtime.clone(),
                 identities,
@@ -272,25 +299,37 @@ where
             event_sender.lock().expect("Lock poisoned").record_attempt();
         }
 
+        // Before actually doing the connect, we need to validate the channel target for the relay
+        // case. There are restrictions we need to apply.
+        #[cfg(feature = "relay")]
+        self.validate_relay_target(target)?;
+
         // 1a. Negotiate the TCP connection or other stream.
 
         // The returned PeerAddr is the actual address we are connected to.
         let (peer_addr, stream) = self.transport.connect(target).await?;
-
-        // TODO(relay): We put the `target` in the error but actually, we should use the
-        // `peer_addr` as it is the address used while the target is possibly a bunch of addresses.
-        // This will also require us to implement "Sensitive" for a PeerAddr to avoid leaking IPs.
+        // The peer could be a bridge/guard or a relay. We have to shield it right away to avoid
+        // leaking the info in the logs but we also want the info for a relay<-> relay.
+        let peer_addr = match self.outbound_chan_type() {
+            ChannelType::ClientInitiator => MaybeSensitive::sensitive(peer_addr),
+            ChannelType::RelayInitiator => MaybeSensitive::not_sensitive(peer_addr),
+            _ => return Err(Error::Internal(internal!("Unknown outbound channel type"))),
+        };
 
         let map_ioe = |action: &'static str| {
-            let peer: Option<BridgeAddr> = (&peer_addr).into();
+            let peer = peer_addr.clone();
             move |ioe: io::Error| Error::Io {
                 action,
-                peer: peer.map(Into::into),
+                peer,
                 source: ioe.into(),
             }
         };
 
         // Helper to map protocol level error.
+        //
+        // We are logging the `target` here as these protocol error happens during the handshake
+        // and we need to log the identities that are being tried but it will honor safe logging
+        // for the relay <-> relay case which is not ideal but a tradeoff in complexity.
         let map_proto = |source, target: &OwnedChanTarget, clock_skew| Error::Proto {
             source,
             peer: target.to_logged(),
@@ -341,6 +380,8 @@ where
                 // Get the client specific channel builder.
                 let mut builder = tor_proto::ClientChannelBuilder::new();
                 builder.set_declared_method(target.chan_method());
+                // Going full sensitive.
+                let peer_addr = Sensitive::new(peer_addr.inner());
 
                 let unverified = builder
                     .launch(
@@ -381,7 +422,7 @@ where
             ChannelType::RelayInitiator => {
                 self.build_relay_channel(
                     tls,
-                    peer_addr,
+                    peer_addr.inner(),
                     target,
                     &peer_cert,
                     memquota,
@@ -402,6 +443,33 @@ where
             .record_handshake_done();
 
         Ok(chan)
+    }
+
+    /// Validate the given target as in if it is fine to connect to it.
+    ///
+    /// We avoid building channels to ourselves as a relay.
+    #[cfg(feature = "relay")]
+    fn validate_relay_target(&self, target: &OwnedChanTarget) -> crate::Result<()> {
+        use tor_linkspec::HasRelayIds;
+        // Client with the relay feature won't have identities. A relay without identities is not
+        // possible but even if it was, it won't be able to build a channel to itself as a relay
+        // channel. Hence, returning Ok(()) here is fine as without identities ourself, we can
+        // connect wherever.
+        let Some(identities) = &self.identities else {
+            return Ok(());
+        };
+        // Any of our identities match the given target, we are connecting to ourselves, refuse.
+        if identities.has_any_relay_id_from(target) {
+            Err(Error::Proto {
+                source: tor_proto::Error::ChanProto(
+                    "Refusing to build channel to ourselves".into(),
+                ),
+                peer: target.clone().into(),
+                clock_skew: None,
+            })
+        } else {
+            Ok(())
+        }
     }
 
     /// Build a relay initiator channel.
@@ -429,14 +497,12 @@ where
             ))?
             .clone();
 
-        // TODO(relay): Get the my_addrs from ChanBuilder or as function param.
-        let my_addrs = Vec::new();
         let unverified = builder
             .launch(
                 tls,
                 self.runtime.clone(), /* TODO provide ZST SleepProvider instead */
                 identities,
-                my_addrs,
+                self.my_addrs.clone(),
                 target,
                 memquota,
             )

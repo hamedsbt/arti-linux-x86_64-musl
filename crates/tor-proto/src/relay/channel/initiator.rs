@@ -12,6 +12,7 @@
 //! process. The verify can be CPU intensive and thus in its own function.
 
 use futures::{AsyncRead, AsyncWrite, SinkExt};
+use safelog::MaybeSensitive;
 use std::{net::IpAddr, ops::Deref, sync::Arc};
 use tracing::trace;
 
@@ -23,10 +24,10 @@ use tor_time::CoarseTimeProvider;
 use crate::{
     ClockSkew, RelayIdentities, Result,
     channel::{
-        Channel, ChannelType, Reactor,
+        Channel, Reactor,
         handshake::{UnverifiedChannel, VerifiedChannel},
     },
-    peer::PeerAddr,
+    peer::{PeerAddr, PeerInfo},
     relay::channel::ChannelAuthenticationData,
 };
 
@@ -153,22 +154,28 @@ where
     /// channel on which circuits can be opened.
     pub async fn finish(mut self, peer_addr: PeerAddr) -> Result<(Arc<Channel>, Reactor<S>)> {
         // Send CERTS, AUTHENTICATE, NETINFO
-        let certs = super::build_certs_cell(&self.identities, ChannelType::RelayInitiator);
+        let certs = super::build_certs_cell(&self.identities, /* is_responder */ false);
         trace!(channel_id = %self.inner.unique_id, "Sending CERTS as initiator cell.");
         self.inner.framed_tls.send(certs.into()).await?;
         trace!(channel_id = %self.inner.unique_id, "Sending AUTHENTICATE as initiator cell.");
         self.inner.framed_tls.send(self.auth_cell.into()).await?;
 
-        let peer_ip = peer_addr.netinfo_addr();
         // Send our NETINFO cell. This will indicate the end of the handshake.
-        let netinfo =
-            super::build_netinfo_cell(peer_ip, self.my_addrs.clone(), &self.inner.sleep_prov)?;
+        let netinfo = super::build_netinfo_cell(
+            peer_addr.netinfo_addr(),
+            self.my_addrs.clone(),
+            &self.inner.sleep_prov,
+        )?;
         trace!(channel_id = %self.inner.unique_id, "Sending NETINFO as initiator cell.");
         self.inner.framed_tls.send(netinfo.into()).await?;
 
+        // Relay only initiate to another relay so NOT sensitive.
+        let peer_info =
+            MaybeSensitive::not_sensitive(PeerInfo::new(peer_addr, self.inner.relay_ids()?));
+
         // Get a Channel and a Reactor.
         self.inner
-            .finish(&self.netinfo_cell, &self.my_addrs, peer_addr)
+            .finish(&self.netinfo_cell, &self.my_addrs, peer_info)
             .await
     }
 }
