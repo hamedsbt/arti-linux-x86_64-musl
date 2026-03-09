@@ -27,6 +27,7 @@
   - [x] 9306eec
   - [x] 5c13837
   - [x] 606f3ab63
+  - [x] 7cdfe1848
   - [ ] (Probably needed again later)
 - [x] Fix/deprioritize TODO/FIXMEs added
 - [x] Implement/fix missing storage locking in JS
