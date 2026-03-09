@@ -7570,6 +7570,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "tor-async-utils",
  "tor-checkable",
  "tor-dirmgr",
  "tor-llcrypto",

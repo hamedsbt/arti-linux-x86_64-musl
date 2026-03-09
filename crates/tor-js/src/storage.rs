@@ -204,9 +204,9 @@ pub struct CachedJsStorage {
     /// Whether we currently hold the write lock.
     locked: Arc<RwLock<bool>>,
     /// Fires after the JS lock is released in `Drop`. `Option` so `Drop` can take it.
-    drop_tx: Option<futures::channel::oneshot::Sender<()>>,
+    drop_tx: Option<tor_async_utils::oneshot::Sender<()>>,
     /// Cloneable handle that resolves when the JS lock is released.
-    drop_rx: futures::future::Shared<futures::channel::oneshot::Receiver<()>>,
+    drop_rx: futures::future::Shared<tor_async_utils::oneshot::Receiver<()>>,
 }
 
 // SAFETY: WASM is single-threaded, so it's safe to send CachedJsStorage between "threads"
@@ -248,7 +248,7 @@ impl CachedJsStorage {
             ))
         })?;
 
-        let (drop_tx, drop_rx) = futures::channel::oneshot::channel();
+        let (drop_tx, drop_rx) = tor_async_utils::oneshot::channel();
         let drop_rx = drop_rx.shared();
         let storage = Self {
             js_storage,
