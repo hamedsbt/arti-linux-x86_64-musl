@@ -139,7 +139,12 @@ where
     R: Runtime,
     SP: SleepProvider,
 {
-    let tunnel = circ_mgr.get_or_launch_dir(dirinfo).await?;
+    debug!("get_resource: requesting circuit");
+    let tunnel = circ_mgr.get_or_launch_dir(dirinfo).await.map_err(|e| {
+        warn!("get_resource: get_or_launch_dir failed: {}", e);
+        e
+    })?;
+    debug!("get_resource: got circuit");
 
     if req.anonymized() == AnonymizedRequest::Anonymized {
         return Err(bad_api_usage!("Tried to use get_resource for an anonymized request").into());
@@ -164,9 +169,11 @@ where
         })
     };
 
+    debug!("get_resource: check_circuit");
     req.check_circuit(&tunnel).await.map_err(wrap_err)?;
 
     // Launch the stream.
+    debug!("get_resource: begin_dir_stream");
     let mut stream = runtime
         .timeout(begin_timeout, tunnel.begin_dir_stream())
         .await
@@ -175,9 +182,11 @@ where
         .map_err(RequestError::from)
         .map_err(wrap_err)?; // TODO(nickm) handle fatalities here too
 
+    debug!("get_resource: send_request");
     // TODO: Perhaps we want separate timeouts for each phase of this.
     // For now, we just use higher-level timeouts in `dirmgr`.
     let r = send_request(runtime, req, &mut stream, source.clone()).await;
+    debug!("get_resource: send_request done (ok={})", r.is_ok());
 
     if should_retire_circ(&r) {
         retire_circ(&circ_mgr, &tunnel.unique_id(), "Partial response");

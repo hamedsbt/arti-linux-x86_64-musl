@@ -22,11 +22,13 @@ async function main() {
   const startTime = performance.now();
 
   const client = new TorClient({
-    bridge: 'wss://snowflake.pse.dev/',
-    fingerprint: '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194',
+    // bridge: 'wss://snowflake.pse.dev/',
+    // fingerprint: '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194',
+    bridge: 'ws://localhost:8443/',
+    fingerprint: 'E172F78F95E9FCA9AF76E8CC2F81B87A4CCCF0E4',
     log,
     storage: new storage.MemoryStorage(),
-    fastBootstrap: 'https://tor-fast-bootstrap.voltrevo.com',
+    // fastBootstrap: 'https://tor-fast-bootstrap.voltrevo.com',
   });
 
   await client.ready();

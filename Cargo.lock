@@ -3790,6 +3790,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "microdesc-fetch"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arti-client",
+ "futures",
+ "tokio",
+ "tor-circmgr",
+ "tor-linkspec",
+ "tor-llcrypto",
+ "tor-proto",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -95,6 +95,7 @@ members = [
     "examples/axum/axum-hello-world",
     "examples/download-manager",
     "examples/ureq-examples",
+    "examples/microdesc-fetch",
 ]
 
 # We have to specify the resolver manually. It can't be inferred from

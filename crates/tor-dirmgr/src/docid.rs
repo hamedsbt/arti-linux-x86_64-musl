@@ -184,7 +184,7 @@ impl DocQuery {
         /// DEBUG: Use smaller batch size for microdescs to isolate stall issue
         const MICRODESC_N: usize = {
             #[cfg(target_arch = "wasm32")]
-            {20}
+            {500}
             #[cfg(not(target_arch = "wasm32"))]
             {500}
         };
