@@ -2,7 +2,9 @@
 
 Make HTTP requests through Tor from JavaScript. Works in browsers and Node.js.
 
-Uses [Arti](https://gitlab.torproject.org/tpo/core/arti) (the Tor Project's Rust implementation) compiled to WebAssembly, with [Snowflake](https://snowflake.torproject.org/) pluggable transport for bridge connections.
+Uses [Arti](https://gitlab.torproject.org/tpo/core/arti) (the Tor Project's Rust implementation) compiled to WebAssembly.
+
+**[Live Demo](https://voltrevo.github.io/arti/)**
 
 ## Quick start
 
@@ -14,14 +16,19 @@ npm install tor-js
 import { TorClient } from 'tor-js';
 
 const client = new TorClient({
-  bridge: 'wss://snowflake.pse.dev/',
-  fingerprint: '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194',
+  gateway: 'https://tor-js-gateway.voltrevo.com',
 });
 
 const response = await client.fetch('https://check.torproject.org/api/ip');
 console.log(await response.json()); // { IsTor: true, IP: "..." }
 
 client.close();
+```
+
+In Node.js, the gateway is optional (connects via direct TCP):
+
+```javascript
+const client = new TorClient();
 ```
 
 ## Entry points
@@ -44,18 +51,14 @@ Creates a Tor client and begins bootstrapping immediately.
 
 ```typescript
 type TorClientOptions = {
-  bridge: string;         // Snowflake WebSocket URL
-  // OR
-  broker: string;         // Snowflake WebRTC broker URL
-} & {
-  fingerprint: string;    // Bridge fingerprint (40-char hex)
+  gateway?: string;       // Gateway URL (required in browsers, optional in Node.js/Deno)
   log?: Log;              // Logger instance (default: silent)
   storage?: TorStorage;   // Persistent storage (default: auto-detected)
   logLevel?: LogLevel;    // 'trace' | 'debug' | 'info' | 'warn' | 'error'
 };
 ```
 
-Provide exactly one of `bridge` (WebSocket mode) or `broker` (WebRTC mode).
+In browsers, the gateway proxies relay connections via WebRTC or WebSocket. In Node.js/Deno, connections go via direct TCP and the gateway is only used for fast bootstrap (optional).
 
 ### `client.fetch(url, init?)`
 
@@ -157,25 +160,6 @@ const log = new Log({
   rawLog: (level, ...args) => myLogger[level](...args),
 });
 ```
-
-## Bridges
-
-Known public Snowflake bridges:
-
-| Bridge | URL | Fingerprint |
-|---|---|---|
-| pse.dev | `wss://snowflake.pse.dev/` | `664A92FF3EF71E03A2F09B1DAABA2DDF920D5194` |
-| torproject.net | `wss://snowflake.torproject.net/` | `2B280B23E1107BB62ABFC40DDCC8824814F80A72` |
-
-The pse.dev bridge accepts both browser and Node.js connections. The torproject.net bridge may reject non-browser connections.
-
-## Broker
-
-For WebRTC mode, use the Snowflake broker instead of a direct WebSocket bridge:
-
-| Broker | URL | Fingerprint |
-|---|---|---|
-| torproject.net | `https://snowflake-broker.torproject.net/` | `2B280B23E1107BB62ABFC40DDCC8824814F80A72` |
 
 ## License
 

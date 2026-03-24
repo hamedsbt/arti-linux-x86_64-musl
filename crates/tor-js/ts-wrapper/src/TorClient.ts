@@ -19,7 +19,7 @@ export class TorClient {
   private readyPromise: Promise<void> | null = null;
   private socketProvider: ArtiSocketProvider | null = null;
 
-  constructor(options: TorClientOptions) {
+  constructor(options: TorClientOptions = {}) {
     this.log = (options.log ?? new Log({ rawLog: () => {} }));
     this.clientPromise = this.bootstrap(options);
   }
