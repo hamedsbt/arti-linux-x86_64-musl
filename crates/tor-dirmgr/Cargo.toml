@@ -45,6 +45,7 @@ bridge-client = ["tor-circmgr/specific-relay", "tor-guardmgr/bridge-client", "ro
 mmap = ["memmap2"]
 static = ["rusqlite/bundled", "__is_nonadditive"]
 compression = ["tor-dirclient/xz", "tor-dirclient/zstd"]
+zstd-wasm = ["tor-dirclient/zstd-wasm"]
 # (Incomplete) support for downloading and storing router descriptors
 routerdesc = ["tor-dirclient/routerdesc"]
 dirfilter = ["__is_experimental"]

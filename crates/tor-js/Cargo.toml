@@ -17,7 +17,7 @@ arti-client = { path = "../arti-client", default-features = false, features = [
 ]}
 tor-rtcompat = { path = "../tor-rtcompat", default-features = false }
 tor-persist = { path = "../tor-persist", default-features = false }
-tor-dirmgr = { path = "../tor-dirmgr", default-features = false }
+tor-dirmgr = { path = "../tor-dirmgr", default-features = false, features = ["zstd-wasm"] }
 tor-llcrypto = { path = "../tor-llcrypto" }
 tor-netdoc = { path = "../tor-netdoc" }
 tor-checkable = { path = "../tor-checkable" }
