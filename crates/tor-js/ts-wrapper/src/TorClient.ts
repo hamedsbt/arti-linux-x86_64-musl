@@ -8,7 +8,7 @@ import {
 import type { TorClientOptions, FetchInit, LogLevel } from './types.js';
 import { Log } from './Log.js';
 import { createAutoStorage } from './storage/index.js';
-import { Gateway } from './gateway.js';
+import { ArtiSocketProvider } from './socketProvider.js';
 
 export class TorClient {
   private log: Log;
@@ -17,7 +17,7 @@ export class TorClient {
   private wasmCallback: ((level: string, target: string, message: string) => void) | null = null;
   private closed = false;
   private readyPromise: Promise<void> | null = null;
-  private gateway: Gateway | null = null;
+  private socketProvider: ArtiSocketProvider | null = null;
 
   constructor(options: TorClientOptions) {
     this.log = (options.log ?? new Log({ rawLog: () => {} }));
@@ -32,35 +32,32 @@ export class TorClient {
     this.wasmCallback = this.log._makeWasmCallback();
     this.removeLogListener = addLogListener(this.wasmCallback, options.logLevel);
 
-    // Validate required options (types enforce at compile time, but JS callers may not)
-    if (!options.gateway) {
-      throw new Error('TorClientOptions requires "gateway" (gateway URL)');
-    }
+    // ArtiSocketProvider handles relay connections. In browsers it needs a gateway
+    // URL for WebRTC/WebSocket proxying; in Node.js/Deno it connects via direct TCP.
+    this.socketProvider = new ArtiSocketProvider({ gateway: options.gateway });
+    const sp = this.socketProvider;
 
-    // Create Gateway for relay connections (WebRTC first, WebSocket fallback)
-    this.gateway = new Gateway(options.gateway);
-
-    // Create WASM options with connect callback — Rust calls this to open sockets
-    const gw = this.gateway;
     let wasmOptions = new WasmTorClientOptions(
-      (addr: string) => gw.connect(addr),
+      (addr: string) => sp.connect(addr),
     );
 
     const storage = options.storage ?? createAutoStorage();
     wasmOptions = wasmOptions.withStorage(storage);
 
-    // Auto-attempt fast bootstrap from gateway — non-blocking on failure
-    const gatewayBase = options.gateway.replace(/\/+$/, '');
-    wasmOptions = wasmOptions.withFastBootstrap(async (): Promise<Uint8Array> => {
-      this.log.info('Fast bootstrap: fetching bootstrap.zip.br...');
-      const res = await fetch(`${gatewayBase}/bootstrap.zip.br`);
-      if (!res.ok) {
-        throw new Error(`Fast bootstrap fetch failed: ${res.status} ${res.statusText}`);
-      }
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      this.log.info(`Fast bootstrap: received ${bytes.byteLength} bytes`);
-      return bytes;
-    });
+    // Auto-attempt fast bootstrap from gateway — only when a URL is available
+    if (options.gateway) {
+      const gatewayBase = options.gateway.replace(/\/+$/, '');
+      wasmOptions = wasmOptions.withFastBootstrap(async (): Promise<Uint8Array> => {
+        this.log.info('Fast bootstrap: fetching bootstrap.zip.br...');
+        const res = await fetch(`${gatewayBase}/bootstrap.zip.br`);
+        if (!res.ok) {
+          throw new Error(`Fast bootstrap fetch failed: ${res.status} ${res.statusText}`);
+        }
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        this.log.info(`Fast bootstrap: received ${bytes.byteLength} bytes`);
+        return bytes;
+      });
+    }
 
     // Create client (WASM constructor returns a Promise)
     this.log.info('Bootstrapping...');
@@ -126,8 +123,8 @@ export class TorClient {
     this.removeLogListener?.();
     this.removeLogListener = null;
     this.wasmCallback = null;
-    this.gateway?.close();
-    this.gateway = null;
+    this.socketProvider?.close();
+    this.socketProvider = null;
     this.clientPromise.then(client => client.close()).catch(() => {});
   }
 

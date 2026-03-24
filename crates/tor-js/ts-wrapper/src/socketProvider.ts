@@ -1,15 +1,35 @@
 /**
- * Gateway client for connecting to Tor relays via WebSocket or WebRTC.
+ * Socket provider for connecting to Tor relays via direct TCP, WebSocket,
+ * or WebRTC.
  *
- * The Gateway tries WebRTC first (multiplexed data channels over a single
- * peer connection), then falls back to WebSocket (one connection per relay).
+ * ArtiSocketProvider auto-detects available strategies based on environment:
+ * - Node.js/Deno: tries direct TCP first, then WebSocket/WebRTC if a gateway URL is set
+ * - Browsers: tries WebRTC first (if available), then WebSocket (requires gateway URL)
  *
- * Each `connect(target)` call returns a {@link RelaySocket} — a uniform
+ * Each `connect(target)` call returns an {@link ArtiSocket} — a uniform
  * bidirectional byte pipe regardless of transport.
  */
 
 // ---------------------------------------------------------------------------
-// RelaySocket — uniform socket interface
+// Environment detection
+// ---------------------------------------------------------------------------
+
+const HAS_DENO = typeof (globalThis as any).Deno !== 'undefined';
+const HAS_NODE = typeof (globalThis as any).process?.versions?.node !== 'undefined';
+const HAS_RTC = typeof (globalThis as any).RTCPeerConnection !== 'undefined';
+const HAS_WS =
+  typeof (globalThis as any).WebSocket !== 'undefined' || HAS_DENO || HAS_NODE;
+
+function defaultStrategies(hasUrl: boolean): string[] {
+  const s: string[] = [];
+  if (HAS_DENO || HAS_NODE) s.push('direct');
+  if (hasUrl && HAS_RTC) s.push('webrtc');
+  if (hasUrl && HAS_WS) s.push('websocket');
+  return s;
+}
+
+// ---------------------------------------------------------------------------
+// ArtiSocket — uniform bidirectional byte pipe
 // ---------------------------------------------------------------------------
 
 /**
@@ -18,7 +38,7 @@
  * Assign `onmessage` and `onclose` after creation.
  * Call `send(data)` with Uint8Array and `close()` when done.
  */
-export class RelaySocket {
+export class ArtiSocket {
   #send: (data: Uint8Array) => void;
   #close: () => void;
   #closed = false;
@@ -63,8 +83,8 @@ export class RelaySocket {
   // -- Transport factories --------------------------------------------------
 
   /** Wrap a browser WebSocket (already open). */
-  static fromWebSocket(ws: WebSocket): RelaySocket {
-    const sock = new RelaySocket(
+  static fromWebSocket(ws: WebSocket): ArtiSocket {
+    const sock = new ArtiSocket(
       (data) => ws.send(data),
       () => ws.close(),
     );
@@ -74,8 +94,8 @@ export class RelaySocket {
   }
 
   /** Wrap a WebRTC data channel (already open). */
-  static fromDataChannel(dc: RTCDataChannel): RelaySocket {
-    const sock = new RelaySocket(
+  static fromDataChannel(dc: RTCDataChannel): ArtiSocket {
+    const sock = new ArtiSocket(
       (data) => dc.send(data),
       () => dc.close(),
     );
@@ -83,36 +103,78 @@ export class RelaySocket {
     dc.onclose = () => sock._notifyClose();
     return sock;
   }
+
+  /** Wrap a Node.js net.Socket (already connected). */
+  static fromNodeSocket(socket: any): ArtiSocket {
+    const sock = new ArtiSocket(
+      (data) => socket.write(data),
+      () => socket.destroy(),
+    );
+    socket.on('data', (buf: Buffer) => sock.onmessage?.(new Uint8Array(buf)));
+    socket.on('close', () => sock._notifyClose());
+    socket.on('error', () => {});
+    return sock;
+  }
+
+  /** Wrap a Deno TCP connection. */
+  static fromDenoConn(conn: any): ArtiSocket {
+    const sock = new ArtiSocket(
+      (data) => {
+        const writer = conn.writable.getWriter();
+        writer.write(data).then(() => writer.releaseLock());
+      },
+      () => conn.close(),
+    );
+    (async () => {
+      try {
+        for await (const chunk of conn.readable) {
+          sock.onmessage?.(new Uint8Array(chunk));
+        }
+      } catch {}
+      sock._notifyClose();
+    })();
+    return sock;
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Gateway — multi-strategy connection manager
+// ArtiSocketProvider — multi-strategy connection manager
 // ---------------------------------------------------------------------------
 
 /**
- * Options for creating a Gateway.
+ * Options for creating an ArtiSocketProvider.
  */
-export interface GatewayOptions {
+export interface ArtiSocketProviderOptions {
   /**
-   * Ordered list of strategies to try: `"webrtc"`, `"websocket"`.
-   * Defaults to `["webrtc", "websocket"]` in browsers with WebRTC,
-   * or `["websocket"]` otherwise.
+   * Gateway URL (e.g., `"https://tor-js-gateway.example.com"`).
+   * Required in browsers for WebRTC/WebSocket relay connections.
+   * Optional in Node.js/Deno (enables fast bootstrap when provided).
+   */
+  gateway?: string;
+
+  /**
+   * Ordered list of strategies to try: `"direct"`, `"webrtc"`, `"websocket"`.
+   * Defaults based on environment and whether a gateway URL is provided.
    */
   strategies?: string[];
 }
 
 interface TrackedEntry {
   dc: RTCDataChannel;
-  sock: RelaySocket | null;
+  sock: ArtiSocket | null;
   reject: ((err: Error) => void) | null;
 }
 
 /**
- * Gateway client. Opens relay sockets via configurable strategies
- * (WebRTC data channels, WebSocket) with automatic fallback.
+ * Opens sockets to Tor relays via configurable strategies (direct TCP,
+ * WebRTC data channels, WebSocket) with automatic fallback.
+ *
+ * The gateway URL is optional — without it, only the `direct` strategy is
+ * available (Node.js/Deno native TCP). With a gateway URL, WebRTC and
+ * WebSocket strategies become available for browser environments.
  */
-export class Gateway {
-  #url: string;
+export class ArtiSocketProvider {
+  #url: string | null;
   #strategies: string[];
 
   // WebRTC state (lazily created, reused across connect() calls)
@@ -122,21 +184,23 @@ export class Gateway {
   // Tracked data channels: before open has reject, after open has sock.
   #tracked: TrackedEntry[] = [];
 
-  constructor(url: string, options: GatewayOptions = {}) {
-    this.#url = url.replace(/\/+$/, '');
-    this.#strategies = options.strategies ?? defaultStrategies();
+  constructor(options: ArtiSocketProviderOptions = {}) {
+    this.#url = options.gateway ? options.gateway.replace(/\/+$/, '') : null;
+    this.#strategies = options.strategies ?? defaultStrategies(!!this.#url);
   }
 
   /**
    * Open a relay socket to the given target (e.g. "198.51.100.1:9001").
    * Tries each configured strategy in order until one succeeds.
    */
-  async connect(target: string): Promise<RelaySocket> {
+  async connect(target: string): Promise<ArtiSocket> {
     const errors: string[] = [];
 
     for (const strategy of this.#strategies) {
       try {
         switch (strategy) {
+          case 'direct':
+            return await this.#connectDirect(target);
           case 'webrtc':
             return await this.#connectWebRTC(target);
           case 'websocket':
@@ -162,9 +226,34 @@ export class Gateway {
     }
   }
 
+  // -- Direct TCP strategy (Node.js / Deno) ---------------------------------
+
+  async #connectDirect(target: string): Promise<ArtiSocket> {
+    const [host, portStr] = target.split(':');
+    const port = parseInt(portStr, 10);
+
+    if (HAS_DENO) {
+      const conn = await (globalThis as any).Deno.connect({ hostname: host, port });
+      return ArtiSocket.fromDenoConn(conn);
+    }
+
+    if (HAS_NODE) {
+      const net = await import('node:net');
+      const socket = net.createConnection({ host, port });
+      await new Promise<void>((resolve, reject) => {
+        socket.once('connect', resolve);
+        socket.once('error', reject);
+      });
+      return ArtiSocket.fromNodeSocket(socket);
+    }
+
+    throw new Error('direct TCP not available in this environment');
+  }
+
   // -- WebSocket strategy ---------------------------------------------------
 
-  async #connectWebSocket(target: string): Promise<RelaySocket> {
+  async #connectWebSocket(target: string): Promise<ArtiSocket> {
+    if (!this.#url) throw new Error('websocket strategy requires a gateway URL');
     const wsUrl = `${this.#url.replace(/^http/, 'ws')}/socket/${target}`;
     const ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
@@ -174,12 +263,13 @@ export class Gateway {
       ws.onerror = () => reject(new Error('websocket connection failed'));
     });
 
-    return RelaySocket.fromWebSocket(ws);
+    return ArtiSocket.fromWebSocket(ws);
   }
 
   // -- WebRTC strategy ------------------------------------------------------
 
-  async #connectWebRTC(target: string): Promise<RelaySocket> {
+  async #connectWebRTC(target: string): Promise<ArtiSocket> {
+    if (!this.#url) throw new Error('webrtc strategy requires a gateway URL');
     if (typeof RTCPeerConnection === 'undefined') {
       throw new Error('RTCPeerConnection not available');
     }
@@ -193,7 +283,7 @@ export class Gateway {
     const dc = this.#rtcPc!.createDataChannel(target);
     dc.binaryType = 'arraybuffer';
 
-    const entry = { dc, sock: null as RelaySocket | null, reject: null as ((err: Error) => void) | null };
+    const entry = { dc, sock: null as ArtiSocket | null, reject: null as ((err: Error) => void) | null };
     this.#tracked.push(entry);
 
     // Race: channel opens vs server rejects via _signal
@@ -208,7 +298,7 @@ export class Gateway {
 
     // Channel is open — dc.id now available
     entry.reject = null;
-    const sock = RelaySocket.fromDataChannel(dc);
+    const sock = ArtiSocket.fromDataChannel(dc);
     entry.sock = sock;
     dc.onclose = () => {
       this.#removeTracked(entry);
@@ -312,15 +402,4 @@ export class Gateway {
       }
     } catch { /* ignore malformed signal messages */ }
   }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function defaultStrategies(): string[] {
-  const s: string[] = [];
-  if (typeof RTCPeerConnection !== 'undefined') s.push('webrtc');
-  if (typeof WebSocket !== 'undefined') s.push('websocket');
-  return s;
 }

@@ -6,12 +6,13 @@ export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 /**
  * Options for creating a TorClient.
  *
- * The gateway provides WebSocket relay and optional fast bootstrap.
- * Arti connects to regular Tor relays through the gateway's WebSocket proxy.
+ * In browsers, provide a gateway URL for WebSocket/WebRTC relay connections
+ * and fast bootstrap. In Node.js/Deno, the gateway connects via direct TCP
+ * without a URL; providing one enables fast bootstrap from that server.
  */
 export type TorClientOptions = {
-  /** Gateway URL (e.g., `"https://tor-js-gateway.voltrevo.com"`). */
-  gateway: string;
+  /** Gateway URL (e.g., `"https://tor-js-gateway.voltrevo.com"`). Required in browsers for relay connections; optional in Node.js/Deno (enables fast bootstrap). */
+  gateway?: string;
 
   /**
    * Optional logger instance.
