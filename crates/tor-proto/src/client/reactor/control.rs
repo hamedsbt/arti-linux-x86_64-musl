@@ -562,11 +562,9 @@ impl<'a> ControlHandler<'a> {
 
                         if !sendme_required {
                             // Nothing to do, so discard the SENDME.
-                            tracing::info!("Stream SENDME discarded (not required) for stream_id={:?}", stream_id);
                             return Ok(None);
                         }
 
-                        // tracing::info!("Reactor sending stream SENDME for stream_id={:?} on leg={:?} hop={:?}", stream_id, leg_id, hop_num);
                         let sendme = Sendme::new_empty();
                         let cell = AnyRelayMsgOuter::new(Some(stream_id), sendme.into());
 

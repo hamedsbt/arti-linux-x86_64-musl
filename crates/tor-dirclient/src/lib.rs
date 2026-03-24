@@ -418,7 +418,7 @@ where
     // Idle timeout: if no data arrives for this duration, we give up.
     // For slow transports like Snowflake, we need a very generous timeout.
     // The consensus is 2-3 MB compressed and Snowflake can be very slow/bursty.
-    let idle_timeout = Duration::from_secs(120);
+    let idle_timeout = Duration::from_secs(10);
 
     loop {
         // allocate buffer for next read

@@ -584,9 +584,6 @@ impl Circuit {
         static DATA_CELL_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let total = RELAY_CELL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let data = if c_t_w { DATA_CELL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 } else { DATA_CELL_COUNT.load(std::sync::atomic::Ordering::Relaxed) };
-        if total % 500 == 0 || !c_t_w {
-            tracing::info!("Relay cell #{}: cmds={:?}, c_t_w={}, data_cells={}", total, cmds, c_t_w, data);
-        }
 
         // Decrement the circuit sendme windows, and see if we need to
         // send a sendme cell.
@@ -602,7 +599,6 @@ impl Circuit {
         let mut circ_cmds = vec![];
         // If we do need to send a circuit-level SENDME cell, do so.
         if send_circ_sendme {
-            // tracing::info!("Sending circuit-level SENDME on hop {:?}", hopnum);
             // This always sends a V1 (tagged) sendme cell, and thereby assumes
             // that SendmeEmitMinVersion is no more than 1.  If the authorities
             // every increase that parameter to a higher number, this will

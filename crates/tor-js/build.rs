@@ -64,7 +64,4 @@ fn main() {
     // to always rerun (it sees the dep as perpetually missing/changed).
     // Note: Just means we rebuild this build.rs - not a full rebuild.
     println!("cargo:rerun-if-changed=.force-rebuild");
-
-    // Not necessary because we always rerun
-    // println!("cargo:rerun-if-changed=ts-wrapper/package.json");
 }

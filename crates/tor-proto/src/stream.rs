@@ -222,7 +222,6 @@ impl StreamTarget {
     /// This means that if the circuit reactor is unable to send the SENDME, we are not notified of
     /// this here and an error will not be returned.
     pub(crate) fn send_sendme(&mut self) -> Result<()> {
-        // tracing::info!("Sending stream-level SENDME for stream_id={:?} hop={:?}", self.stream_id, self.hop);
         match &self.tunnel {
             Tunnel::Client(t) => t.send_sendme(self.stream_id, self.hop),
             #[cfg(feature = "relay")]
