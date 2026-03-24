@@ -6,20 +6,12 @@ export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 /**
  * Options for creating a TorClient.
  *
- * Provide exactly one of `bridge` (WebSocket mode) or `broker` (WebRTC mode).
- * The transport mode is inferred from which field is set.
+ * The gateway provides WebSocket relay and optional fast bootstrap.
+ * Arti connects to regular Tor relays through the gateway's WebSocket proxy.
  */
-export type TorClientOptions = (
-  {
-    /** Snowflake WebSocket bridge URL (e.g., `"wss://snowflake.torproject.net/"`). */
-    bridge: string;
-  } | {
-    /** Snowflake broker URL for WebRTC mode (e.g., `"https://snowflake-broker.torproject.net/"`). */
-    broker: string;
-  }
-) & {
-  /** Bridge fingerprint for identity verification (40-char hex string, e.g., `"2B280B23E1107BB62ABFC40DDCC8824814F80A72"`). */
-  fingerprint: string;
+export type TorClientOptions = {
+  /** Gateway URL (e.g., `"https://tor-js-gateway.voltrevo.com"`). */
+  gateway: string;
 
   /**
    * Optional logger instance.
@@ -32,13 +24,6 @@ export type TorClientOptions = (
 
   /** Optional storage for persistent state (implements TorStorage). */
   storage?: TorStorage;
-
-  /**
-   * Base URL of a tor-fast-bootstrap server (e.g. "https://tor-fast-bootstrap.voltrevo.com").
-   * When set and storage is empty, fetches bootstrap.zip to pre-populate the directory cache
-   * for faster bootstrap.
-   */
-  fastBootstrap?: string;
 
   /**
    * Minimum log level for this client's log listener. Defaults to 'debug'.

@@ -8,7 +8,7 @@ import {
 import type { TorClientOptions, FetchInit, LogLevel } from './types.js';
 import { Log } from './Log.js';
 import { createAutoStorage } from './storage/index.js';
-import { never } from './helpers.js';
+import { Gateway } from './gateway.js';
 
 export class TorClient {
   private log: Log;
@@ -17,6 +17,7 @@ export class TorClient {
   private wasmCallback: ((level: string, target: string, message: string) => void) | null = null;
   private closed = false;
   private readyPromise: Promise<void> | null = null;
+  private gateway: Gateway | null = null;
 
   constructor(options: TorClientOptions) {
     this.log = (options.log ?? new Log({ rawLog: () => {} }));
@@ -31,51 +32,35 @@ export class TorClient {
     this.wasmCallback = this.log._makeWasmCallback();
     this.removeLogListener = addLogListener(this.wasmCallback, options.logLevel);
 
-    // Validate required options (types enforce this at compile time, but JS callers may not)
-    if (!('bridge' in options) && !('broker' in options)) {
-      throw new Error('TorClientOptions requires either "bridge" (WebSocket URL) or "broker" (WebRTC broker URL)');
-    }
-    if (!options.fingerprint) {
-      throw new Error('TorClientOptions requires "fingerprint" (40-char hex bridge fingerprint)');
+    // Validate required options (types enforce at compile time, but JS callers may not)
+    if (!options.gateway) {
+      throw new Error('TorClientOptions requires "gateway" (gateway URL)');
     }
 
-    // Create WASM options — infer transport mode from which URL field is set
-    let wasmOptions: WasmTorClientOptions;
-    if ('bridge' in options) {
-      wasmOptions = new WasmTorClientOptions(options.bridge, options.fingerprint);
-    } else if ('broker' in options) {
-      wasmOptions = WasmTorClientOptions.snowflakeWebRtc(options.broker, options.fingerprint);
-    } else {
-      never(options);
-    }
+    // Create Gateway for relay connections (WebRTC first, WebSocket fallback)
+    this.gateway = new Gateway(options.gateway);
+
+    // Create WASM options with connect callback — Rust calls this to open sockets
+    const gw = this.gateway;
+    let wasmOptions = new WasmTorClientOptions(
+      (addr: string) => gw.connect(addr),
+    );
 
     const storage = options.storage ?? createAutoStorage();
-
-    // FIXME: This is a workaround for an underlying bug where guards
-    // are marked unusable when switching bridges.
-    await storage.delete('state:guards');
-
     wasmOptions = wasmOptions.withStorage(storage);
 
-    if (options.fastBootstrap) {
-      const baseUrl = options.fastBootstrap.replace(/\/+$/, '');
-      wasmOptions = wasmOptions.withFastBootstrap(async (): Promise<Uint8Array> => {
-        this.log.info('Fast bootstrap: fetching bootstrap.zip.br...');
-        const res = await fetch(`${baseUrl}/bootstrap.zip.br`);
-        if (!res.ok) {
-          throw new Error(`Fast bootstrap fetch failed: ${res.status} ${res.statusText}`);
-        }
-        const contentType = res.headers.get('content-type') || '';
-        if (!contentType.includes('application/zip')) {
-          throw new Error(
-            `Fast bootstrap: expected content-type application/zip, got "${contentType}"`,
-          );
-        }
-        const bytes = new Uint8Array(await res.arrayBuffer());
-        this.log.info(`Fast bootstrap: received ${bytes.byteLength} bytes`);
-        return bytes;
-      });
-    }
+    // Auto-attempt fast bootstrap from gateway — non-blocking on failure
+    const gatewayBase = options.gateway.replace(/\/+$/, '');
+    wasmOptions = wasmOptions.withFastBootstrap(async (): Promise<Uint8Array> => {
+      this.log.info('Fast bootstrap: fetching bootstrap.zip.br...');
+      const res = await fetch(`${gatewayBase}/bootstrap.zip.br`);
+      if (!res.ok) {
+        throw new Error(`Fast bootstrap fetch failed: ${res.status} ${res.statusText}`);
+      }
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      this.log.info(`Fast bootstrap: received ${bytes.byteLength} bytes`);
+      return bytes;
+    });
 
     // Create client (WASM constructor returns a Promise)
     this.log.info('Bootstrapping...');
@@ -141,6 +126,8 @@ export class TorClient {
     this.removeLogListener?.();
     this.removeLogListener = null;
     this.wasmCallback = null;
+    this.gateway?.close();
+    this.gateway = null;
     this.clientPromise.then(client => client.close()).catch(() => {});
   }
 

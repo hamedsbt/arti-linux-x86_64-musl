@@ -21,8 +21,7 @@ async function main() {
   log.info('Creating TorClient...');
   const startTime = performance.now();
   const client = new TorClient({
-    bridge: 'wss://snowflake.pse.dev/',
-    fingerprint: '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194',
+    gateway: 'https://tor-js-gateway.voltrevo.com',
     log,
   });
   await client.ready();

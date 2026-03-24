@@ -80,7 +80,6 @@ members = [
 
     "crates/arti-rpc-client-core",
 
-    "crates/tor-snowflake",
     "crates/tor-js",
 
     "maint/fixup-features",
@@ -95,7 +94,6 @@ members = [
     "examples/axum/axum-hello-world",
     "examples/download-manager",
     "examples/ureq-examples",
-    "examples/microdesc-fetch",
 ]
 
 # We have to specify the resolver manually. It can't be inferred from

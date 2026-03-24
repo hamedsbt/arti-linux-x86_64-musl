@@ -160,7 +160,6 @@ fn note_cache_success<R: Runtime>(circmgr: &CircMgr<R>, source: &tor_dirclient::
 }
 
 /// Load every document in `missing` and try to apply it to `state`.
-#[cfg_attr(not(target_arch = "wasm32"), expect(clippy::unused_async))]
 async fn load_and_apply_documents<R: Runtime>(
     missing: &[DocId],
     dirmgr: &Arc<DirMgr<R>>,
@@ -288,15 +287,12 @@ async fn fetch_single<R: Runtime>(
     current_netdir: Option<&NetDir>,
     circmgr: Arc<CircMgr<R>>,
 ) -> Result<(ClientRequest, DirResponse)> {
-    let has_netdir = current_netdir.is_some();
     let dirinfo: DirInfo = match current_netdir {
         Some(netdir) => netdir.into(),
         None => tor_circmgr::DirInfo::Nothing,
     };
-    debug!("fetch_single: starting request (has_netdir={})", has_netdir);
     let outcome =
         tor_dirclient::get_resource(request.as_requestable(), dirinfo, rt, circmgr.clone()).await;
-    debug!("fetch_single: request completed (ok={})", outcome.is_ok());
 
     note_request_outcome(&circmgr, &outcome);
 
@@ -577,7 +573,6 @@ async fn download_attempt<R: Runtime>(
 
         let circmgr = dirmgr.circmgr()?;
         let netdir = dirmgr.netdir(tor_netdir::Timeliness::Timely).ok();
-        debug!("download_attempt: {} requests, parallelism={}, has_netdir={}", requests.len(), parallelism, netdir.is_some());
 
         let mut n_errors = 0;
         let mut response_stream = futures::stream::iter(requests)

@@ -11,11 +11,9 @@
 //! // Initialize the WASM module
 //! init();
 //!
-//! // Create client options with Snowflake transport
-//! // The fingerprint is required for bridge verification
+//! // Create client options with gateway URL
 //! const options = new TorClientOptions(
-//!   'wss://snowflake.pse.dev/',
-//!   '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194'  // pse.dev bridge fingerprint
+//!   'https://tor-js-gateway.voltrevo.com'
 //! );
 //!
 //! // Create the Tor client (async)
@@ -42,9 +40,9 @@ use error::JsTorError;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use arti_client::config::{BridgeConfigBuilder, CfgPath, pt::TransportConfigBuilder};
+use arti_client::config::CfgPath;
 use arti_client::{TorClient as ArtiTorClient, TorClientConfig};
 use serde::Deserialize;
 use tor_rtcompat::wasm::WasmRuntime;
@@ -52,7 +50,6 @@ use tracing::{debug, info, error};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use wasm_bindgen::prelude::*;
-use tor_snowflake::arti_transport::{SnowflakeMode, SnowflakePtMgr};
 
 // Global log callback (WASM is single-threaded, so thread_local is fine)
 thread_local! {
@@ -220,7 +217,9 @@ impl tracing::field::Visit for MessageVisitor {
 /// Options for creating a TorClient
 #[wasm_bindgen]
 pub struct TorClientOptions {
-    mode: SnowflakeMode,
+    /// JS callback: `(addr: string) => Promise<RelaySocket>`
+    /// The socket must have: send(Uint8Array), onmessage, onclose, close()
+    connect: js_sys::Function,
     /// Custom storage implementation (optional)
     storage: Option<JsStorageInterface>,
     /// Optional callback returning bootstrap.zip bytes for fast directory pre-population
@@ -229,35 +228,20 @@ pub struct TorClientOptions {
 
 #[wasm_bindgen]
 impl TorClientOptions {
-    /// Create options for WebSocket Snowflake transport
+    /// Create options with a connect function.
     ///
-    /// # Arguments
-    /// * `snowflake_url` - WebSocket URL for the Snowflake bridge (e.g., "wss://snowflake.pse.dev/")
-    /// * `fingerprint` - Bridge fingerprint (40 char hex string).
+    /// The connect function receives a target address string (e.g. "198.51.100.1:9001")
+    /// and must return a Promise resolving to a socket object with:
+    /// - `send(data: Uint8Array)` — send binary data
+    /// - `onmessage: ((data: Uint8Array) => void) | null` — receive callback
+    /// - `onclose: (() => void) | null` — close notification
+    /// - `close()` — close the socket
+    ///
+    /// The TS wrapper provides this automatically via the Gateway class.
     #[wasm_bindgen(constructor)]
-    pub fn new(snowflake_url: String, fingerprint: String) -> Self {
+    pub fn new(connect: js_sys::Function) -> Self {
         Self {
-            mode: SnowflakeMode::WebSocket {
-                url: snowflake_url,
-                fingerprint,
-            },
-            storage: None,
-            fast_bootstrap: None,
-        }
-    }
-
-    /// Create options for WebRTC Snowflake transport (via broker)
-    ///
-    /// # Arguments
-    /// * `broker_url` - Snowflake broker URL (e.g., "https://snowflake-broker.torproject.net/").
-    /// * `fingerprint` - Bridge fingerprint (40 char hex string).
-    #[wasm_bindgen(js_name = snowflakeWebRtc)]
-    pub fn snowflake_webrtc(broker_url: String, fingerprint: String) -> Self {
-        Self {
-            mode: SnowflakeMode::WebRtc {
-                broker_url,
-                fingerprint,
-            },
+            connect,
             storage: None,
             fast_bootstrap: None,
         }
@@ -281,7 +265,7 @@ impl TorClientOptions {
     /// Set a callback that provides bootstrap.zip bytes for fast directory pre-population.
     ///
     /// The callback should be `() => Promise<Uint8Array>` returning the uncompressed
-    /// bootstrap.zip bytes (from a tor-fast-bootstrap server).
+    /// bootstrap.zip bytes (from a tor-js-gateway server).
     ///
     /// When set and storage has no cached consensus, the zip is parsed and the
     /// directory cache is pre-populated before bootstrap begins.
@@ -301,9 +285,6 @@ impl TorClientOptions {
 pub struct TorClient {
     inner: Option<Arc<ArtiTorClient<WasmRuntime>>>,
     tls_config: Arc<futures_rustls::rustls::ClientConfig>,
-    /// Set by SnowflakeChannelFactory when WebSocket connection fails/succeeds.
-    /// Checked by ready() to fail fast when the bridge is unreachable.
-    ws_connect_error: Arc<Mutex<Option<String>>>,
 }
 
 #[wasm_bindgen]
@@ -344,9 +325,6 @@ impl TorClient {
     }
 
     /// Wait until the client is ready for traffic (connection usable + valid directory).
-    ///
-    /// Fails fast if the WebSocket connection to the bridge has failed. The error
-    /// is consumed so the next call will wait again (allowing retry).
     #[wasm_bindgen(js_name = ready)]
     pub fn ready(&self) -> js_sys::Promise {
         let client = match &self.inner {
@@ -357,45 +335,26 @@ impl TorClient {
                 });
             }
         };
-        let ws_error = Arc::clone(&self.ws_connect_error);
 
         wasm_bindgen_futures::future_to_promise(async move {
-            use futures::future::{select, Either};
             use futures::StreamExt;
-            use std::pin::pin;
 
             // Fast path: already ready
             if client.bootstrap_status().ready_for_traffic() {
                 return Ok(JsValue::undefined());
             }
 
-            // Poll bootstrap events until ready, checking for WS errors periodically
+            // Poll bootstrap events until ready
             let mut events = client.bootstrap_events();
-            loop {
-                // Check for WS connection failure (consume the error)
-                if let Some(msg) = ws_error.lock().unwrap().take() {
-                    return Err(JsTorError::connection(
-                        format!("WebSocket connection failed: {}", msg)
-                    ).into_js_value());
-                }
-
-                // Wait for next bootstrap event, with periodic timeout to recheck WS error
-                let next = pin!(events.next());
-                let timeout = pin!(gloo_timers::future::TimeoutFuture::new(500));
-                match select(next, timeout).await {
-                    Either::Left((Some(status), _)) => {
-                        if status.ready_for_traffic() {
-                            return Ok(JsValue::undefined());
-                        }
-                    }
-                    Either::Left((None, _)) => {
-                        return Err(JsTorError::bootstrap(
-                            "Client failed to become ready for traffic"
-                        ).into_js_value());
-                    }
-                    Either::Right(_) => continue, // timeout → loop back to check WS error
+            while let Some(status) = events.next().await {
+                if status.ready_for_traffic() {
+                    return Ok(JsValue::undefined());
                 }
             }
+
+            Err(JsTorError::bootstrap(
+                "Client failed to become ready for traffic"
+            ).into_js_value())
         })
     }
 
@@ -413,19 +372,9 @@ impl TorClient {
 /// Create a TorClient with the given options
 async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> {
     debug!("tor-js {} (git: {})", env!("TOR_JS_VERSION"), env!("TOR_JS_GIT_INFO"));
-    info!("Creating TorClient with arti-client...");
+    info!("Creating TorClient");
 
-    // 1. Create Snowflake PT manager from tor-snowflake
-    // Extract fingerprint before moving mode into SnowflakePtMgr.
-    let bridge_fingerprint = match &options.mode {
-        SnowflakeMode::WebSocket { fingerprint, .. } => fingerprint.clone(),
-        SnowflakeMode::WebRtc { fingerprint, .. } => fingerprint.clone(),
-    };
-    let ws_connect_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let snowflake_mgr = SnowflakePtMgr::new(options.mode, Arc::clone(&ws_connect_error));
-    info!("Created Snowflake PT manager");
-
-    // 2. Configure arti-client with Snowflake bridge
+    // 1. Configure arti-client (no bridge — connects to regular relays via JS connect callback)
     let mut config_builder = TorClientConfig::builder();
 
     // Storage paths (required by config validation, but not used on WASM)
@@ -434,40 +383,17 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
         .cache_dir(CfgPath::new("/wasm/cache".to_owned()))
         .state_dir(CfgPath::new("/wasm/state".to_owned()));
 
-    // Configure the Snowflake bridge
-    let bridge_line = format!("snowflake 0.0.2.0:1 {}", bridge_fingerprint);
-    debug!("Using bridge line: {}", bridge_line);
-
-    let bridge: BridgeConfigBuilder = bridge_line
-        .parse()
-        .map_err(|e| JsTorError::config(format!("Failed to parse bridge line: {}", e)).into_js_value())?;
-    config_builder.bridges().bridges().push(bridge);
-
-    // Add transport config for "snowflake"
-    let mut transport = TransportConfigBuilder::default();
-    transport
-        .protocols(vec!["snowflake"
-            .parse()
-            .map_err(|e| JsTorError::config(format!("Failed to parse protocol: {}", e)).into_js_value())?])
-        .proxy_addr(
-            "127.0.0.1:1"
-                .parse()
-                .map_err(|e| JsTorError::config(format!("Failed to parse proxy addr: {}", e)).into_js_value())?,
-        );
-    config_builder.bridges().transports().push(transport);
-
     let config = config_builder
         .build()
         .map_err(|e| JsTorError::config(format!("Failed to build config: {}", e)).into_js_value())?;
-    info!("Configuration built with Snowflake bridge");
 
-    // 3. Create TorClient with WASM runtime
-    let runtime = WasmRuntime::default();
+    // 2. Create WASM runtime with JS connect function
+    let mut runtime = WasmRuntime::default();
+    runtime.set_connect_fn(options.connect);
 
-    // Build the client with optional custom storage
+    // 3. Build the client with optional custom storage
     let mut builder = ArtiTorClient::with_runtime(runtime).config(config);
 
-    // Set up custom storage if provided
     if let Some(js_storage_interface) = options.storage {
         info!("Initializing JS storage...");
         let js_storage = JsStorage::new(js_storage_interface);
@@ -497,12 +423,8 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
 
     info!("TorClient created (unbootstrapped)");
 
-    // 4. Inject PT manager (requires experimental-api feature)
-    tor_client.chanmgr().set_pt_mgr(Arc::new(snowflake_mgr));
-    info!("Snowflake PT manager injected into ChanMgr");
-
-    // 5. Bootstrap the client
-    info!("Bootstrapping Tor client via Snowflake...");
+    // 4. Bootstrap the client (connects to directory authorities via WS proxy)
+    info!("Bootstrapping Tor client...");
     tor_client
         .bootstrap()
         .await
@@ -512,7 +434,6 @@ async fn create_client(options: TorClientOptions) -> Result<TorClient, JsValue> 
     Ok(TorClient {
         inner: Some(Arc::new(tor_client)),
         tls_config: make_tls_config(),
-        ws_connect_error,
     })
 }
 
@@ -775,7 +696,7 @@ const TS_TYPES: &str = r#"
  *   }
  * }
  *
- * const options = new TorClientOptions(url, fingerprint)
+ * const options = new TorClientOptions(gatewayUrl)
  *   .withStorage(new IndexedDBStorage());
  * const client = await TorClient.create(options);
  * ```

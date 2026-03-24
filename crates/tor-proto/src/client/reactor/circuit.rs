@@ -602,7 +602,7 @@ impl Circuit {
         let mut circ_cmds = vec![];
         // If we do need to send a circuit-level SENDME cell, do so.
         if send_circ_sendme {
-            tracing::info!("Sending circuit-level SENDME on hop {:?}", hopnum);
+            // tracing::info!("Sending circuit-level SENDME on hop {:?}", hopnum);
             // This always sends a V1 (tagged) sendme cell, and thereby assumes
             // that SendmeEmitMinVersion is no more than 1.  If the authorities
             // every increase that parameter to a higher number, this will

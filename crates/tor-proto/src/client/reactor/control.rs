@@ -566,7 +566,7 @@ impl<'a> ControlHandler<'a> {
                             return Ok(None);
                         }
 
-                        tracing::info!("Reactor sending stream SENDME for stream_id={:?} on leg={:?} hop={:?}", stream_id, leg_id, hop_num);
+                        // tracing::info!("Reactor sending stream SENDME for stream_id={:?} on leg={:?} hop={:?}", stream_id, leg_id, hop_num);
                         let sendme = Sendme::new_empty();
                         let cell = AnyRelayMsgOuter::new(Some(stream_id), sendme.into());
 

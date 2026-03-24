@@ -16,7 +16,9 @@ use std::borrow::Cow;
 use tor_time::{CoarseInstant, CoarseTimeProvider, RealCoarseTimeProvider};
 use tor_async_compat::async_trait;
 use futures::task::{Spawn, SpawnError};
-use futures::{stream, AsyncRead, AsyncWrite, Future};
+use futures::{stream, AsyncRead, AsyncWrite, Future, StreamExt};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 use std::fmt::Debug;
 use std::io::{self, Result as IoResult};
 use std::net::SocketAddr;
@@ -33,12 +35,29 @@ use tor_general_addr::unix;
 /// but with significant limitations due to WASM constraints:
 ///
 /// - No blocking operations (will panic)
-/// - No direct TCP/UDP sockets (need WebSocket/WebRTC transport)
+/// - No direct TCP/UDP sockets — use [`set_connect_fn`](WasmRuntime::set_connect_fn)
+///   to provide a JS callback for opening socket connections
 /// - No filesystem access
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
 pub struct WasmRuntime {
     /// Coarse time provider
     coarse: RealCoarseTimeProvider,
+    /// Optional JS callback for connecting to relay addresses.
+    /// Signature: `(addr: string) => Promise<{send, onmessage, onclose, close}>`
+    #[cfg(target_arch = "wasm32")]
+    connect_fn: Option<js_sys::Function>,
+}
+
+impl Debug for WasmRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WasmRuntime").finish()
+    }
+}
+
+impl Default for WasmRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WasmRuntime {
@@ -46,7 +65,22 @@ impl WasmRuntime {
     pub fn new() -> Self {
         Self {
             coarse: RealCoarseTimeProvider::new(),
+            #[cfg(target_arch = "wasm32")]
+            connect_fn: None,
         }
+    }
+
+    /// Set a JS callback for opening socket connections to relay addresses.
+    ///
+    /// The callback receives a target address string (e.g. `"198.51.100.1:9001"`)
+    /// and must return a `Promise` that resolves to a socket object with:
+    /// - `send(data: Uint8Array)` — send binary data
+    /// - `onmessage: ((data: Uint8Array) => void) | null` — receive callback
+    /// - `onclose: (() => void) | null` — close notification callback
+    /// - `close()` — close the socket
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_connect_fn(&mut self, f: js_sys::Function) {
+        self.connect_fn = Some(f);
     }
 }
 
@@ -218,39 +252,177 @@ impl<T: Send + 'static> Future for StubThreadHandle<T> {
 }
 
 // ============================================================================
-// NetStreamProvider implementation (STUBBED)
+// NetStreamProvider implementation (WebSocket proxy)
 // ============================================================================
 
-/// A stub stream that always returns errors.
+/// A stream backed by a JS socket object (WebSocket, WebRTC data channel, etc.).
 ///
-/// Real WASM networking requires a WebSocket or WebRTC transport layer.
-#[derive(Debug)]
-#[non_exhaustive]
-pub struct StubStream;
+/// When a [`WasmRuntime`] has a connect function configured via
+/// [`WasmRuntime::set_connect_fn`], calls to `connect(addr)` invoke the JS
+/// callback and wrap the returned socket object as this stream.
+///
+/// The JS socket must implement: `send(Uint8Array)`, `onmessage` setter,
+/// `onclose` setter, and `close()`.
+#[allow(dead_code)] // Fields held to keep JS callbacks alive
+pub struct JsProxyStream {
+    #[cfg(target_arch = "wasm32")]
+    socket: wasm_bindgen::JsValue,
+    #[cfg(target_arch = "wasm32")]
+    rx: futures_channel::mpsc::UnboundedReceiver<IoResult<Vec<u8>>>,
+    #[cfg(target_arch = "wasm32")]
+    buffer: Vec<u8>,
+    #[cfg(target_arch = "wasm32")]
+    _closures: Vec<wasm_bindgen::closure::Closure<dyn FnMut(wasm_bindgen::JsValue)>>,
 
-impl AsyncRead for StubStream {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        _buf: &mut [u8],
-    ) -> Poll<IoResult<usize>> {
-        Poll::Ready(Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "StubStream does not support reading - use a WebSocket transport",
-        )))
+    // Non-WASM stub for compilation
+    #[cfg(not(target_arch = "wasm32"))]
+    _phantom: std::marker::PhantomData<()>,
+}
+
+impl Debug for JsProxyStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JsProxyStream").finish()
     }
 }
 
-impl AsyncWrite for StubStream {
+#[cfg(target_arch = "wasm32")]
+impl JsProxyStream {
+    /// Wrap a JS socket object that has `send`, `onmessage`, `onclose`, `close`.
+    fn wrap(socket: wasm_bindgen::JsValue) -> IoResult<Self> {
+        use wasm_bindgen::prelude::*;
+        use wasm_bindgen::JsCast;
+
+        let (tx, rx) = futures_channel::mpsc::unbounded();
+
+        // Set onmessage — receives Uint8Array chunks
+        let tx_msg = tx.clone();
+        let on_message = Closure::wrap(Box::new(move |data: wasm_bindgen::JsValue| {
+            if let Ok(arr) = data.dyn_into::<js_sys::Uint8Array>() {
+                let _ = tx_msg.unbounded_send(Ok(arr.to_vec()));
+            }
+        }) as Box<dyn FnMut(wasm_bindgen::JsValue)>);
+        js_sys::Reflect::set(&socket, &"onmessage".into(), on_message.as_ref())
+            .map_err(|e| io::Error::other(format!("failed to set onmessage: {:?}", e)))?;
+
+        // Set onclose — signals EOF on the read channel
+        let tx_close = tx;
+        let on_close = Closure::wrap(Box::new(move |_: wasm_bindgen::JsValue| {
+            tx_close.close_channel();
+        }) as Box<dyn FnMut(wasm_bindgen::JsValue)>);
+        js_sys::Reflect::set(&socket, &"onclose".into(), on_close.as_ref())
+            .map_err(|e| io::Error::other(format!("failed to set onclose: {:?}", e)))?;
+
+        Ok(Self {
+            socket,
+            rx,
+            buffer: Vec::new(),
+            _closures: vec![on_message, on_close],
+        })
+    }
+
+    /// Call `socket.send(data)`.
+    fn js_send(&self, data: &[u8]) -> IoResult<()> {
+        let send_fn = js_sys::Reflect::get(&self.socket, &"send".into())
+            .map_err(|e| io::Error::other(format!("socket has no send: {:?}", e)))?;
+        let send_fn: js_sys::Function = send_fn.dyn_into()
+            .map_err(|_| io::Error::other("socket.send is not a function"))?;
+        let arr = js_sys::Uint8Array::from(data);
+        send_fn.call1(&self.socket, &arr)
+            .map_err(|e| io::Error::other(format!("socket.send failed: {:?}", e)))?;
+        Ok(())
+    }
+
+    /// Call `socket.close()`.
+    fn js_close(&self) -> IoResult<()> {
+        let close_fn = js_sys::Reflect::get(&self.socket, &"close".into())
+            .map_err(|e| io::Error::other(format!("socket has no close: {:?}", e)))?;
+        let close_fn: js_sys::Function = close_fn.dyn_into()
+            .map_err(|_| io::Error::other("socket.close is not a function"))?;
+        close_fn.call0(&self.socket)
+            .map_err(|e| io::Error::other(format!("socket.close failed: {:?}", e)))?;
+        Ok(())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for JsProxyStream {
+    fn drop(&mut self) {
+        // Clear callbacks before dropping closures to prevent use-after-free
+        let _ = js_sys::Reflect::set(&self.socket, &"onmessage".into(), &wasm_bindgen::JsValue::NULL);
+        let _ = js_sys::Reflect::set(&self.socket, &"onclose".into(), &wasm_bindgen::JsValue::NULL);
+        let _ = self.js_close();
+    }
+}
+
+// SAFETY: WASM is single-threaded
+unsafe impl Send for JsProxyStream {}
+unsafe impl Sync for JsProxyStream {}
+
+impl AsyncRead for JsProxyStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<IoResult<usize>> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Drain internal buffer first
+            if !self.buffer.is_empty() {
+                let len = buf.len().min(self.buffer.len());
+                buf[..len].copy_from_slice(&self.buffer[..len]);
+                self.buffer.drain(..len);
+                return Poll::Ready(Ok(len));
+            }
+
+            match self.rx.poll_next_unpin(cx) {
+                Poll::Ready(Some(Ok(data))) => {
+                    if data.is_empty() {
+                        cx.waker().wake_by_ref();
+                        return Poll::Pending;
+                    }
+                    let len = buf.len().min(data.len());
+                    buf[..len].copy_from_slice(&data[..len]);
+                    if len < data.len() {
+                        self.buffer.extend_from_slice(&data[len..]);
+                    }
+                    Poll::Ready(Ok(len))
+                }
+                Poll::Ready(Some(Err(e))) => Poll::Ready(Err(e)),
+                Poll::Ready(None) => Poll::Ready(Ok(0)), // EOF
+                Poll::Pending => Poll::Pending,
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = (cx, buf);
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "JsProxyStream not available outside WASM",
+            )))
+        }
+    }
+}
+
+impl AsyncWrite for JsProxyStream {
     fn poll_write(
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
-        _buf: &[u8],
+        buf: &[u8],
     ) -> Poll<IoResult<usize>> {
-        Poll::Ready(Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "StubStream does not support writing - use a WebSocket transport",
-        )))
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.js_send(buf).map(|_| buf.len()).into()
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = buf;
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "JsProxyStream not available outside WASM",
+            )))
+        }
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<IoResult<()>> {
@@ -258,22 +430,27 @@ impl AsyncWrite for StubStream {
     }
 
     fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<IoResult<()>> {
-        Poll::Ready(Ok(()))
+        #[cfg(target_arch = "wasm32")]
+        { self.js_close().into() }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        { Poll::Ready(Ok(())) }
     }
 }
 
-impl StreamOps for StubStream {
+impl StreamOps for JsProxyStream {
     fn new_handle(&self) -> Box<dyn StreamOps + Send + Unpin> {
         Box::new(NoOpStreamOpsHandle)
     }
 }
 
 /// A stub listener that never accepts connections.
+/// WASM does not support listening on sockets.
 #[non_exhaustive]
 pub struct StubListener;
 
 impl NetStreamListener<SocketAddr> for StubListener {
-    type Stream = StubStream;
+    type Stream = JsProxyStream;
     type Incoming = stream::Empty<IoResult<(Self::Stream, SocketAddr)>>;
 
     fn incoming(self) -> Self::Incoming {
@@ -289,7 +466,7 @@ impl NetStreamListener<SocketAddr> for StubListener {
 }
 
 impl NetStreamListener<unix::SocketAddr> for StubListener {
-    type Stream = StubStream;
+    type Stream = JsProxyStream;
     type Incoming = stream::Empty<IoResult<(Self::Stream, unix::SocketAddr)>>;
 
     fn incoming(self) -> Self::Incoming {
@@ -306,15 +483,44 @@ impl NetStreamListener<unix::SocketAddr> for StubListener {
 
 #[async_trait]
 impl NetStreamProvider<SocketAddr> for WasmRuntime {
-    type Stream = StubStream;
+    type Stream = JsProxyStream;
     type Listener = StubListener;
 
-    async fn connect(&self, _addr: &SocketAddr) -> IoResult<Self::Stream> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "WasmRuntime does not support direct TCP connections. \
-             Use a WebSocket or WebRTC transport layer instead.",
-        ))
+    async fn connect(&self, addr: &SocketAddr) -> IoResult<Self::Stream> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let connect_fn = self.connect_fn.as_ref().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "WasmRuntime: no connect function configured. \
+                     Call set_connect_fn() to enable connections.",
+                )
+            })?;
+
+            let addr_str = format!("{}", addr);
+            tracing::debug!("WasmRuntime: connecting to {}", addr_str);
+
+            // Call JS: connect_fn(addr) -> Promise<socket>
+            let promise = connect_fn
+                .call1(&wasm_bindgen::JsValue::NULL, &wasm_bindgen::JsValue::from_str(&addr_str))
+                .map_err(|e| io::Error::other(format!("connect_fn call failed: {:?}", e)))?;
+
+            let promise = js_sys::Promise::from(promise);
+            let socket = wasm_bindgen_futures::JsFuture::from(promise)
+                .await
+                .map_err(|e| io::Error::other(format!("connect failed: {:?}", e)))?;
+
+            JsProxyStream::wrap(socket)
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = addr;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "JsProxyStream not available outside WASM",
+            ))
+        }
     }
 
     async fn listen(&self, _addr: &SocketAddr) -> IoResult<Self::Listener> {
@@ -327,7 +533,7 @@ impl NetStreamProvider<SocketAddr> for WasmRuntime {
 
 #[async_trait]
 impl NetStreamProvider<unix::SocketAddr> for WasmRuntime {
-    type Stream = StubStream;
+    type Stream = JsProxyStream;
     type Listener = StubListener;
 
     async fn connect(&self, _addr: &unix::SocketAddr) -> IoResult<Self::Stream> {

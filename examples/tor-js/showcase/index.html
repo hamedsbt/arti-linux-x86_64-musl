@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://snowflake.torproject.net wss://snowflake.pse.dev https:; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'none';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws: https: http:; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'none';">
     <title>tor-js showcase</title>
     <link rel="icon" href="tor.svg" type="image/svg+xml">
     <style>
@@ -351,18 +351,18 @@
             gap: 16px;
         }
 
-        .bridge-config {
+        .gateway-config {
             background: var(--bg);
             border-radius: 6px;
             padding: 12px;
             margin-top: 12px;
         }
 
-        .bridge-config .input-group {
+        .gateway-config .input-group {
             margin-bottom: 10px;
         }
 
-        .bridge-config .input-group:last-child {
+        .gateway-config .input-group:last-child {
             margin-bottom: 0;
         }
 
@@ -451,41 +451,9 @@
                     <span id="status">Not initialized</span>
                 </div>
 
-                <div class="bridge-config">
-                    <div class="input-group">
-                        <label for="transportMode">Transport</label>
-                        <select id="transportMode" name="transportMode">
-                            <option value="websocket" selected>WebSocket (direct bridge)</option>
-                            <option value="webrtc">WebRTC (via Snowflake broker)</option>
-                        </select>
-                    </div>
-
-                    <!-- WebSocket config -->
-                    <div id="websocketConfig">
-                        <div class="input-group">
-                            <label for="bridgeUrl">Bridge URL</label>
-                            <select id="bridgeUrl" name="bridgeUrl">
-                                <option value="wss://snowflake.pse.dev/">pse.dev</option>
-                                <option value="wss://snowflake.torproject.net/">torproject.net</option>
-                            </select>
-                        </div>
-                        <div class="input-group">
-                            <label for="wsFingerprint">Bridge Fingerprint</label>
-                            <input type="text" id="wsFingerprint" name="wsFingerprint" value="664A92FF3EF71E03A2F09B1DAABA2DDF920D5194" placeholder="40-character hex fingerprint">
-                        </div>
-                    </div>
-
-                    <!-- WebRTC config -->
-                    <div id="webrtcConfig" style="display: none;">
-                        <div class="input-group">
-                            <label for="brokerUrl">Broker URL</label>
-                            <input type="url" id="brokerUrl" name="brokerUrl" value="https://snowflake-broker.torproject.net/" placeholder="https://snowflake-broker.torproject.net/">
-                        </div>
-                        <div class="input-group">
-                            <label for="webrtcFingerprint">Bridge Fingerprint</label>
-                            <input type="text" id="webrtcFingerprint" name="webrtcFingerprint" value="2B280B23E1107BB62ABFC40DDCC8824814F80A72" placeholder="40-character hex fingerprint">
-                        </div>
-                    </div>
+                <div class="input-group">
+                    <label for="gatewayUrl">Gateway URL</label>
+                    <input type="url" id="gatewayUrl" name="gatewayUrl" value="https://tor-js-gateway.voltrevo.com" placeholder="https://tor-js-gateway.voltrevo.com">
                 </div>
 
                 <div class="btn-group" style="margin-top: 12px;">
@@ -810,13 +778,7 @@
         async function run() {
             const statusEl = document.getElementById('status');
             const statusDot = document.getElementById('statusDot');
-            const transportMode = document.getElementById('transportMode');
-            const webrtcConfig = document.getElementById('webrtcConfig');
-            const websocketConfig = document.getElementById('websocketConfig');
-            const brokerUrlInput = document.getElementById('brokerUrl');
-            const webrtcFingerprintInput = document.getElementById('webrtcFingerprint');
-            const bridgeUrlSelect = document.getElementById('bridgeUrl');
-            const wsFingerprintInput = document.getElementById('wsFingerprint');
+            const gatewayUrlInput = document.getElementById('gatewayUrl');
             const connectBtn = document.getElementById('connectBtn');
             const closeBtn = document.getElementById('closeBtn');
             const fetchBtn = document.getElementById('fetchBtn');
@@ -832,31 +794,11 @@
             const loadStateFile = document.getElementById('loadStateFile');
             const debugOutput = document.getElementById('debugOutput');
 
-            // Toggle config sections based on transport mode
-            transportMode.addEventListener('change', () => {
-                const isWebSocket = transportMode.value === 'websocket';
-                websocketConfig.style.display = isWebSocket ? '' : 'none';
-                webrtcConfig.style.display = isWebSocket ? 'none' : '';
-            });
-
             // Preset selection handler
             presetSelect.addEventListener('change', () => {
                 const value = presetSelect.value;
                 if (value !== 'custom') {
                     urlInput.value = value;
-                }
-            });
-
-            // WebSocket bridge URL presets with fingerprints
-            const bridgeFingerprints = {
-                'wss://snowflake.pse.dev/': '664A92FF3EF71E03A2F09B1DAABA2DDF920D5194',
-                'wss://snowflake.torproject.net/': '2B280B23E1107BB62ABFC40DDCC8824814F80A72',
-            };
-
-            bridgeUrlSelect.addEventListener('change', () => {
-                const fp = bridgeFingerprints[bridgeUrlSelect.value];
-                if (fp) {
-                    wsFingerprintInput.value = fp;
                 }
             });
 
@@ -1068,43 +1010,28 @@
             log.info('Ready - click "Connect" to start');
 
             connectBtn.addEventListener('click', async () => {
-                const useWebRtc = transportMode.value === 'webrtc';
-                const fingerprint = useWebRtc
-                    ? webrtcFingerprintInput.value.trim()
-                    : wsFingerprintInput.value.trim();
-
-                if (!fingerprint || (fingerprint !== 'not-pinned' && fingerprint.length !== 40)) {
-                    log.error('Invalid fingerprint: must be 40 hex characters or "not-pinned"');
+                const gateway = gatewayUrlInput.value.trim();
+                if (!gateway) {
+                    log.error('Gateway URL is required');
                     return;
                 }
 
                 connectBtn.disabled = true;
-                const mode = useWebRtc ? 'WebRTC' : 'WebSocket';
-                statusEl.textContent = `Connecting (${mode})...`;
+                statusEl.textContent = 'Connecting...';
                 statusDot.className = 'status-dot loading';
-
-                if (useWebRtc) {
-                    const broker = brokerUrlInput.value.trim();
-                    log.info(`Connecting via WebRTC (broker: ${broker})...`);
-                } else {
-                    log.info(`Connecting to ${bridgeUrlSelect.value} with fingerprint ${fingerprint.substring(0, 8)}...`);
-                }
+                log.info(`Connecting via gateway: ${gateway}...`);
 
                 try {
                     const startTime = performance.now();
                     torClient = new TorClient({
-                        ...(useWebRtc
-                            ? { broker: brokerUrlInput.value.trim() }
-                            : { bridge: bridgeUrlSelect.value }),
-                        fingerprint,
+                        gateway,
                         log,
                         logLevel: logLevelSelect.value,
-                        fastBootstrap: 'https://tor-fast-bootstrap.voltrevo.com',
                     });
                     await torClient.ready();
 
                     const connectTime = ((performance.now() - startTime) / 1000).toFixed(1);
-                    statusEl.textContent = `Connected via ${mode} (${connectTime}s)`;
+                    statusEl.textContent = `Connected (${connectTime}s)`;
                     statusDot.className = 'status-dot ready';
                     log.info(`Connected in ${connectTime}s`);
 
