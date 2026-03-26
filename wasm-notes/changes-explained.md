@@ -1,7 +1,8 @@
 # Diff Analysis: `wasm-basic-compat` → `main` (at `2c7f788eb`)
 
-All `.rs` file changes in `crates/`, excluding `crates/tor-js/`,
-`crates/tor-time/`, and `crates/tor-async-compat/`.
+Changes in `crates/`, excluding `crates/tor-js/`, `crates/tor-time/`,
+and `crates/tor-async-compat/`. For non-crate changes (scripts,
+examples, CI, root config), see `non-crate-changes.md`.
 
 The `wasm-basic-compat` branch already contains the `tor-time` and
 `tor-async-compat` crates and their full codebase migration
