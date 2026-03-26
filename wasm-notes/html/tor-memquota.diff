@@ -1,0 +1,50 @@
+diff --git a/crates/tor-memquota/src/config.rs b/crates/tor-memquota/src/config.rs
+index 3afdab008..b8e1e55fb 100644
+--- a/crates/tor-memquota/src/config.rs
++++ b/crates/tor-memquota/src/config.rs
+@@ -236,7 +236,8 @@ fn compute_max_from_total_system_mem(mem: Result<usize, MemQueryError>) -> Qty {
+                     if #[cfg(target_pointer_width = "64")] {
+                         8 * GIB
+                     } else {
+-                        1 * GIB
++                        #[expect(clippy::identity_op, reason = "consistency with 8 * GIB")]
++                        { 1 * GIB }
+                     }
+                 }
+             });
+@@ -250,13 +251,19 @@ fn compute_max_from_total_system_mem(mem: Result<usize, MemQueryError>) -> Qty {
+         // > for a single relay and should allow the relay operator to run two relays
+         // > if they have additional bandwidth available.
+         let mut factor = 0.75;
++
++        #[cfg(target_pointer_width = "64")]
++        let is_64bit = true;
++        #[cfg(not(target_pointer_width = "64"))]
++        let is_64bit = false;
++
+         // Multiplying 8 * GIB overflows the usize limit (4 GIB - 1) on 32-bit
+         // platforms. So handle this properly for 32-bit platforms. Memory on 32-bit
+         // targets cannot exceed 4 GIB anyways.
+-        #[cfg(target_pointer_width = "64")]
+-        if mem >= 8 * GIB {
++        if is_64bit && mem >= 8 * GIB {
+             factor = 0.40;
+         }
++
+         (mem as f64 * factor) as usize
+     };
+ 
+diff --git a/crates/tor-memquota/src/mtracker/test.rs b/crates/tor-memquota/src/mtracker/test.rs
+index e408751c8..29f074bb3 100644
+--- a/crates/tor-memquota/src/mtracker/test.rs
++++ b/crates/tor-memquota/src/mtracker/test.rs
+@@ -29,8 +29,8 @@ use tracing_test::traced_test;
+ 
+ use tor_basic_utils::RngExt as _;
+ use tor_rtcompat::Runtime;
+-use tor_time::CoarseDuration;
+ use tor_rtmock::MockRuntime;
++use tor_time::CoarseDuration;
+ 
+ //---------- useful utilities ----------
+ 

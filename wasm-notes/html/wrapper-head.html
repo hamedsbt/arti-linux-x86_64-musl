@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WASM Changes: wasm-basic-compat → main</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1/themes/prism-tomorrow.min.css">
+<style>
+  :root {
+    --bg: #1e1e2e;
+    --bg-card: #181825;
+    --bg-code: #11111b;
+    --border: #313244;
+    --text: #cdd6f4;
+    --text-muted: #6c7086;
+    --green: #a6e3a1;
+    --red: #f38ba8;
+    --blue: #89b4fa;
+    --yellow: #f9e2af;
+    --mauve: #cba6f7;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 0 20px 80px;
+  }
+  header {
+    text-align: center;
+    padding: 40px 0 30px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 30px;
+  }
+  header h1 {
+    font-size: 28px;
+    background: linear-gradient(135deg, var(--mauve), var(--blue));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  header p { color: var(--text-muted); margin-top: 8px; font-size: 14px; }
+  nav {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 30px;
+    max-width: 900px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  nav h3 { font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  nav a { color: var(--blue); text-decoration: none; font-size: 14px; margin-right: 16px; white-space: nowrap; }
+  nav a:hover { text-decoration: underline; }
+  .diff-class {
+    max-width: 900px;
+    margin: 0 auto 40px;
+  }
+  .diff-class > h2 {
+    font-size: 22px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+  .diff-class > h2 .stats {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-weight: normal;
+    margin-left: 8px;
+  }
+  .diff-class > .annotation {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin-bottom: 16px;
+    line-height: 1.5;
+  }
+  .diff-class > .annotation p { margin-bottom: 8px; }
+  .diff-class > .annotation code {
+    background: var(--bg-code);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 13px;
+    color: var(--yellow);
+  }
+  details {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+  summary {
+    padding: 10px 16px;
+    cursor: pointer;
+    font-size: 14px;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  summary:hover { background: rgba(255,255,255,0.03); }
+  summary .filename {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--blue);
+    font-size: 13px;
+  }
+  summary .stats {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  summary .file-annotation {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-style: italic;
+    margin-left: auto;
+  }
+  details pre {
+    margin: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--bg-code) !important;
+  }
+  details pre code {
+    font-size: 12px !important;
+    line-height: 1.5 !important;
+    tab-size: 4;
+  }
+  /* Diff line coloring via Prism diff-highlight plugin */
+  .token.inserted { background: rgba(166, 227, 161, 0.12) !important; }
+  .token.deleted { background: rgba(243, 139, 168, 0.12) !important; }
+  .token.inserted .prefix { color: var(--green); }
+  .token.deleted .prefix { color: var(--red); }
+  /* Fallback for plain diff lines */
+  .diff-add { background: rgba(166, 227, 161, 0.1); }
+  .diff-del { background: rgba(243, 139, 168, 0.1); }
+  .diff-hunk { color: var(--mauve); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WASM Changes: wasm-basic-compat → main</h1>
+  <p>Annotated diff — excluding tor-js, tor-time, tor-async-compat, Cargo.lock</p>
+</header>

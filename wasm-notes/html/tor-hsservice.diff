@@ -1,0 +1,47 @@
+diff --git a/crates/tor-hsservice/src/lib.rs b/crates/tor-hsservice/src/lib.rs
+index 5af27e950..3089ee9d3 100644
+--- a/crates/tor-hsservice/src/lib.rs
++++ b/crates/tor-hsservice/src/lib.rs
+@@ -337,7 +337,12 @@ impl OnionService {
+             keymgr.clone(),
+             pow_manager_storage_handle,
+             netdir_provider.clone(),
+-            status_tx.clone().into(),
++            // With hs-pow-full, PowManager::new expects PowManagerStatusSender (a newtype).
++            // Without it, the stub expects a plain StatusSender.
++            #[cfg(feature = "hs-pow-full")]
++            { status::PowManagerStatusSender::from(status_tx.clone()) },
++            #[cfg(not(feature = "hs-pow-full"))]
++            { status_tx.clone() },
+             config_rx.clone(),
+         )?;
+ 
+diff --git a/crates/tor-hsservice/src/pow/v1_stub.rs b/crates/tor-hsservice/src/pow/v1_stub.rs
+index 6addd772b..923e25e2f 100644
+--- a/crates/tor-hsservice/src/pow/v1_stub.rs
++++ b/crates/tor-hsservice/src/pow/v1_stub.rs
+@@ -27,10 +27,15 @@ pub(crate) struct PowManager<R> {
+     runtime: PhantomData<R>,
+ }
+ 
++/// Stub persistent state for the PoW manager (empty when PoW is disabled).
+ #[derive(Serialize, Deserialize, Debug)]
+ pub(crate) struct PowManagerStateRecord;
+ 
+ impl<R: Runtime> PowManager<R> {
++    /// Create a new (stub) PoW manager. Does nothing.
++    #[allow(clippy::unnecessary_wraps)] // signature must match real impl
++    #[allow(clippy::too_many_arguments)] // signature must match real impl
++    #[allow(clippy::new_ret_no_self)] // signature must match real impl
+     pub(crate) fn new(
+         _runtime: R,
+         _nickname: HsNickname,
+@@ -55,6 +60,8 @@ impl<R: Runtime> PowManager<R> {
+         })
+     }
+ 
++    /// Launch the (stub) PoW manager. Does nothing.
++    #[allow(clippy::unnecessary_wraps)] // signature must match real impl
+     pub(crate) fn launch(self: Arc<Self>) -> Result<(), StartupError> {
+         Ok(())
+     }

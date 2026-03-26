@@ -1,0 +1,57 @@
+diff --git a/crates/tor-basic-utils/Cargo.toml b/crates/tor-basic-utils/Cargo.toml
+index 5ea32ed8c..c0de60fd1 100644
+--- a/crates/tor-basic-utils/Cargo.toml
++++ b/crates/tor-basic-utils/Cargo.toml
+@@ -41,3 +41,6 @@ all-features = true
+ 
+ [target.'cfg(unix)'.dependencies]
+ libc = { version = "0.2", default-features = false }
++
++[target.'cfg(target_arch = "wasm32")'.dependencies]
++getrandom = { version = "0.3", features = ["wasm_js"] }
+diff --git a/crates/tor-basic-utils/src/lib.rs b/crates/tor-basic-utils/src/lib.rs
+index 3ed808461..2f0fa2e6e 100644
+--- a/crates/tor-basic-utils/src/lib.rs
++++ b/crates/tor-basic-utils/src/lib.rs
+@@ -281,22 +281,26 @@ pub trait IoErrorExt: Sealed {
+ }
+ impl Sealed for std::io::Error {}
+ impl IoErrorExt for std::io::Error {
++    #[cfg(target_family = "unix")]
+     fn is_not_a_directory(&self) -> bool {
+-        self.raw_os_error()
+-            == Some(
+-                #[cfg(target_family = "unix")]
+-                libc::ENOTDIR,
+-                #[cfg(target_family = "windows")]
+-                {
+-                    /// Obtained from Rust stdlib source code
+-                    /// See also:
+-                    ///   <https://docs.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499->
+-                    /// (although the documentation is anaemic) and
+-                    /// <https://github.com/rust-lang/rust/pull/79965>
+-                    const ERROR_DIRECTORY: i32 = 267;
+-                    ERROR_DIRECTORY
+-                },
+-            )
++        self.raw_os_error() == Some(libc::ENOTDIR)
++    }
++
++    #[cfg(target_family = "windows")]
++    fn is_not_a_directory(&self) -> bool {
++        /// Obtained from Rust stdlib source code
++        /// See also:
++        ///   <https://docs.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499->
++        /// (although the documentation is anaemic) and
++        /// <https://github.com/rust-lang/rust/pull/79965>
++        const ERROR_DIRECTORY: i32 = 267;
++        self.raw_os_error() == Some(ERROR_DIRECTORY)
++    }
++
++    #[cfg(not(any(target_family = "unix", target_family = "windows")))]
++    fn is_not_a_directory(&self) -> bool {
++        // WASM and other platforms don't have filesystem errors
++        false
+     }
+ }
+ 

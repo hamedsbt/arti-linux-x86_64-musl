@@ -1,0 +1,40 @@
+<!-- Example fragment for one class. Each subagent produces one of these. -->
+
+<section class="diff-class" id="tor-rtcompat">
+  <h2>tor-rtcompat <span class="stats">+972 -37</span></h2>
+  <div class="annotation">
+    <p>WASM runtime implementation. New <code>WasmRuntime</code> struct, <code>wasm_compat</code>
+    Send/Sync shims, and SpawnExt bound changes for single-threaded WASM.</p>
+  </div>
+
+  <!-- Small file: open by default -->
+  <details open>
+    <summary>
+      <span class="filename">src/wasm_compat.rs</span>
+      <span class="stats">+35</span>
+      <span class="file-annotation">Send/Sync trait aliases — no-op on WASM</span>
+    </summary>
+    <pre><code class="language-diff-rust">+/// Send and Sync trait aliases.
++/// On native: re-exports std::marker::{Send, Sync}.
++/// On WASM: empty auto-implemented traits.
++#[cfg(not(target_arch = "wasm32"))]
++pub use std::marker::{Send, Sync};
++
++#[cfg(target_arch = "wasm32")]
++pub trait Send {}
++#[cfg(target_arch = "wasm32")]
++impl&lt;T: ?Sized&gt; Send for T {}</code></pre>
+  </details>
+
+  <!-- Large file: collapsed by default -->
+  <details>
+    <summary>
+      <span class="filename">src/wasm.rs</span>
+      <span class="stats">+868</span>
+      <span class="file-annotation">Full WASM runtime — WasmRuntime, JsProxyStream, sleep, spawn</span>
+    </summary>
+    <pre><code class="language-diff-rust">+//! WASM runtime implementation
++//! ...
+ ... (full diff content here, with + and - prefixes preserved)</code></pre>
+  </details>
+</section>

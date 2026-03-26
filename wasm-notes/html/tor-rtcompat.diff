@@ -1,0 +1,1276 @@
+diff --git a/crates/tor-rtcompat/Cargo.toml b/crates/tor-rtcompat/Cargo.toml
+index 8d730eb17..717408e2d 100644
+--- a/crates/tor-rtcompat/Cargo.toml
++++ b/crates/tor-rtcompat/Cargo.toml
+@@ -58,33 +58,41 @@ tls-server = ["tor-cert-x509"]
+ 
+ __is_nonadditive = []
+ 
++# Cross-platform dependencies
+ [dependencies]
+ arbitrary = { version = "1.3.2", optional = true, features = ["derive"] }
+-async-io = { version = "2.2.1", optional = true }
+-async-native-tls = { version = "0.6.0", optional = true }
+-async-std-crate = { package = "async-std", version = "1.7.0", optional = true }
+ async-trait = "0.1.54"
+ tor-async-compat = { path = "../tor-async-compat", version = "0.40.0" }
+-async_executors = { version = "0.7.0", default-features = false }
+ asynchronous-codec = "0.7.0"
+-blocking = { version = "1.6.2", optional = true }
+ cfg-if = "1.0.0"
+-coarsetime = "0.1.20"
+ derive_more = { version = "2.0.1", features = ["full"] }
+ dyn-clone = "1.0.17"
+ educe = "0.4.22"
+ futures = "0.3.14"
++hex = "0.4.3"
++paste = "1"
++pin-project = "1"
++thiserror = "2"
++tor-error = { version = "0.40.0", path = "../tor-error", features = ["tracing"] }
++tor-general-addr = { version = "0.40.0", path = "../tor-general-addr" }
++tracing = "0.1.36"
++void = "1"
++tor-time = { version = "0.40.0", path = "../tor-time" }
++tor-cert-x509 = { version = "0.40.0", path = "../tor-cert-x509", optional = true }
++
++# Native-only dependencies (not available on WASM)
++[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
++async-io = { version = "2.2.1", optional = true }
++async-native-tls = { version = "0.6.0", optional = true }
++async-std-crate = { package = "async-std", version = "1.7.0", optional = true }
++async_executors = { version = "0.7.0", default-features = false }
++blocking = { version = "1.6.2", optional = true }
+ futures-rustls = { version = "0.26.0", optional = true, default-features = false, features = [
+     "tls12",
+     "logging",
+     "ring",
+ ] }
+-
+-hex = "0.4.3"
+-
+ native-tls-crate = { package = "native-tls", version = "0.2", optional = true }
+-paste = "1.0.3"
+-pin-project = "1"
+ # We access the rustls library through the `futures_rustls::rustls` re-export,
+ # but we still rely on specific rustls features which became available in a version later than
+ # futures_rustls' minimum rustls version (for example `ServerCertVerifier::root_hint_subjects`).
+@@ -95,7 +103,6 @@ rustls-pki-types = { version = "1.8", optional = true }
+ rustls-webpki = { version = "0.103.1", optional = true }
+ smol = { version = "2.0.2", optional = true }
+ socket2 = "0.6.1"
+-thiserror = "2"
+ tokio-crate = { package = "tokio", version = "1.7", optional = true, features = [
+     "rt",
+     "rt-multi-thread",
+@@ -104,12 +111,17 @@ tokio-crate = { package = "tokio", version = "1.7", optional = true, features =
+     "time",
+ ] }
+ tokio-util = { version = "0.7.0", features = ["compat"], optional = true }
+-tor-cert-x509 = { version = "0.40.0", path = "../tor-cert-x509", optional = true }
+-tor-error = { version = "0.40.0", path = "../tor-error", features = ["tracing"] }
+-tor-general-addr = { version = "0.40.0", path = "../tor-general-addr" }
+-tor-time = { version = "0.40.0", path = "../tor-time" }
+-tracing = "0.1.36"
+-void = "1"
++
++# WASM-only dependencies (automatically included on wasm32)
++[target.'cfg(target_arch = "wasm32")'.dependencies]
++wasm-bindgen = "0.2"
++wasm-bindgen-futures = "0.4"
++js-sys = "0.3"
++gloo-timers = { version = "0.3", features = ["futures"] }
++futures-channel = "0.3"
++futures-rustls = { version = "0.26", default-features = false, features = ["tls12", "logging"] }
++rustls-rustcrypto = "0.0.2-alpha"
++rustls-pki-types = { version = "1", features = ["web"] }
+ zeroize = "1"
+ 
+ [target.'cfg(target_os = "linux")'.dependencies]
+diff --git a/crates/tor-rtcompat/src/dyn_time.rs b/crates/tor-rtcompat/src/dyn_time.rs
+index cb56d8ae2..297f3ec7b 100644
+--- a/crates/tor-rtcompat/src/dyn_time.rs
++++ b/crates/tor-rtcompat/src/dyn_time.rs
+@@ -23,6 +23,7 @@ macro_rules! if_preferred_runtime {{ [$($y:tt)*] [$($n:tt)*] } => { $($n)* }}
+ #[cfg(all(
+     any(feature = "native-tls", feature = "rustls"),
+     any(feature = "async-std", feature = "tokio"),
++    not(target_arch = "wasm32"),
+ ))]
+ /// `if_preferred_runtime!{[ Y ] [ N ]}` expands to `Y` (if there's `PreferredRuntime`) or `N`
+ macro_rules! if_preferred_runtime {{ [$($y:tt)*] [$($n:tt)*] } => { $($y)* }}
+diff --git a/crates/tor-rtcompat/src/impls.rs b/crates/tor-rtcompat/src/impls.rs
+index 2031794d5..eb89348b9 100644
+--- a/crates/tor-rtcompat/src/impls.rs
++++ b/crates/tor-rtcompat/src/impls.rs
+@@ -2,19 +2,19 @@
+ //!
+ //! Currently only async_std, tokio and smol are provided.
+ 
+-#[cfg(feature = "async-std")]
++#[cfg(all(feature = "async-std", not(target_arch = "wasm32")))]
+ pub(crate) mod async_std;
+ 
+-#[cfg(feature = "tokio")]
++#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+ pub(crate) mod tokio;
+ 
+-#[cfg(feature = "smol")]
++#[cfg(all(feature = "smol", not(target_arch = "wasm32")))]
+ pub(crate) mod smol;
+ 
+-#[cfg(feature = "rustls")]
++#[cfg(all(feature = "rustls", not(target_arch = "wasm32")))]
+ pub(crate) mod rustls;
+ 
+-#[cfg(feature = "native-tls")]
++#[cfg(all(feature = "native-tls", not(target_arch = "wasm32")))]
+ pub(crate) mod native_tls;
+ 
+ pub(crate) mod streamops;
+@@ -84,6 +84,7 @@ use tor_error::warn_report;
+ // for legitimate traffic, and illegitimate traffic would be better handled by the kernel with
+ // something like SYN cookies. But it's easier for users to reduce the max using
+ // `/proc/sys/net/core/somaxconn` than to increase this max by recompiling arti.
++#[cfg(not(target_arch = "wasm32"))]
+ const LISTEN_BACKLOG: i32 = u16::MAX as i32;
+ 
+ /// Open a listening TCP socket.
+@@ -96,6 +97,7 @@ const LISTEN_BACKLOG: i32 = u16::MAX as i32;
+ /// socket with the options we need and with consistent behaviour across all runtimes. For example
+ /// if each runtime were using a different `listen()` backlog size, it might be difficult to debug
+ /// related issues.
++#[cfg(not(target_arch = "wasm32"))]
+ pub(crate) fn tcp_listen(addr: &std::net::SocketAddr) -> std::io::Result<std::net::TcpListener> {
+     use socket2::{Domain, Socket, Type};
+ 
+@@ -159,7 +161,7 @@ pub(crate) fn tcp_listen(addr: &std::net::SocketAddr) -> std::io::Result<std::ne
+ }
+ 
+ /// Helper: Implement an unreachable NetProvider<unix::SocketAddr> for a given runtime.
+-#[cfg(not(unix))]
++#[cfg(all(not(unix), not(target_arch = "wasm32")))]
+ macro_rules! impl_unix_non_provider {
+     { $for_type:ty } => {
+ 
+@@ -177,5 +179,5 @@ macro_rules! impl_unix_non_provider {
+         }
+     }
+ }
+-#[cfg(not(unix))]
++#[cfg(all(not(unix), not(target_arch = "wasm32")))]
+ pub(crate) use impl_unix_non_provider;
+diff --git a/crates/tor-rtcompat/src/impls/streamops.rs b/crates/tor-rtcompat/src/impls/streamops.rs
+index 39bf1b934..6be26174b 100644
+--- a/crates/tor-rtcompat/src/impls/streamops.rs
++++ b/crates/tor-rtcompat/src/impls/streamops.rs
+@@ -1,5 +1,6 @@
+ //! Helpers for implementing [`StreamOps`].
+ 
++#[cfg(not(target_arch = "wasm32"))]
+ use std::io;
+ 
+ #[cfg(target_os = "linux")]
+@@ -10,7 +11,7 @@ use {
+ 
+ #[cfg_attr(not(target_os = "linux"), allow(unused))]
+ use crate::StreamOps;
+-#[cfg(not(target_os = "linux"))]
++#[cfg(all(not(target_os = "linux"), not(target_arch = "wasm32")))]
+ use crate::UnsupportedStreamOp;
+ 
+ /// A wrapper over the file descriptor of a TCP socket.
+@@ -72,7 +73,7 @@ pub(crate) fn set_tcp_notsent_lowat<S: AsRawFd>(sock: &S, notsent_lowat: u32) ->
+ /// Helper for implementing [`set_tcp_notsent_lowat`](crate::StreamOps::set_tcp_notsent_lowat).
+ ///
+ /// Only implemented on Linux. Returns an error on all other platforms.
+-#[cfg(not(target_os = "linux"))]
++#[cfg(all(not(target_os = "linux"), not(target_arch = "wasm32")))]
+ pub(crate) fn set_tcp_notsent_lowat<S>(_sock: &S, _notsent_lowat: u32) -> io::Result<()> {
+     Err(UnsupportedStreamOp::new(
+         "set_tcp_notsent_lowat",
+diff --git a/crates/tor-rtcompat/src/lib.rs b/crates/tor-rtcompat/src/lib.rs
+index eb919e7e7..c07b9f2a8 100644
+--- a/crates/tor-rtcompat/src/lib.rs
++++ b/crates/tor-rtcompat/src/lib.rs
+@@ -65,13 +65,17 @@ mod timer;
+ mod traits;
+ pub mod unimpl;
+ pub mod unix;
++pub mod wasm_compat;
+ 
+-#[cfg(any(feature = "async-std", feature = "tokio", feature = "smol"))]
++#[cfg(target_arch = "wasm32")]
++pub mod wasm;
++
++#[cfg(all(any(feature = "async-std", feature = "tokio", feature = "smol"), not(target_arch = "wasm32")))]
+ use std::io;
+ pub use traits::{
+-    Blocking, CertifiedConn, NetStreamListener, NetStreamProvider,
+-    NoOpStreamOpsHandle, Runtime, SleepProvider, SpawnExt, StreamOps, TlsProvider, ToplevelBlockOn,
+-    ToplevelRuntime, UdpProvider, UdpSocket, UnsupportedStreamOp,
++    Blocking, CertifiedConn, NetStreamListener, NetStreamProvider, NoOpStreamOpsHandle, Runtime,
++    SleepProvider, SpawnExt, StreamOps, TlsProvider, ToplevelBlockOn, ToplevelRuntime, UdpProvider,
++    UdpSocket, UnsupportedStreamOp,
+ };
+ 
+ pub use dyn_time::DynTimeProvider;
+@@ -91,29 +95,32 @@ pub mod tls {
+ 
+     #[cfg(all(
+         feature = "native-tls",
+-        any(feature = "tokio", feature = "async-std", feature = "smol")
++        any(feature = "tokio", feature = "async-std", feature = "smol"),
++        not(target_arch = "wasm32"),
+     ))]
+     pub use crate::impls::native_tls::NativeTlsProvider;
+     #[cfg(all(
+         feature = "rustls",
+-        any(feature = "tokio", feature = "async-std", feature = "smol")
++        any(feature = "tokio", feature = "async-std", feature = "smol"),
++        not(target_arch = "wasm32"),
+     ))]
+     pub use crate::impls::rustls::RustlsProvider;
+     #[cfg(all(
+         feature = "rustls",
+         feature = "tls-server",
+-        any(feature = "tokio", feature = "async-std", feature = "smol")
++        any(feature = "tokio", feature = "async-std", feature = "smol"),
++        not(target_arch = "wasm32"),
+     ))]
+     pub use crate::impls::rustls::rustls_server::{RustlsAcceptor, RustlsServerStream};
+ }
+ 
+-#[cfg(all(any(feature = "native-tls", feature = "rustls"), feature = "tokio"))]
++#[cfg(all(any(feature = "native-tls", feature = "rustls"), feature = "tokio", not(target_arch = "wasm32")))]
+ pub mod tokio;
+ 
+-#[cfg(all(any(feature = "native-tls", feature = "rustls"), feature = "async-std"))]
++#[cfg(all(any(feature = "native-tls", feature = "rustls"), feature = "async-std", not(target_arch = "wasm32")))]
+ pub mod async_std;
+ 
+-#[cfg(all(any(feature = "native-tls", feature = "rustls"), feature = "smol"))]
++#[cfg(all(any(feature = "native-tls", feature = "rustls"), feature = "smol", not(target_arch = "wasm32")))]
+ pub mod smol;
+ 
+ pub use compound::{CompoundRuntime, RuntimeSubstExt};
+@@ -121,10 +128,11 @@ pub use compound::{CompoundRuntime, RuntimeSubstExt};
+ #[cfg(all(
+     any(feature = "native-tls", feature = "rustls"),
+     feature = "async-std",
+-    not(feature = "tokio")
++    not(feature = "tokio"),
++    not(target_arch = "wasm32"),
+ ))]
+ use async_std as preferred_backend_mod;
+-#[cfg(all(any(feature = "native-tls", feature = "rustls"), feature = "tokio"))]
++#[cfg(all(any(feature = "native-tls", feature = "rustls"), feature = "tokio", not(target_arch = "wasm32")))]
+ use tokio as preferred_backend_mod;
+ 
+ /// The runtime that we prefer to use, out of all the runtimes compiled into the
+@@ -140,7 +148,8 @@ use tokio as preferred_backend_mod;
+ /// after creating this or any other `Runtime`.
+ #[cfg(all(
+     any(feature = "native-tls", feature = "rustls"),
+-    any(feature = "async-std", feature = "tokio")
++    any(feature = "async-std", feature = "tokio"),
++    not(target_arch = "wasm32"),
+ ))]
+ #[derive(Clone)]
+ pub struct PreferredRuntime {
+@@ -150,7 +159,8 @@ pub struct PreferredRuntime {
+ 
+ #[cfg(all(
+     any(feature = "native-tls", feature = "rustls"),
+-    any(feature = "async-std", feature = "tokio")
++    any(feature = "async-std", feature = "tokio"),
++    not(target_arch = "wasm32"),
+ ))]
+ crate::opaque::implement_opaque_runtime! {
+     PreferredRuntime { inner : preferred_backend_mod::PreferredRuntime }
+@@ -158,7 +168,8 @@ crate::opaque::implement_opaque_runtime! {
+ 
+ #[cfg(all(
+     any(feature = "native-tls", feature = "rustls"),
+-    any(feature = "async-std", feature = "tokio")
++    any(feature = "async-std", feature = "tokio"),
++    not(target_arch = "wasm32"),
+ ))]
+ impl PreferredRuntime {
+     /// Obtain a [`PreferredRuntime`] from the currently running asynchronous runtime.
+@@ -437,6 +448,7 @@ mod test {
+     use std::net::SocketAddr;
+     use std::net::{Ipv4Addr, SocketAddrV4};
+     use std::time::Duration;
++
+     use tor_time::Instant;
+ 
+     // Test "sleep" with a tiny delay, and make sure that at least that
+diff --git a/crates/tor-rtcompat/src/traits.rs b/crates/tor-rtcompat/src/traits.rs
+index 629303029..81f935178 100644
+--- a/crates/tor-rtcompat/src/traits.rs
++++ b/crates/tor-rtcompat/src/traits.rs
+@@ -400,14 +400,22 @@ pub trait SpawnExt: Spawn {
+     #[track_caller]
+     fn spawn<Fut>(&self, future: Fut) -> Result<(), SpawnError>
+     where
+-        Fut: Future<Output = ()> + Send + 'static,
++        Fut: Future<Output = ()> + crate::wasm_compat::Send + 'static,
+     {
+         use tracing::Instrument as _;
+-        self.spawn_obj(Box::new(future.in_current_span()).into())
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            self.spawn_obj(Box::new(future.in_current_span()).into())
++        }
++        #[cfg(target_arch = "wasm32")]
++        {
++            wasm_bindgen_futures::spawn_local(future.in_current_span());
++            Ok(())
++        }
+     }
+ 
+     /// Spawns a task that polls the given future to completion and returns a future that resolves
+-    /// to the spawned future’s output.
++    /// to the spawned future's output.
+     ///
+     /// See [`futures::task::SpawnExt::spawn_with_handle`].
+     #[track_caller]
+@@ -416,8 +424,8 @@ pub trait SpawnExt: Spawn {
+         future: Fut,
+     ) -> Result<RemoteHandle<<Fut as Future>::Output>, SpawnError>
+     where
+-        Fut: Future + Send + 'static,
+-        <Fut as Future>::Output: Send,
++        Fut: Future + crate::wasm_compat::Send + 'static,
++        <Fut as Future>::Output: crate::wasm_compat::Send,
+     {
+         let (future, handle) = future.remote_handle();
+         self.spawn(future)?;
+@@ -635,6 +643,9 @@ pub trait CertifiedConn {
+ /// "innocuous-looking TLS handshakes" less important than they once were.  Once
+ /// TLS 1.3 is completely ubiquitous, we might be able to specify a simpler link
+ /// handshake than Tor uses now.
++///
++/// Note: We use `unsafe impl Send` on some WASM types
++/// to allow using standard async_trait everywhere.
+ #[async_trait]
+ pub trait TlsConnector<S> {
+     /// The type of connection returned by this connector
+diff --git a/crates/tor-rtcompat/src/wasm.rs b/crates/tor-rtcompat/src/wasm.rs
+new file mode 100644
+index 000000000..058835276
+--- /dev/null
++++ b/crates/tor-rtcompat/src/wasm.rs
+@@ -0,0 +1,868 @@
++//! WASM-compatible runtime implementation for tor-rtcompat.
++//!
++//! This module provides a runtime that can run in WebAssembly environments (browsers).
++//! It implements the required traits for `Runtime` with some limitations:
++//!
++//! - **Blocking operations**: Stubbed - will panic if called. WASM has no threads.
++//! - **Networking**: Requires external transport (WebSocket/WebRTC)
++//! - **TLS**: Uses rustls with rustls-rustcrypto (pure-Rust crypto for WASM)
++
++use crate::traits::{
++    Blocking, CertifiedConn, NetStreamListener, NetStreamProvider, NoOpStreamOpsHandle,
++    SleepProvider, StreamOps, TlsAcceptorSettings, TlsConnector, TlsProvider, TlsServerUnsupported,
++    UdpProvider, UdpSocket,
++};
++use std::borrow::Cow;
++use tor_time::{CoarseInstant, CoarseTimeProvider, RealCoarseTimeProvider};
++use tor_async_compat::async_trait;
++use futures::task::{Spawn, SpawnError};
++use futures::{stream, AsyncRead, AsyncWrite, Future, StreamExt};
++#[cfg(target_arch = "wasm32")]
++use wasm_bindgen::JsCast;
++use std::fmt::Debug;
++use std::io::{self, Result as IoResult};
++use std::net::SocketAddr;
++use std::pin::Pin;
++use std::sync::Arc;
++use std::task::{Context, Poll};
++use std::time::Duration;
++use tor_time::{Instant, SystemTime, UNIX_EPOCH};
++use tor_general_addr::unix;
++
++/// A runtime for WASM environments.
++///
++/// This runtime implements the traits required by `tor-rtcompat::Runtime`,
++/// but with significant limitations due to WASM constraints:
++///
++/// - No blocking operations (will panic)
++/// - No direct TCP/UDP sockets — use [`set_connect_fn`](WasmRuntime::set_connect_fn)
++///   to provide a JS callback for opening socket connections
++/// - No filesystem access
++#[derive(Clone)]
++pub struct WasmRuntime {
++    /// Coarse time provider
++    coarse: RealCoarseTimeProvider,
++    /// Optional JS callback for connecting to relay addresses.
++    /// Signature: `(addr: string) => Promise<{send, onmessage, onclose, close}>`
++    #[cfg(target_arch = "wasm32")]
++    connect_fn: Option<js_sys::Function>,
++}
++
++impl Debug for WasmRuntime {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("WasmRuntime").finish()
++    }
++}
++
++impl Default for WasmRuntime {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
++impl WasmRuntime {
++    /// Create a new WASM runtime.
++    pub fn new() -> Self {
++        Self {
++            coarse: RealCoarseTimeProvider::new(),
++            #[cfg(target_arch = "wasm32")]
++            connect_fn: None,
++        }
++    }
++
++    /// Set a JS callback for opening socket connections to relay addresses.
++    ///
++    /// The callback receives a target address string (e.g. `"198.51.100.1:9001"`)
++    /// and must return a `Promise` that resolves to a socket object with:
++    /// - `send(data: Uint8Array)` — send binary data
++    /// - `onmessage: ((data: Uint8Array) => void) | null` — receive callback
++    /// - `onclose: (() => void) | null` — close notification callback
++    /// - `close()` — close the socket
++    #[cfg(target_arch = "wasm32")]
++    pub fn set_connect_fn(&mut self, f: js_sys::Function) {
++        self.connect_fn = Some(f);
++    }
++}
++
++// ============================================================================
++// SleepProvider implementation
++// ============================================================================
++
++/// A sleep future for WASM using gloo-timers.
++pub struct WasmSleepFuture {
++    /// The underlying timeout future from gloo-timers
++    #[cfg(target_arch = "wasm32")]
++    inner: gloo_timers::future::TimeoutFuture,
++    /// Fallback for non-WASM (for testing)
++    #[cfg(not(target_arch = "wasm32"))]
++    rx: futures::channel::oneshot::Receiver<()>,
++}
++
++impl WasmSleepFuture {
++    /// Create a new sleep future.
++    fn new(duration: Duration) -> Self {
++        #[cfg(target_arch = "wasm32")]
++        {
++            let millis = duration.as_millis().min(u128::from(u32::MAX)) as u32;
++            Self {
++                inner: gloo_timers::future::TimeoutFuture::new(millis),
++            }
++        }
++
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            let (tx, rx) = futures::channel::oneshot::channel();
++            std::thread::spawn(move || {
++                std::thread::sleep(duration);
++                let _ = tx.send(());
++            });
++            Self { rx }
++        }
++    }
++}
++
++impl Future for WasmSleepFuture {
++    type Output = ();
++
++    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
++        #[cfg(target_arch = "wasm32")]
++        {
++            // SAFETY: We never move the inner future after pinning
++            let inner = unsafe { self.map_unchecked_mut(|s| &mut s.inner) };
++            inner.poll(cx)
++        }
++
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            use futures::FutureExt;
++            let this = self.get_mut();
++            match this.rx.poll_unpin(cx) {
++                Poll::Ready(_) => Poll::Ready(()),
++                Poll::Pending => Poll::Pending,
++            }
++        }
++    }
++}
++
++// SAFETY: The future only contains thread-safe types
++unsafe impl Send for WasmSleepFuture {}
++
++impl SleepProvider for WasmRuntime {
++    type SleepFuture = WasmSleepFuture;
++
++    fn sleep(&self, duration: Duration) -> Self::SleepFuture {
++        WasmSleepFuture::new(duration)
++    }
++
++    fn now(&self) -> Instant {
++        Instant::now()
++    }
++
++    fn wallclock(&self) -> SystemTime {
++        #[cfg(target_arch = "wasm32")]
++        {
++            // Use Date.now() for WASM wall-clock time
++            let millis = js_sys::Date::now();
++            UNIX_EPOCH + Duration::from_millis(millis as u64)
++        }
++
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            SystemTime::now()
++        }
++    }
++}
++
++// ============================================================================
++// CoarseTimeProvider implementation
++// ============================================================================
++
++impl CoarseTimeProvider for WasmRuntime {
++    fn now_coarse(&self) -> CoarseInstant {
++        self.coarse.now_coarse()
++    }
++}
++
++// ============================================================================
++// Spawn implementation
++// ============================================================================
++
++impl Spawn for WasmRuntime {
++    fn spawn_obj(&self, future: futures::task::FutureObj<'static, ()>) -> Result<(), SpawnError> {
++        #[cfg(target_arch = "wasm32")]
++        {
++            wasm_bindgen_futures::spawn_local(future);
++            Ok(())
++        }
++
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            // Fallback for testing - just spawn a thread
++            std::thread::spawn(move || {
++                futures::executor::block_on(future);
++            });
++            Ok(())
++        }
++    }
++}
++
++// ============================================================================
++// Blocking implementation (STUBBED - will panic)
++// ============================================================================
++
++impl Blocking for WasmRuntime {
++    type ThreadHandle<T: Send + 'static> = StubThreadHandle<T>;
++
++    fn spawn_blocking<F, T>(&self, _f: F) -> Self::ThreadHandle<T>
++    where
++        F: FnOnce() -> T + Send + 'static,
++        T: Send + 'static,
++    {
++        panic!(
++            "WasmRuntime::spawn_blocking called - blocking operations are not supported in WASM. \
++             This code path should not be reached. Please report this as a bug."
++        );
++    }
++
++    fn reenter_block_on<F>(&self, _future: F) -> F::Output
++    where
++        F: Future,
++        F::Output: Send + 'static,
++    {
++        panic!(
++            "WasmRuntime::reenter_block_on called - blocking operations are not supported in WASM. \
++             This code path should not be reached. Please report this as a bug."
++        );
++    }
++}
++
++/// Stub thread handle that will never be created (spawn_blocking panics).
++pub struct StubThreadHandle<T> {
++    /// Type marker for the result type.
++    _phantom: std::marker::PhantomData<T>,
++}
++
++impl<T: Send + 'static> Future for StubThreadHandle<T> {
++    type Output = T;
++
++    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
++        // This will never be called because spawn_blocking panics
++        unreachable!("StubThreadHandle should never be polled")
++    }
++}
++
++// ============================================================================
++// NetStreamProvider implementation (WebSocket proxy)
++// ============================================================================
++
++/// A stream backed by a JS socket object (WebSocket, WebRTC data channel, etc.).
++///
++/// When a [`WasmRuntime`] has a connect function configured via
++/// [`WasmRuntime::set_connect_fn`], calls to `connect(addr)` invoke the JS
++/// callback and wrap the returned socket object as this stream.
++///
++/// The JS socket must implement: `send(Uint8Array)`, `onmessage` setter,
++/// `onclose` setter, and `close()`.
++#[allow(dead_code)] // Fields held to keep JS callbacks alive
++pub struct JsProxyStream {
++    /// The underlying JS socket object (e.g. ArtiSocket from the TS wrapper).
++    #[cfg(target_arch = "wasm32")]
++    socket: wasm_bindgen::JsValue,
++    /// Channel receiving incoming data chunks from the JS onmessage callback.
++    #[cfg(target_arch = "wasm32")]
++    rx: futures_channel::mpsc::UnboundedReceiver<IoResult<Vec<u8>>>,
++    /// Leftover bytes from a previous read that didn't fit the caller's buffer.
++    #[cfg(target_arch = "wasm32")]
++    buffer: Vec<u8>,
++    /// Prevent the JS closures (onmessage, onclose) from being garbage collected.
++    #[cfg(target_arch = "wasm32")]
++    _closures: Vec<wasm_bindgen::closure::Closure<dyn FnMut(wasm_bindgen::JsValue)>>,
++
++    // Non-WASM stub for compilation
++    #[cfg(not(target_arch = "wasm32"))]
++    _phantom: std::marker::PhantomData<()>,
++}
++
++impl Debug for JsProxyStream {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("JsProxyStream").finish()
++    }
++}
++
++#[cfg(target_arch = "wasm32")]
++impl JsProxyStream {
++    /// Wrap a JS socket object that has `send`, `onmessage`, `onclose`, `close`.
++    fn wrap(socket: wasm_bindgen::JsValue) -> IoResult<Self> {
++        use wasm_bindgen::prelude::*;
++        use wasm_bindgen::JsCast;
++
++        let (tx, rx) = futures_channel::mpsc::unbounded();
++
++        // Set onmessage — receives Uint8Array chunks
++        let tx_msg = tx.clone();
++        let on_message = Closure::wrap(Box::new(move |data: wasm_bindgen::JsValue| {
++            if let Ok(arr) = data.dyn_into::<js_sys::Uint8Array>() {
++                let _ = tx_msg.unbounded_send(Ok(arr.to_vec()));
++            }
++        }) as Box<dyn FnMut(wasm_bindgen::JsValue)>);
++        js_sys::Reflect::set(&socket, &"onmessage".into(), on_message.as_ref())
++            .map_err(|e| io::Error::other(format!("failed to set onmessage: {:?}", e)))?;
++
++        // Set onclose — signals EOF on the read channel
++        let tx_close = tx;
++        let on_close = Closure::wrap(Box::new(move |_: wasm_bindgen::JsValue| {
++            tx_close.close_channel();
++        }) as Box<dyn FnMut(wasm_bindgen::JsValue)>);
++        js_sys::Reflect::set(&socket, &"onclose".into(), on_close.as_ref())
++            .map_err(|e| io::Error::other(format!("failed to set onclose: {:?}", e)))?;
++
++        Ok(Self {
++            socket,
++            rx,
++            buffer: Vec::new(),
++            _closures: vec![on_message, on_close],
++        })
++    }
++
++    /// Call `socket.send(data)`.
++    fn js_send(&self, data: &[u8]) -> IoResult<()> {
++        let send_fn = js_sys::Reflect::get(&self.socket, &"send".into())
++            .map_err(|e| io::Error::other(format!("socket has no send: {:?}", e)))?;
++        let send_fn: js_sys::Function = send_fn.dyn_into()
++            .map_err(|_| io::Error::other("socket.send is not a function"))?;
++        let arr = js_sys::Uint8Array::from(data);
++        send_fn.call1(&self.socket, &arr)
++            .map_err(|e| io::Error::other(format!("socket.send failed: {:?}", e)))?;
++        Ok(())
++    }
++
++    /// Call `socket.close()`.
++    fn js_close(&self) -> IoResult<()> {
++        let close_fn = js_sys::Reflect::get(&self.socket, &"close".into())
++            .map_err(|e| io::Error::other(format!("socket has no close: {:?}", e)))?;
++        let close_fn: js_sys::Function = close_fn.dyn_into()
++            .map_err(|_| io::Error::other("socket.close is not a function"))?;
++        close_fn.call0(&self.socket)
++            .map_err(|e| io::Error::other(format!("socket.close failed: {:?}", e)))?;
++        Ok(())
++    }
++}
++
++#[cfg(target_arch = "wasm32")]
++impl Drop for JsProxyStream {
++    fn drop(&mut self) {
++        // Clear callbacks before dropping closures to prevent use-after-free
++        let _ = js_sys::Reflect::set(&self.socket, &"onmessage".into(), &wasm_bindgen::JsValue::NULL);
++        let _ = js_sys::Reflect::set(&self.socket, &"onclose".into(), &wasm_bindgen::JsValue::NULL);
++        let _ = self.js_close();
++    }
++}
++
++// SAFETY: WASM is single-threaded
++unsafe impl Send for JsProxyStream {}
++unsafe impl Sync for JsProxyStream {}
++
++impl AsyncRead for JsProxyStream {
++    fn poll_read(
++        mut self: Pin<&mut Self>,
++        cx: &mut Context<'_>,
++        buf: &mut [u8],
++    ) -> Poll<IoResult<usize>> {
++        #[cfg(target_arch = "wasm32")]
++        {
++            // Drain internal buffer first
++            if !self.buffer.is_empty() {
++                let len = buf.len().min(self.buffer.len());
++                buf[..len].copy_from_slice(&self.buffer[..len]);
++                self.buffer.drain(..len);
++                return Poll::Ready(Ok(len));
++            }
++
++            match self.rx.poll_next_unpin(cx) {
++                Poll::Ready(Some(Ok(data))) => {
++                    if data.is_empty() {
++                        cx.waker().wake_by_ref();
++                        return Poll::Pending;
++                    }
++                    let len = buf.len().min(data.len());
++                    buf[..len].copy_from_slice(&data[..len]);
++                    if len < data.len() {
++                        self.buffer.extend_from_slice(&data[len..]);
++                    }
++                    Poll::Ready(Ok(len))
++                }
++                Poll::Ready(Some(Err(e))) => Poll::Ready(Err(e)),
++                Poll::Ready(None) => Poll::Ready(Ok(0)), // EOF
++                Poll::Pending => Poll::Pending,
++            }
++        }
++
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            let _ = (cx, buf);
++            Poll::Ready(Err(io::Error::new(
++                io::ErrorKind::Unsupported,
++                "JsProxyStream not available outside WASM",
++            )))
++        }
++    }
++}
++
++impl AsyncWrite for JsProxyStream {
++    fn poll_write(
++        self: Pin<&mut Self>,
++        _cx: &mut Context<'_>,
++        buf: &[u8],
++    ) -> Poll<IoResult<usize>> {
++        #[cfg(target_arch = "wasm32")]
++        {
++            self.js_send(buf).map(|_| buf.len()).into()
++        }
++
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            let _ = buf;
++            Poll::Ready(Err(io::Error::new(
++                io::ErrorKind::Unsupported,
++                "JsProxyStream not available outside WASM",
++            )))
++        }
++    }
++
++    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<IoResult<()>> {
++        Poll::Ready(Ok(()))
++    }
++
++    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<IoResult<()>> {
++        #[cfg(target_arch = "wasm32")]
++        { self.js_close().into() }
++
++        #[cfg(not(target_arch = "wasm32"))]
++        { Poll::Ready(Ok(())) }
++    }
++}
++
++impl StreamOps for JsProxyStream {
++    fn new_handle(&self) -> Box<dyn StreamOps + Send + Unpin> {
++        Box::new(NoOpStreamOpsHandle)
++    }
++}
++
++/// A stub listener that never accepts connections.
++/// WASM does not support listening on sockets.
++#[non_exhaustive]
++pub struct StubListener;
++
++impl NetStreamListener<SocketAddr> for StubListener {
++    type Stream = JsProxyStream;
++    type Incoming = stream::Empty<IoResult<(Self::Stream, SocketAddr)>>;
++
++    fn incoming(self) -> Self::Incoming {
++        stream::empty()
++    }
++
++    fn local_addr(&self) -> IoResult<SocketAddr> {
++        Err(io::Error::new(
++            io::ErrorKind::Unsupported,
++            "StubListener has no local address",
++        ))
++    }
++}
++
++impl NetStreamListener<unix::SocketAddr> for StubListener {
++    type Stream = JsProxyStream;
++    type Incoming = stream::Empty<IoResult<(Self::Stream, unix::SocketAddr)>>;
++
++    fn incoming(self) -> Self::Incoming {
++        stream::empty()
++    }
++
++    fn local_addr(&self) -> IoResult<unix::SocketAddr> {
++        Err(io::Error::new(
++            io::ErrorKind::Unsupported,
++            "StubListener has no local address",
++        ))
++    }
++}
++
++#[async_trait]
++impl NetStreamProvider<SocketAddr> for WasmRuntime {
++    type Stream = JsProxyStream;
++    type Listener = StubListener;
++
++    async fn connect(&self, addr: &SocketAddr) -> IoResult<Self::Stream> {
++        #[cfg(target_arch = "wasm32")]
++        {
++            let connect_fn = self.connect_fn.as_ref().ok_or_else(|| {
++                io::Error::new(
++                    io::ErrorKind::Unsupported,
++                    "WasmRuntime: no connect function configured. \
++                     Call set_connect_fn() to enable connections.",
++                )
++            })?;
++
++            let addr_str = format!("{}", addr);
++            tracing::debug!("WasmRuntime: connecting to {}", addr_str);
++
++            // Call JS: connect_fn(addr) -> Promise<socket>
++            let promise = connect_fn
++                .call1(&wasm_bindgen::JsValue::NULL, &wasm_bindgen::JsValue::from_str(&addr_str))
++                .map_err(|e| io::Error::other(format!("connect_fn call failed: {:?}", e)))?;
++
++            let promise = js_sys::Promise::from(promise);
++            let socket = wasm_bindgen_futures::JsFuture::from(promise)
++                .await
++                .map_err(|e| io::Error::other(format!("connect failed: {:?}", e)))?;
++
++            JsProxyStream::wrap(socket)
++        }
++
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            let _ = addr;
++            Err(io::Error::new(
++                io::ErrorKind::Unsupported,
++                "JsProxyStream not available outside WASM",
++            ))
++        }
++    }
++
++    async fn listen(&self, _addr: &SocketAddr) -> IoResult<Self::Listener> {
++        Err(io::Error::new(
++            io::ErrorKind::Unsupported,
++            "WasmRuntime does not support listening on TCP sockets",
++        ))
++    }
++}
++
++#[async_trait]
++impl NetStreamProvider<unix::SocketAddr> for WasmRuntime {
++    type Stream = JsProxyStream;
++    type Listener = StubListener;
++
++    async fn connect(&self, _addr: &unix::SocketAddr) -> IoResult<Self::Stream> {
++        Err(io::Error::new(
++            io::ErrorKind::Unsupported,
++            "WasmRuntime does not support Unix sockets",
++        ))
++    }
++
++    async fn listen(&self, _addr: &unix::SocketAddr) -> IoResult<Self::Listener> {
++        Err(io::Error::new(
++            io::ErrorKind::Unsupported,
++            "WasmRuntime does not support Unix sockets",
++        ))
++    }
++}
++
++// ============================================================================
++// TlsProvider implementation using rustls (with rustls-rustcrypto for WASM)
++// ============================================================================
++
++/// TLS connector for WASM using rustls with a pure-Rust crypto provider.
++///
++/// Configured for Tor's requirements:
++/// - Skips certificate verification (Tor validates via CERTS cells instead)
++/// - Verifies TLS handshake signatures (proves key possession)
++pub struct WasmTlsConnector {
++    /// The underlying TLS connector.
++    connector: futures_rustls::TlsConnector,
++}
++
++impl WasmTlsConnector {
++    /// Create a new WASM TLS connector.
++    ///
++    /// This connector skips certificate verification since Tor uses its own
++    /// certificate validation via CERTS cells in the Tor protocol.
++    pub fn new() -> Self {
++        use futures_rustls::rustls;
++
++        let provider = rustls_rustcrypto::provider();
++        let algorithms = provider.signature_verification_algorithms;
++        let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
++            .with_safe_default_protocol_versions()
++            .expect("default protocol versions should be supported")
++            .dangerous()
++            .with_custom_certificate_verifier(Arc::new(TorCertVerifier(algorithms)))
++            .with_no_client_auth();
++
++        Self {
++            connector: futures_rustls::TlsConnector::from(Arc::new(config)),
++        }
++    }
++}
++
++impl Default for WasmTlsConnector {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
++/// A certificate verifier that skips WebPKI validation.
++///
++/// Tor relays use self-signed certificates; authentication happens via CERTS
++/// cells in the Tor protocol. We still verify TLS handshake signatures to
++/// prove the server possesses the key in its certificate.
++#[derive(Debug)]
++pub struct TorCertVerifier(futures_rustls::rustls::crypto::WebPkiSupportedAlgorithms);
++
++impl TorCertVerifier {
++    /// Create a new verifier with the given signature verification algorithms.
++    pub fn new(algorithms: futures_rustls::rustls::crypto::WebPkiSupportedAlgorithms) -> Self {
++        Self(algorithms)
++    }
++}
++
++impl futures_rustls::rustls::client::danger::ServerCertVerifier for TorCertVerifier {
++    fn verify_server_cert(
++        &self,
++        _end_entity: &rustls_pki_types::CertificateDer,
++        _intermediates: &[rustls_pki_types::CertificateDer],
++        _server_name: &rustls_pki_types::ServerName,
++        _ocsp_response: &[u8],
++        _now: rustls_pki_types::UnixTime,
++    ) -> Result<futures_rustls::rustls::client::danger::ServerCertVerified, futures_rustls::rustls::Error> {
++        // Skip cert validation — Tor validates via CERTS cells
++        Ok(futures_rustls::rustls::client::danger::ServerCertVerified::assertion())
++    }
++
++    fn verify_tls12_signature(
++        &self,
++        message: &[u8],
++        cert: &rustls_pki_types::CertificateDer,
++        dss: &futures_rustls::rustls::DigitallySignedStruct,
++    ) -> Result<futures_rustls::rustls::client::danger::HandshakeSignatureValid, futures_rustls::rustls::Error> {
++        futures_rustls::rustls::crypto::verify_tls12_signature(message, cert, dss, &self.0)
++    }
++
++    fn verify_tls13_signature(
++        &self,
++        message: &[u8],
++        cert: &rustls_pki_types::CertificateDer,
++        dss: &futures_rustls::rustls::DigitallySignedStruct,
++    ) -> Result<futures_rustls::rustls::client::danger::HandshakeSignatureValid, futures_rustls::rustls::Error> {
++        futures_rustls::rustls::crypto::verify_tls13_signature(message, cert, dss, &self.0)
++    }
++
++    fn supported_verify_schemes(&self) -> Vec<futures_rustls::rustls::SignatureScheme> {
++        self.0.supported_schemes()
++    }
++
++    fn root_hint_subjects(&self) -> Option<&[futures_rustls::rustls::DistinguishedName]> {
++        None
++    }
++}
++
++#[async_trait]
++impl<S> TlsConnector<S> for WasmTlsConnector
++where
++    S: AsyncRead + AsyncWrite + StreamOps + Unpin + Send + 'static,
++{
++    type Conn = futures_rustls::client::TlsStream<S>;
++
++    async fn negotiate_unvalidated(
++        &self,
++        stream: S,
++        sni_hostname: &str,
++    ) -> IoResult<Self::Conn> {
++        let name: rustls_pki_types::ServerName<'_> = sni_hostname
++            .try_into()
++            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
++        self.connector.connect(name.to_owned(), stream).await
++    }
++}
++
++/// An uninhabitable TLS type for server-side TLS, which WASM does not support.
++///
++/// This wraps `void::Void` so it can never be constructed. All trait methods
++/// use `void::unreachable()` to prove at compile time that the code paths are
++/// impossible. This is the same pattern as `UnimplementedTls` in
++/// `impls/unimpl_tls.rs`, duplicated here because that module is not compiled
++/// for WASM targets.
++#[derive(Clone, Debug)]
++pub struct WasmUnimplementedTls(void::Void);
++
++#[async_trait]
++impl<S: Send + 'static> TlsConnector<S> for WasmUnimplementedTls {
++    type Conn = WasmUnimplementedTls;
++
++    async fn negotiate_unvalidated(&self, _stream: S, _sni_hostname: &str) -> IoResult<Self::Conn> {
++        void::unreachable(self.0)
++    }
++}
++
++impl CertifiedConn for WasmUnimplementedTls {
++    fn export_keying_material(
++        &self,
++        _len: usize,
++        _label: &[u8],
++        _context: Option<&[u8]>,
++    ) -> IoResult<Vec<u8>> {
++        void::unreachable(self.0)
++    }
++
++    fn peer_certificate(&self) -> IoResult<Option<Cow<'_, [u8]>>> {
++        void::unreachable(self.0)
++    }
++
++    fn own_certificate(&self) -> IoResult<Option<Cow<'_, [u8]>>> {
++        void::unreachable(self.0)
++    }
++}
++
++impl AsyncRead for WasmUnimplementedTls {
++    fn poll_read(
++        self: Pin<&mut Self>,
++        _cx: &mut Context<'_>,
++        _buf: &mut [u8],
++    ) -> Poll<IoResult<usize>> {
++        void::unreachable(self.0)
++    }
++}
++
++impl AsyncWrite for WasmUnimplementedTls {
++    fn poll_write(
++        self: Pin<&mut Self>,
++        _cx: &mut Context<'_>,
++        _buf: &[u8],
++    ) -> Poll<IoResult<usize>> {
++        void::unreachable(self.0)
++    }
++
++    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<IoResult<()>> {
++        void::unreachable(self.0)
++    }
++
++    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<IoResult<()>> {
++        void::unreachable(self.0)
++    }
++}
++
++impl StreamOps for WasmUnimplementedTls {}
++
++impl<S> TlsProvider<S> for WasmRuntime
++where
++    S: AsyncRead + AsyncWrite + StreamOps + Unpin + Send + 'static,
++{
++    type Connector = WasmTlsConnector;
++    type TlsStream = futures_rustls::client::TlsStream<S>;
++    type Acceptor = WasmUnimplementedTls;
++    type TlsServerStream = WasmUnimplementedTls;
++
++    fn tls_connector(&self) -> Self::Connector {
++        WasmTlsConnector::new()
++    }
++
++    fn tls_acceptor(&self, _settings: TlsAcceptorSettings) -> IoResult<Self::Acceptor> {
++        Err(TlsServerUnsupported {}.into())
++    }
++
++    fn supports_keying_material_export(&self) -> bool {
++        true
++    }
++}
++
++// CertifiedConn and StreamOps for futures_rustls::client::TlsStream on WASM.
++// (The native impls are in impls/rustls.rs, gated behind cfg(not(wasm32)).)
++
++impl<S> StreamOps for futures_rustls::client::TlsStream<S>
++where
++    S: AsyncRead + AsyncWrite + Unpin,
++{
++    // Use default implementation
++}
++
++impl<S> CertifiedConn for futures_rustls::client::TlsStream<S>
++where
++    S: AsyncRead + AsyncWrite + Unpin,
++{
++    fn peer_certificate(&self) -> IoResult<Option<Cow<'_, [u8]>>> {
++        let (_, session) = self.get_ref();
++        Ok(session
++            .peer_certificates()
++            .and_then(|certs| certs.first().map(|c| Cow::from(c.as_ref()))))
++    }
++
++    fn own_certificate(&self) -> IoResult<Option<Cow<'_, [u8]>>> {
++        Ok(None)
++    }
++
++    fn export_keying_material(
++        &self,
++        len: usize,
++        label: &[u8],
++        context: Option<&[u8]>,
++    ) -> IoResult<Vec<u8>> {
++        let (_, session) = self.get_ref();
++        session
++            .export_keying_material(Vec::with_capacity(len), label, context)
++            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
++    }
++}
++
++// ============================================================================
++// UdpProvider implementation (STUBBED)
++// ============================================================================
++
++/// A stub UDP socket that always returns errors.
++#[non_exhaustive]
++pub struct StubUdpSocket;
++
++#[async_trait]
++impl UdpSocket for StubUdpSocket {
++    async fn recv(&self, _buf: &mut [u8]) -> IoResult<(usize, SocketAddr)> {
++        Err(io::Error::new(
++            io::ErrorKind::Unsupported,
++            "WasmRuntime does not support UDP sockets",
++        ))
++    }
++
++    async fn send(&self, _buf: &[u8], _target: &SocketAddr) -> IoResult<usize> {
++        Err(io::Error::new(
++            io::ErrorKind::Unsupported,
++            "WasmRuntime does not support UDP sockets",
++        ))
++    }
++
++    fn local_addr(&self) -> IoResult<SocketAddr> {
++        Err(io::Error::new(
++            io::ErrorKind::Unsupported,
++            "StubUdpSocket has no local address",
++        ))
++    }
++}
++
++#[async_trait]
++impl UdpProvider for WasmRuntime {
++    type UdpSocket = StubUdpSocket;
++
++    async fn bind(&self, _addr: &SocketAddr) -> IoResult<Self::UdpSocket> {
++        Err(io::Error::new(
++            io::ErrorKind::Unsupported,
++            "WasmRuntime does not support UDP sockets",
++        ))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn test_wasm_runtime_creation() {
++        let _rt = WasmRuntime::new();
++    }
++
++    #[test]
++    fn test_sleep_provider() {
++        let rt = WasmRuntime::new();
++        let _future = rt.sleep(Duration::from_millis(100));
++        // We can't actually await it without a runtime, but we can create it
++    }
++
++    #[test]
++    fn test_coarse_time_provider() {
++        let rt = WasmRuntime::new();
++        let _now = rt.now_coarse();
++    }
++}
+\ No newline at end of file
+diff --git a/crates/tor-rtcompat/src/wasm_compat.rs b/crates/tor-rtcompat/src/wasm_compat.rs
+new file mode 100644
+index 000000000..986f9d36b
+--- /dev/null
++++ b/crates/tor-rtcompat/src/wasm_compat.rs
+@@ -0,0 +1,35 @@
++//! WASM compatibility traits that shadow std::marker::{Send, Sync}.
++//!
++//! On native targets, these re-export the real `Send` and `Sync` from std.
++//! On WASM targets, these are auto-implemented empty traits (since WASM is single-threaded).
++//!
++//! # Usage
++//! ```ignore
++//! use tor_rtcompat::wasm_compat::{Send, Sync};
++//!
++//! // Now you can use Send/Sync in bounds and they'll be no-ops on WASM
++//! pub trait MyTrait: Send + Sync {
++//!     // ...
++//! }
++//! ```
++
++// On native: re-export the real Send and Sync
++#[cfg(not(target_arch = "wasm32"))]
++pub use std::marker::{Send, Sync};
++
++// On WASM: provide empty traits that everything implements
++/// Marker trait for types safe to transfer across threads.
++/// On WASM, this is auto-implemented for all types since WASM is single-threaded.
++#[cfg(target_arch = "wasm32")]
++pub trait Send {}
++
++#[cfg(target_arch = "wasm32")]
++impl<T: ?Sized> Send for T {}
++
++/// Marker trait for types safe to share between threads.
++/// On WASM, this is auto-implemented for all types since WASM is single-threaded.
++#[cfg(target_arch = "wasm32")]
++pub trait Sync {}
++
++#[cfg(target_arch = "wasm32")]
++impl<T: ?Sized> Sync for T {}
+\ No newline at end of file

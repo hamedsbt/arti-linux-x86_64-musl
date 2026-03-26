@@ -1,0 +1,76 @@
+diff --git a/crates/tor-proto/src/channel.rs b/crates/tor-proto/src/channel.rs
+index 8925750f5..9e8115cda 100644
+--- a/crates/tor-proto/src/channel.rs
++++ b/crates/tor-proto/src/channel.rs
+@@ -71,7 +71,6 @@ use crate::peer::PeerInfo;
+ use crate::util::err::ChannelClosed;
+ use crate::util::oneshot_broadcast;
+ use crate::util::timeout::TimeoutEstimator;
+-use tor_time::{AtomicOptTimestamp, CoarseInstant, CoarseTimeProvider};
+ use crate::{ClockSkew, client};
+ use crate::{Error, Result};
+ use cfg_if::cfg_if;
+@@ -88,6 +87,7 @@ use tor_error::internal;
+ use tor_linkspec::{HasRelayIds, OwnedChanTarget};
+ use tor_memquota::mq_queue::{self, ChannelSpec as _, MpscSpec};
+ use tor_rtcompat::{DynTimeProvider, SleepProvider};
++use tor_time::{AtomicOptTimestamp, CoarseInstant, CoarseTimeProvider};
+ 
+ #[cfg(feature = "circ-padding")]
+ use tor_async_utils::counting_streams::{self, CountingSink, CountingStream};
+@@ -795,10 +795,11 @@ impl Channel {
+     ///
+     /// Return `None` if the channel is currently in use.
+     pub fn duration_unused(&self) -> Option<std::time::Duration> {
+-        self.details
+-            .unused_since
+-            .time_since_update()
+-            .map(Into::into)
++        let duration = self.details.unused_since.time_since_update();
++        #[cfg(not(target_arch = "wasm32"))]
++        { duration.map(Into::into) }
++        #[cfg(target_arch = "wasm32")]
++        { duration }
+     }
+ 
+     /// Return a new [`ChannelSender`] to transmit cells on this channel.
+diff --git a/crates/tor-proto/src/channel/handshake.rs b/crates/tor-proto/src/channel/handshake.rs
+index 2c70ae68b..46dddfba4 100644
+--- a/crates/tor-proto/src/channel/handshake.rs
++++ b/crates/tor-proto/src/channel/handshake.rs
+@@ -5,8 +5,8 @@ use futures::sink::SinkExt;
+ use futures::stream::{Stream, StreamExt};
+ use std::net::IpAddr;
+ use std::sync::Arc;
+-use tor_time::SystemTime;
+ use tor_llcrypto::pk::ValidatableSignature;
++use tor_time::SystemTime;
+ 
+ use crate::channel::{Canonicity, ChannelFrame, UniqId};
+ use crate::memquota::ChannelAccount;
+@@ -859,8 +859,8 @@ pub(super) mod test {
+     use hex_literal::hex;
+     use regex::Regex;
+     use std::time::Duration;
+-    use tor_time::SystemTime;
+     use tor_llcrypto::pk::rsa::RsaIdentity;
++    use tor_time::SystemTime;
+ 
+     use super::*;
+     use crate::channel::handler::test::MsgBuf;
+diff --git a/crates/tor-proto/src/lib.rs b/crates/tor-proto/src/lib.rs
+index 8ba3fdb40..8ea0a87cf 100644
+--- a/crates/tor-proto/src/lib.rs
++++ b/crates/tor-proto/src/lib.rs
+@@ -129,7 +129,10 @@ pub(crate) fn note_incoming_traffic() {
+ ///
+ /// Returns `None` if we never received "incoming traffic".
+ pub fn time_since_last_incoming_traffic() -> Option<std::time::Duration> {
+-    LAST_INCOMING_TRAFFIC.time_since_update().map(Into::into)
++    #[cfg(not(target_arch = "wasm32"))]
++    { LAST_INCOMING_TRAFFIC.time_since_update().map(Into::into) }
++    #[cfg(target_arch = "wasm32")]
++    { LAST_INCOMING_TRAFFIC.time_since_update() }
+ }
+ 
+ /// Make an MPSC queue, of any type, that participates in memquota, but a fake one for testing

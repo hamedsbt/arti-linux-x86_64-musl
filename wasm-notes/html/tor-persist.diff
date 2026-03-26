@@ -1,0 +1,418 @@
+diff --git a/crates/tor-persist/src/custom.rs b/crates/tor-persist/src/custom.rs
+new file mode 100644
+index 000000000..b24e1e726
+--- /dev/null
++++ b/crates/tor-persist/src/custom.rs
+@@ -0,0 +1,325 @@
++//! Object-safe custom storage trait and unified state manager enum.
++//!
++//! This module provides [`StringStore`], an object-safe trait for custom storage
++//! backends that work with JSON strings, and [`AnyStateMgr`], an enum that
++//! dispatches between the native [`FsStateMgr`] and a custom [`StringStore`].
++
++use crate::err::{Action, Resource};
++use crate::{Error, ErrorSource, LockStatus, Result, StateMgr};
++#[cfg(not(target_arch = "wasm32"))]
++use futures::future::Either;
++use serde::{de::DeserializeOwned, Serialize};
++use std::pin::Pin;
++use std::sync::Arc;
++
++#[cfg(not(target_arch = "wasm32"))]
++use crate::FsStateMgr;
++#[cfg(not(target_arch = "wasm32"))]
++use std::path::Path;
++
++/// An object-safe trait for custom storage backends.
++///
++/// This trait provides a simplified interface for external storage implementations
++/// that work with JSON strings instead of generic types. This allows the trait
++/// to be object-safe and used with `Arc<dyn StringStore>`.
++///
++/// # Example
++///
++/// ```ignore
++/// use tor_persist::{StringStore, LockStatus};
++///
++/// struct MyStorage {
++///     // ... storage implementation
++/// }
++///
++/// impl StringStore for MyStorage {
++///     fn load_str(&self, key: &str) -> tor_persist::Result<Option<String>> {
++///         // Load JSON string from your storage
++///         # Ok(None)
++///     }
++///
++///     fn store_str(&self, key: &str, value: &str) -> tor_persist::Result<()> {
++///         // Store JSON string to your storage
++///         # Ok(())
++///     }
++///
++///     // ... implement other methods
++///     # fn can_store(&self) -> bool { true }
++///     # fn try_lock(&self) -> tor_persist::Result<LockStatus> { Ok(LockStatus::AlreadyHeld) }
++///     # fn unlock(&self) -> tor_persist::Result<()> { Ok(()) }
++/// }
++/// ```
++pub trait StringStore: Send + Sync {
++    /// Load a value as a JSON string from storage.
++    ///
++    /// Returns `Ok(None)` if the key doesn't exist.
++    fn load_str(&self, key: &str) -> Result<Option<String>>;
++
++    /// Store a JSON string value to storage.
++    fn store_str(&self, key: &str, value: &str) -> Result<()>;
++
++    /// Return true if this storage currently holds the write lock.
++    ///
++    /// Returns `false` if the lock is not held by this instance, regardless
++    /// of whether another instance holds it. Matches the semantics of
++    /// [`StateMgr::can_store`].
++    fn can_store(&self) -> bool;
++
++    /// Try to acquire the lock for exclusive write access.
++    fn try_lock(&self) -> Result<LockStatus>;
++
++    /// Release the lock.
++    fn unlock(&self) -> Result<()>;
++
++    /// Return a future that resolves when this store is dropped/unlocked.
++    ///
++    /// Callers use this to wait until exclusive access becomes available.
++    fn wait_for_unlock(
++        &self,
++    ) -> Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>>;
++}
++
++/// A state manager that dispatches between the native filesystem backend
++/// and a custom [`StringStore`] backend.
++///
++/// On native platforms, the default is [`FsStateMgr`] (zero overhead).
++/// Custom storage can be provided via [`AnyStateMgr::from_custom`].
++///
++/// On WASM, custom storage must always be provided.
++#[derive(Clone)]
++#[non_exhaustive]
++pub enum AnyStateMgr {
++    /// Filesystem-based storage (native only).
++    #[cfg(not(target_arch = "wasm32"))]
++    Fs(FsStateMgr),
++    /// Custom string-based storage backend.
++    Custom(Arc<dyn StringStore>),
++}
++
++impl AnyStateMgr {
++    /// Create an `AnyStateMgr` from a custom [`StringStore`] implementation.
++    pub fn from_custom<S: StringStore + 'static>(storage: S) -> Self {
++        Self::Custom(Arc::new(storage))
++    }
++
++    /// Construct from a filesystem path (native only).
++    ///
++    /// This creates an [`FsStateMgr`] and wraps it in the `Fs` variant.
++    #[cfg(not(target_arch = "wasm32"))]
++    pub fn from_path_and_mistrust<P: AsRef<Path>>(
++        path: P,
++        mistrust: &fs_mistrust::Mistrust,
++    ) -> Result<Self> {
++        Ok(Self::Fs(FsStateMgr::from_path_and_mistrust(
++            path, mistrust,
++        )?))
++    }
++
++    /// Return the storage path, if this is a filesystem-backed manager.
++    ///
++    /// Returns `None` for custom storage backends.
++    #[cfg(not(target_arch = "wasm32"))]
++    pub fn path(&self) -> Option<&Path> {
++        match self {
++            Self::Fs(fs) => Some(fs.path()),
++            Self::Custom(_) => None,
++        }
++    }
++
++    /// Return a future that resolves when this manager is dropped/unlocked.
++    ///
++    /// For filesystem-backed managers, this waits for the lock file to be released.
++    /// For custom backends, this defers to [`StringStore::wait_for_unlock`].
++    #[cfg(not(target_arch = "wasm32"))]
++    pub fn wait_for_unlock(
++        &self,
++    ) -> impl futures::Future<Output = ()> + Send + Sync + 'static {
++        match self {
++            Self::Fs(fs) => Either::Left(fs.wait_for_unlock()),
++            Self::Custom(s) => Either::Right(s.wait_for_unlock()),
++        }
++    }
++
++    /// Return a future that resolves when this manager is dropped/unlocked.
++    ///
++    /// Defers to [`StringStore::wait_for_unlock`].
++    #[cfg(target_arch = "wasm32")]
++    pub fn wait_for_unlock(
++        &self,
++    ) -> impl futures::Future<Output = ()> + Send + Sync + 'static {
++        match self {
++            Self::Custom(s) => s.wait_for_unlock(),
++        }
++    }
++
++    /// Helper to create an error for a given key and action.
++    fn make_error(source: ErrorSource, action: Action, key: &str) -> Error {
++        Error::new(
++            source,
++            action,
++            Resource::Memory {
++                key: key.to_string(),
++            },
++        )
++    }
++}
++
++impl StateMgr for AnyStateMgr {
++    fn load<D>(&self, key: &str) -> Result<Option<D>>
++    where
++        D: DeserializeOwned,
++    {
++        match self {
++            #[cfg(not(target_arch = "wasm32"))]
++            Self::Fs(fs) => fs.load(key),
++            Self::Custom(s) => match s.load_str(key)? {
++                Some(json_str) => {
++                    let value: D = serde_json::from_str(&json_str).map_err(|e| {
++                        Self::make_error(Arc::new(e).into(), Action::Loading, key)
++                    })?;
++                    Ok(Some(value))
++                }
++                None => Ok(None),
++            },
++        }
++    }
++
++    fn store<S>(&self, key: &str, val: &S) -> Result<()>
++    where
++        S: Serialize,
++    {
++        match self {
++            #[cfg(not(target_arch = "wasm32"))]
++            Self::Fs(fs) => fs.store(key, val),
++            Self::Custom(s) => {
++                if !s.can_store() {
++                    return Err(Self::make_error(ErrorSource::NoLock, Action::Storing, key));
++                }
++
++                let json_str = serde_json::to_string_pretty(val).map_err(|e| {
++                    Self::make_error(Arc::new(e).into(), Action::Storing, key)
++                })?;
++
++                s.store_str(key, &json_str)
++            }
++        }
++    }
++
++    fn can_store(&self) -> bool {
++        match self {
++            #[cfg(not(target_arch = "wasm32"))]
++            Self::Fs(fs) => fs.can_store(),
++            Self::Custom(s) => s.can_store(),
++        }
++    }
++
++    fn try_lock(&self) -> Result<LockStatus> {
++        match self {
++            #[cfg(not(target_arch = "wasm32"))]
++            Self::Fs(fs) => fs.try_lock(),
++            Self::Custom(s) => s.try_lock(),
++        }
++    }
++
++    fn unlock(&self) -> Result<()> {
++        match self {
++            #[cfg(not(target_arch = "wasm32"))]
++            Self::Fs(fs) => fs.unlock(),
++            Self::Custom(s) => s.unlock(),
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    #![allow(clippy::unwrap_used)]
++    use super::*;
++    use serde::{Deserialize, Serialize};
++    use std::collections::HashMap;
++    use std::sync::RwLock;
++
++    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++    struct TestData {
++        name: String,
++        value: i32,
++    }
++
++    /// A simple in-memory implementation for testing.
++    struct TestStorage {
++        data: RwLock<HashMap<String, String>>,
++        locked: RwLock<bool>,
++    }
++
++    impl TestStorage {
++        fn new() -> Self {
++            Self {
++                data: RwLock::new(HashMap::new()),
++                locked: RwLock::new(false),
++            }
++        }
++    }
++
++    impl StringStore for TestStorage {
++        fn load_str(&self, key: &str) -> Result<Option<String>> {
++            let data = self.data.read().unwrap();
++            Ok(data.get(key).cloned())
++        }
++
++        fn store_str(&self, key: &str, value: &str) -> Result<()> {
++            let mut data = self.data.write().unwrap();
++            data.insert(key.to_string(), value.to_string());
++            Ok(())
++        }
++
++        fn can_store(&self) -> bool {
++            *self.locked.read().unwrap()
++        }
++
++        fn try_lock(&self) -> Result<LockStatus> {
++            let mut locked = self.locked.write().unwrap();
++            if *locked {
++                Ok(LockStatus::AlreadyHeld)
++            } else {
++                *locked = true;
++                Ok(LockStatus::NewlyAcquired)
++            }
++        }
++
++        fn unlock(&self) -> Result<()> {
++            *self.locked.write().unwrap() = false;
++            Ok(())
++        }
++
++        fn wait_for_unlock(
++            &self,
++        ) -> Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>> {
++            Box::pin(futures::future::ready(()))
++        }
++    }
++
++    #[test]
++    fn test_any_state_mgr() {
++        let storage = TestStorage::new();
++        let mgr = AnyStateMgr::from_custom(storage);
++
++        // Lock the manager
++        let status = mgr.try_lock().unwrap();
++        assert_eq!(status, LockStatus::NewlyAcquired);
++        assert!(mgr.can_store());
++
++        // Store some data
++        let data = TestData {
++            name: "test".to_string(),
++            value: 42,
++        };
++        mgr.store("test_key", &data).unwrap();
++
++        // Load it back
++        let loaded: Option<TestData> = mgr.load("test_key").unwrap();
++        assert_eq!(loaded, Some(data));
++
++        // Non-existent key
++        let missing: Option<TestData> = mgr.load("missing").unwrap();
++        assert!(missing.is_none());
++    }
++}
+diff --git a/crates/tor-persist/src/err.rs b/crates/tor-persist/src/err.rs
+index 4fb6ca8a2..b8c29dfd0 100644
+--- a/crates/tor-persist/src/err.rs
++++ b/crates/tor-persist/src/err.rs
+@@ -37,6 +37,12 @@ pub(crate) enum Resource {
+         /// The key for the scratch item
+         key: String,
+     },
++    /// An item in an in-memory state manager.
++    #[display("{} in memory state manager", key)]
++    Memory {
++        /// The key for the item
++        key: String,
++    },
+     /// An instance state directory
+     #[display(
+         "instance {:?}/{:?} in {}",
+@@ -173,6 +179,34 @@ impl Error {
+             resource,
+         }
+     }
++
++    /// Create an error for a failed load operation on an in-memory key.
++    ///
++    /// This is useful for external `StateMgr` implementations.
++    pub fn load_error(key: &str, source: impl Into<ErrorSource>) -> Self {
++        Self::new(source, Action::Loading, Resource::Memory { key: key.to_string() })
++    }
++
++    /// Create an error for a failed store operation on an in-memory key.
++    ///
++    /// This is useful for external `StateMgr` implementations.
++    pub fn store_error(key: &str, source: impl Into<ErrorSource>) -> Self {
++        Self::new(source, Action::Storing, Resource::Memory { key: key.to_string() })
++    }
++
++    /// Create an error for a failed lock operation.
++    ///
++    /// This is useful for external `StateMgr` implementations.
++    pub fn lock_error(source: impl Into<ErrorSource>) -> Self {
++        Self::new(source, Action::Locking, Resource::Manager)
++    }
++
++    /// Create an error for a failed unlock operation.
++    ///
++    /// This is useful for external `StateMgr` implementations.
++    pub fn unlock_error(source: impl Into<ErrorSource>) -> Self {
++        Self::new(source, Action::Unlocking, Resource::Manager)
++    }
+ }
+ 
+ impl tor_error::HasKind for Error {
+diff --git a/crates/tor-persist/src/lib.rs b/crates/tor-persist/src/lib.rs
+index 2e5069e28..95e4a9afc 100644
+--- a/crates/tor-persist/src/lib.rs
++++ b/crates/tor-persist/src/lib.rs
+@@ -49,6 +49,7 @@
+ // TODO #1645 (either remove this, or decide to have it everywhere)
+ #![cfg_attr(not(all(feature = "experimental", feature = "full")), allow(unused))]
+ 
++mod custom;
+ mod err;
+ #[cfg(not(target_arch = "wasm32"))]
+ mod fs;
+@@ -67,8 +68,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
+ use std::sync::Arc;
+ 
+ /// Wrapper type for Results returned from this crate.
+-type Result<T> = std::result::Result<T, crate::Error>;
++pub type Result<T> = std::result::Result<T, crate::Error>;
+ 
++pub use custom::{AnyStateMgr, StringStore};
+ pub use err::{Error, ErrorSource};
+ #[cfg(not(target_arch = "wasm32"))]
+ pub use fs::FsStateMgr;
+diff --git a/crates/tor-persist/src/slug/timestamp.rs b/crates/tor-persist/src/slug/timestamp.rs
+index b9bba83f4..00c9b760e 100644
+--- a/crates/tor-persist/src/slug/timestamp.rs
++++ b/crates/tor-persist/src/slug/timestamp.rs
+@@ -45,7 +45,6 @@ impl FromStr for Iso8601TimeSlug {
+ 
+     fn from_str(s: &str) -> Result<Iso8601TimeSlug, Self::Err> {
+         let d = PrimitiveDateTime::parse(s, &ISO_8601SP_FMT)?;
+-
+         Ok(Iso8601TimeSlug(tor_time::systemtime_from_offset_datetime(d.assume_utc())))
+     }
+ }
