@@ -78,9 +78,25 @@ async function main() {
   log.info(`  ${throughput} KB/s throughput`);
 
   client.close();
+
+  await shutdown();
 }
 
 main().catch(err => {
   console.error(err);
   process.exit(1);
 });
+
+async function shutdown() {
+  await softDelay(2000);
+  console.log('\nWaiting up to 10s for graceful exit.');
+  await softDelay(8000);
+  console.warn('WARN: Graceful exit did not occur. Ignoring.\n')
+  process.exit(0);
+}
+
+async function softDelay(ms) {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms).unref();
+  });
+}

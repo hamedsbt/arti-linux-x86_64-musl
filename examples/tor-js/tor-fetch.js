@@ -3,32 +3,35 @@
 // Make an HTTP request through Tor with persistent filesystem storage
 //
 // Build:   scripts/tor-js/build.sh
-// Usage:   examples/tor-js/tor-fetch.js [--websocket <gateway-url>] [url]
+// Usage:   examples/tor-js/tor-fetch.js [--websocket <gateway-url>] [--in-memory] [url]
 // Example: examples/tor-js/tor-fetch.js --websocket https://tor-js-gateway.voltrevo.com https://check.torproject.org/api/ip
 //
 // State is persisted to ~/.local/share/tor-js/
 // Subsequent runs will load cached state for faster bootstrap.
 
-import { TorClient, Log, ArtiSocketProvider } from '../../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/index.js';
+import { TorClient, Log, ArtiSocketProvider, storage } from '../../crates/tor-js/ts-wrapper/dist/entryPoints/wasm-base64/index.js';
 
 function parseArgs(argv) {
   const args = argv.slice(2);
   let websocketGateway;
+  let inMemory = false;
   let url = 'https://check.torproject.org/api/ip';
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--websocket' && i + 1 < args.length) {
       websocketGateway = args[++i];
+    } else if (args[i] === '--in-memory') {
+      inMemory = true;
     } else {
       url = args[i];
     }
   }
 
-  return { websocketGateway, url };
+  return { websocketGateway, inMemory, url };
 }
 
 async function main() {
-  const { websocketGateway, url } = parseArgs(process.argv);
+  const { websocketGateway, inMemory, url } = parseArgs(process.argv);
 
   const log = new Log();
 
@@ -38,6 +41,9 @@ async function main() {
   const startTime = performance.now();
 
   const options = { log };
+  if (inMemory) {
+    options.storage = new storage.MemoryStorage();
+  }
   if (websocketGateway) {
     options.gateway = websocketGateway;
     options.socketProvider = new ArtiSocketProvider({
