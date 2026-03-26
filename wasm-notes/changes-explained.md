@@ -202,14 +202,12 @@ All `.rs` file changes in `crates/`, excluding `crates/tor-js/`, `crates/tor-tim
 **What:**
 1. **New `truncate_middle()` helper** — truncates long strings by keeping head/tail with "..." in the middle.
 2. **Added debug logging** for HTTP responses — logs request path (truncated), encoding, bytes read, and success status.
-3. **Added `warn!` logging** on idle timeout and IO errors during directory reads.
-4. **Changed read timeout from total to idle** — the timer is now recreated per read attempt instead of being a single total timeout. This means slow-but-active downloads won't time out.
-5. **New `RuzstdDecoder`** — a pure-Rust zstd decoder using `ruzstd` for WASM targets (where C `zstd-sys` is unavailable). Gated behind `#[cfg(all(feature = "zstd-wasm", not(feature = "zstd")))]`. Buffers the entire compressed stream then decompresses synchronously.
-6. The `get_decoder` macro adds a case for `zstd-wasm`.
+3. **New `RuzstdDecoder`** — a pure-Rust zstd decoder using `ruzstd` for WASM targets (where C `zstd-sys` is unavailable). Gated behind `#[cfg(all(feature = "zstd-wasm", not(feature = "zstd")))]`. Buffers the entire compressed stream then decompresses synchronously.
+4. The `get_decoder` macro adds a case for `zstd-wasm`.
 
-**Why:** Items 1-4 are debugging/reliability improvements (especially useful for slow transports like Snowflake). Items 5-6 are for WASM where C libraries can't be linked.
+**Why:** Items 1-2 are debugging improvements. Items 3-4 are for WASM where C libraries can't be linked.
 
-**Flag on item 4:** Changing from a total timeout to per-read idle timeout is a significant behavioral change. For a normal relay, this is fine. But it means a malicious relay could keep a download alive indefinitely by sending 1 byte every 9 seconds. The old behavior (10s total) was arguably too aggressive, but the new behavior might be too permissive. Consider adding a total timeout as well.
+Read timeout change (total→idle) was reverted to upstream's original total timeout.
 
 ### `src/request.rs`
 **What:**
@@ -232,18 +230,11 @@ All `.rs` file changes in `crates/`, excluding `crates/tor-js/`, `crates/tor-tim
 ## tor-dirmgr
 
 ### `src/bootstrap.rs`
-**What:** Major refactoring:
-1. `load_and_apply_documents` changed from sync to async. On WASM, yields to browser event loop via `gloo_timers::future::sleep(Duration::ZERO)` between chunks.
-2. `fetch_multiple` extracted into `create_fetch_requests` (shared) + a test-only `fetch_multiple`.
-3. `download_attempt` reworked: test mode uses the batch `fetch_multiple`; production mode processes responses incrementally via `StreamExt::next()` on a `buffer_unordered` stream.
-4. New `process_download_response` helper extracted from the inline loop body.
-5. `load_once`, `load`, and callers updated from sync to async.
+**What:** `std::time::SystemTime` → `tor_time::SystemTime` import.
 
-**Why:**
-- Async yielding on WASM prevents blocking the browser UI thread during microdescriptor parsing.
-- Incremental download processing enables persistence between responses rather than waiting for all downloads to complete.
+Streaming/incremental download changes were reverted (see `wasm-notes/potential-improvements.md`).
 
-**Flag:** The `#[cfg(test)]` / `#[cfg(not(test))]` split in `download_attempt` means test code and production code follow different execution paths. This is somewhat concerning — production behavior is tested through a different code path. The `create_fetch_requests` refactoring is sound, but the test/production split should be noted for future test coverage work.
+**Why:** WASM time compatibility only. The streaming improvement needs a testing strategy that exercises the same code path as production.
 
 ### `src/bridgedesc.rs`
 **What:** `humantime::format_rfc3339_seconds` → `tor_time::format_rfc3339`.
@@ -256,11 +247,7 @@ All `.rs` file changes in `crates/`, excluding `crates/tor-js/`, `crates/tor-tim
 **Why:** SQLite-based store is not available on WASM.
 
 ### `src/docid.rs`
-**What:** Adds `MICRODESC_N` constant (set equal to `N = 500`) and uses it for microdesc chunking instead of `N` directly.
-
-**Why:** Allows the microdesc chunk size to be tuned independently in the future.
-
-**FLAG:** `MICRODESC_N` is set to `N` (500) which makes it a no-op change. This looks like preparation for a future change (perhaps a smaller batch size on WASM) that was never completed. The constant exists but is never set to a different value. Not harmful, but unnecessary.
+No changes (reverted to upstream).
 
 ### `src/err.rs`
 **What:** `SqliteError` variant and all related match arms gated behind `#[cfg(not(target_arch = "wasm32"))]`. `from_lockfile` gets `#[cfg_attr(target_arch = "wasm32", expect(dead_code))]`.
@@ -355,9 +342,9 @@ All `.rs` file changes in `crates/`, excluding `crates/tor-js/`, `crates/tor-tim
 ## tor-hsclient
 
 ### `src/pow/v1.rs`
-**What:** `tor_time::Instant` → `std::time::Instant`.
+**What:** Uses `tor_time::Instant` for timing the PoW solver.
 
-**Why/FLAG:** This is a **reversion** from `tor_time::Instant` back to `std::time::Instant`. The proof-of-work solver uses `Instant` for timing its work, which only makes sense on native (PoW is computationally intensive and won't run on WASM). However, this means `tor-hsclient` now has an incompatibility with WASM for this module. Since the `tor-hsclient` crate's Cargo.toml also removes the `tor-time` dependency entirely, this is intentional — the PoW code is native-only.
+**Why:** WASM compatibility (migrated from `std::time::Instant`).
 
 ---
 
@@ -388,9 +375,9 @@ All `.rs` file changes in `crates/`, excluding `crates/tor-js/`, `crates/tor-tim
 **Why:** Consistent with the hsservice's use of native `Instant` for timeout tracking.
 
 ### `src/time_store.rs` / `src/timeout_track.rs`
-**What:** `tor_time::Instant` → `std::time::Instant` in both modules.
+**What:** Uses `tor_time::{Instant, SystemTime}` for timeout tracking.
 
-**Why:** Same rationale — hsservice uses native `Instant`.
+**Why:** WASM compatibility (migrated from `std::time::Instant`).
 
 ---
 
@@ -507,9 +494,7 @@ All `.rs` file changes in `crates/`, excluding `crates/tor-js/`, `crates/tor-tim
 **FLAG:** Reversion. The padding code uses `Instant` for high-precision timing of padding injections. This only runs on native (WASM doesn't support circuit padding). The reversion is intentional but should be noted.
 
 ### `src/client/reactor/circuit.rs`
-**What:** Changes `decode_res.cmds().any(...)` to collect into a `Vec` first, then iterate: `let cmds: Vec<_> = decode_res.cmds().collect(); let c_t_w = cmds.iter().any(...)`.
-
-**FLAG:** This collects an iterator into a Vec just to call `.any()` on it. This is wasteful — the original `.any()` call on the iterator was more efficient. Unless there's a borrow checker issue that necessitates this, this looks like an unnecessary allocation. Investigate whether this was needed to satisfy a lifetime constraint.
+No changes beyond time type migration (unnecessary `.collect()` was reverted to upstream's direct `.any()`).
 
 ### `src/congestion/rtt.rs`
 **What:** In test code: `tor_time::Instant` → `std::time::Instant`.
@@ -637,37 +622,29 @@ All `.rs` file changes in `crates/`, excluding `crates/tor-js/`, `crates/tor-tim
 
 ## Summary of Flagged Issues
 
-### Potentially Wrong / Needs Investigation
+### Resolved
 
-1. **`tor-proto/src/client/reactor/circuit.rs`** — Unnecessary `.collect()` into Vec before calling `.any()`. This adds an allocation that the original code didn't have. Should be investigated for a borrow checker reason or reverted.
+1. **`tor-proto/src/client/reactor/circuit.rs`** — ~~Unnecessary `.collect()` into Vec before `.any()`.~~ **FIXED:** Reverted to upstream's direct `.any()` on iterator. Was leftover from removed debug counters.
 
-2. **`tor-dirclient/src/lib.rs`** — Read timeout changed from total to per-read idle timeout. A malicious relay could keep a download alive indefinitely by trickling data. Consider adding a total timeout as well.
+2. **`tor-dirclient/src/lib.rs`** — ~~Read timeout changed from total to per-read idle.~~ **FIXED:** Reverted to upstream's total timeout. The idle timeout was for Snowflake compatibility which has been removed.
 
-3. **`tor-dirmgr/src/bootstrap.rs`** — The `#[cfg(test)]` / `#[cfg(not(test))]` split in `download_attempt` means production code follows a different path than test code.
+3. **`tor-dirmgr/src/bootstrap.rs`** — ~~Streaming downloads with `#[cfg(test)]`/`#[cfg(not(test))]` split.~~ **FIXED:** Reverted to upstream's batch approach. The streaming improvement is documented in `wasm-notes/potential-improvements.md` for future work with proper test coverage.
 
-### Inconsistent Reversions (tor_time → std::time)
+4. **`tor-dirmgr/src/docid.rs`** — ~~Dead `MICRODESC_N` constant.~~ **FIXED:** Reverted to upstream.
 
-Several files revert `tor_time::Instant` or `tor_time::SystemTime` back to `std::time` equivalents. While each individually is justified (test code, native-only code, relay-only code), the inconsistency is worth noting:
+5. **`tor-hsclient/src/pow/v1.rs`, `tor-hsservice/src/timeout_track.rs`, `tor-hsservice/src/time_store.rs`** — ~~Missed `std::time::Instant` migrations.~~ **FIXED:** Changed to `tor_time::Instant`.
 
-- **Justified native-only:** `hashx/bench`, `tor-hsclient/pow/v1.rs`, `tor-hsservice` (multiple), `tor-proto/padding`, `tor-proto/relay/initiator+responder`, `tor-circmgr/preemptive` (test), `tor-proto/congestion/rtt` (test)
+### Open (Low Priority)
+
+- **`tor-dirmgr/src/storage/custom.rs`** — `str_to_flavor()` is `#[allow(dead_code)]`. Should be removed if unused.
+
+- **`tor-cert/tests/invalid_certs.rs`** — Editing a commented-out import is pure cosmetic noise.
+
+### Remaining `std::time` Direct Usage (Acceptable)
+
+These files use `std::time` types directly. All are server-side, native-only, or test-only code that won't run on WASM:
+
+- **Native-only code:** `hashx/bench`, `tor-proto/padding`, `tor-proto/relay/initiator+responder`, `tor-circmgr/preemptive` (test), `tor-proto/congestion/rtt` (test)
+- **Relay/hsservice code:** `tor-hsservice` (multiple files using `std::time::Instant` for timeout tracking)
 - **Test code:** `tor-netdir/testnet.rs`, `tor-netdir/testprovider.rs`, `tor-dirserver/mirror/operation.rs` (test), `tor-rtmock/tests`
 - **Docs:** `retry-error/src/lib.rs`
-
-### Dead / Unnecessary Code
-
-4. **`tor-dirmgr/src/docid.rs`** — `MICRODESC_N` constant is always equal to `N` (500). Preparation for a future change that never happened.
-
-5. **`tor-dirmgr/src/storage/custom.rs`** — `str_to_flavor()` is `#[allow(dead_code)]`. Should be removed if unused.
-
-6. **`tor-cert/tests/invalid_certs.rs`** — Editing a commented-out import is pure cosmetic noise.
-
-### Remaining `std::time::SystemTime` / `std::time::Instant` Direct Usage
-
-The intentional reversions listed above mean these files still use `std::time` types directly. For any of these that might need WASM support in the future, they would need to be migrated back to `tor_time`:
-
-- `tor-hsservice` (multiple files) — uses `std::time::Instant` for timeout tracking
-- `tor-proto` relay channel code — uses `std::time::SystemTime` for verification timestamps
-- `tor-hsclient` PoW code — uses `std::time::Instant` for timing
-- Various test files
-
-This is acceptable because these are all server-side or native-only code paths that won't run on WASM.
