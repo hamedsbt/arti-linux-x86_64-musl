@@ -1,6 +1,16 @@
 # Diff Analysis: `wasm-basic-compat` → `main`
 
-All `.rs` file changes in `crates/`, excluding `crates/tor-js/`, `crates/tor-time/`, and `crates/tor-async-compat/`.
+All `.rs` file changes in `crates/`, excluding `crates/tor-js/`,
+`crates/tor-time/`, and `crates/tor-async-compat/`.
+
+The `wasm-basic-compat` branch already contains the `tor-time` and
+`tor-async-compat` crates and their full codebase migration
+(`std::time` → `tor_time`, `async_trait` → `tor_async_compat`,
+`coarsetime` → `tor_time::CoarseInstant`, etc.). Those changes are
+**not analyzed here** — this document covers only the additional
+changes on top of that baseline. Import changes referencing `tor_time`
+or `tor_async_compat` that appear in this diff are residual
+adjustments, not the primary migration.
 
 ---
 
