@@ -160,6 +160,8 @@ fn note_cache_success<R: Runtime>(circmgr: &CircMgr<R>, source: &tor_dirclient::
 }
 
 /// Load every document in `missing` and try to apply it to `state`.
+// Async because of a cfg(wasm32) yield point that clippy can't see on native.
+#[allow(clippy::unused_async)]
 async fn load_and_apply_documents<R: Runtime>(
     missing: &[DocId],
     dirmgr: &Arc<DirMgr<R>>,

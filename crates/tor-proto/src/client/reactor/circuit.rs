@@ -580,11 +580,6 @@ impl Circuit {
         let cmds: Vec<_> = decode_res.cmds().collect();
         let c_t_w = cmds.iter().any(|cmd| sendme::cmd_counts_towards_windows(*cmd));
 
-        static RELAY_CELL_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        static DATA_CELL_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let total = RELAY_CELL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        let data = if c_t_w { DATA_CELL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 } else { DATA_CELL_COUNT.load(std::sync::atomic::Ordering::Relaxed) };
-
         // Decrement the circuit sendme windows, and see if we need to
         // send a sendme cell.
         let send_circ_sendme = if c_t_w {

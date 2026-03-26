@@ -530,12 +530,14 @@ where
 /// Buffers the entire compressed stream, decompresses synchronously with ruzstd,
 /// then serves reads from the decompressed bytes. This is acceptable because
 /// directory documents are at most a few MB.
-#[cfg(feature = "zstd-wasm")]
+#[cfg(all(feature = "zstd-wasm", not(feature = "zstd")))]
 struct RuzstdDecoder<S> {
+    /// Current decoder state: reading compressed data or serving decompressed output.
     inner: RuzstdState<S>,
 }
 
-#[cfg(feature = "zstd-wasm")]
+/// State machine for [`RuzstdDecoder`].
+#[cfg(all(feature = "zstd-wasm", not(feature = "zstd")))]
 enum RuzstdState<S> {
     /// Still reading compressed bytes from the async source.
     Reading(S, Vec<u8>),
@@ -543,8 +545,9 @@ enum RuzstdState<S> {
     Done(std::io::Cursor<Vec<u8>>),
 }
 
-#[cfg(feature = "zstd-wasm")]
+#[cfg(all(feature = "zstd-wasm", not(feature = "zstd")))]
 impl<S> RuzstdDecoder<S> {
+    /// Create a new decoder wrapping the given compressed stream.
     fn new(stream: S) -> Self {
         Self {
             inner: RuzstdState::Reading(stream, Vec::new()),
@@ -552,7 +555,7 @@ impl<S> RuzstdDecoder<S> {
     }
 }
 
-#[cfg(feature = "zstd-wasm")]
+#[cfg(all(feature = "zstd-wasm", not(feature = "zstd")))]
 impl<S: AsyncRead + Unpin> AsyncRead for RuzstdDecoder<S> {
     fn poll_read(
         self: std::pin::Pin<&mut Self>,
@@ -563,7 +566,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for RuzstdDecoder<S> {
         loop {
             match &mut this.inner {
                 RuzstdState::Reading(stream, compressed) => {
-                    let mut tmp = [0u8; 8192];
+                    let mut tmp = [0_u8; 8192];
                     match std::pin::Pin::new(stream).poll_read(cx, &mut tmp) {
                         std::task::Poll::Ready(Ok(0)) => {
                             // EOF: decompress
@@ -626,7 +629,7 @@ fn get_decoder<'a, S: AsyncBufRead + Unpin + Send + 'a>(
         (Some("x-tor-lzma"), Direct) => decoder!(XzDecoder, stream),
         #[cfg(feature = "zstd")]
         (Some("x-zstd"), Direct) => decoder!(ZstdDecoder, stream),
-        #[cfg(feature = "zstd-wasm")]
+        #[cfg(all(feature = "zstd-wasm", not(feature = "zstd")))]
         (Some("x-zstd"), Direct) => Ok(Box::new(RuzstdDecoder::new(stream))),
         (Some(other), _) => Err(RequestError::ContentEncoding(other.into())),
     }

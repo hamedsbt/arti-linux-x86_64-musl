@@ -265,12 +265,16 @@ impl<T: Send + 'static> Future for StubThreadHandle<T> {
 /// `onclose` setter, and `close()`.
 #[allow(dead_code)] // Fields held to keep JS callbacks alive
 pub struct JsProxyStream {
+    /// The underlying JS socket object (e.g. ArtiSocket from the TS wrapper).
     #[cfg(target_arch = "wasm32")]
     socket: wasm_bindgen::JsValue,
+    /// Channel receiving incoming data chunks from the JS onmessage callback.
     #[cfg(target_arch = "wasm32")]
     rx: futures_channel::mpsc::UnboundedReceiver<IoResult<Vec<u8>>>,
+    /// Leftover bytes from a previous read that didn't fit the caller's buffer.
     #[cfg(target_arch = "wasm32")]
     buffer: Vec<u8>,
+    /// Prevent the JS closures (onmessage, onclose) from being garbage collected.
     #[cfg(target_arch = "wasm32")]
     _closures: Vec<wasm_bindgen::closure::Closure<dyn FnMut(wasm_bindgen::JsValue)>>,
 

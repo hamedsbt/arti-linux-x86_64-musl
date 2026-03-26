@@ -200,6 +200,8 @@ pub(crate) struct ExpirationConfig {
     ///
     /// TODO(nickm): We may want a better approach in the future; see notes in
     /// `EXPIRATION_DEFAULTS`.
+    // Used by sqlite (non-WASM) unconditionally and by custom storage with routerdesc feature.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) router_descs: Duration,
     /// How long to keep unlisted microdescriptors.
     ///

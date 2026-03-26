@@ -27,6 +27,7 @@ pub(crate) struct PowManager<R> {
     runtime: PhantomData<R>,
 }
 
+/// Stub persistent state for the PoW manager (empty when PoW is disabled).
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct PowManagerStateRecord;
 
