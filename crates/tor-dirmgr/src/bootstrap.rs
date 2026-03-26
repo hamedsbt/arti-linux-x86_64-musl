@@ -160,9 +160,7 @@ fn note_cache_success<R: Runtime>(circmgr: &CircMgr<R>, source: &tor_dirclient::
 }
 
 /// Load every document in `missing` and try to apply it to `state`.
-// Async because of a cfg(wasm32) yield point that clippy can't see on native.
-#[allow(clippy::unused_async)]
-async fn load_and_apply_documents<R: Runtime>(
+fn load_and_apply_documents<R: Runtime>(
     missing: &[DocId],
     dirmgr: &Arc<DirMgr<R>>,
     state: &mut Box<dyn DirState>,
@@ -180,12 +178,6 @@ async fn load_and_apply_documents<R: Runtime>(
         };
 
         state.add_from_cache(documents, changed)?;
-
-        // On WASM (single-threaded), yield to the browser event loop between
-        // chunks so the UI thread isn't blocked for seconds while parsing
-        // thousands of microdescriptors.
-        #[cfg(target_arch = "wasm32")]
-        gloo_timers::future::sleep(std::time::Duration::ZERO).await;
     }
 
     Ok(())
@@ -310,15 +302,18 @@ async fn fetch_single<R: Runtime>(
 #[cfg(test)]
 static CANNED_RESPONSE: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(vec![]));
 
-/// Create the list of fetch requests for the given missing documents.
+/// Launch a set of download requests for a set of missing objects in
+/// `missing`, and return each request along with the response it received.
 ///
-/// This is separated from `download_attempt` to allow testing with canned responses.
+/// Don't launch more than `parallelism` requests at once.
+#[allow(clippy::cognitive_complexity)] // TODO: maybe refactor?
 #[instrument(level = "trace", skip_all)]
-fn create_fetch_requests<R: Runtime>(
-    dirmgr: &Arc<DirMgr<R>>,
+async fn fetch_multiple<R: Runtime>(
+    dirmgr: Arc<DirMgr<R>>,
     attempt_id: AttemptId,
     missing: &[DocId],
-) -> Result<Vec<ClientRequest>> {
+    parallelism: usize,
+) -> Result<Vec<(ClientRequest, DirResponse)>> {
     let requests = {
         let store = dirmgr.store.lock().expect("store lock poisoned");
         make_requests_for_documents(&dirmgr.runtime, missing, &**store, &dirmgr.config.get())?
@@ -327,18 +322,7 @@ fn create_fetch_requests<R: Runtime>(
     trace!(attempt=%attempt_id, "Launching {} requests for {} documents",
            requests.len(), missing.len());
 
-    Ok(requests)
-}
-
-#[cfg(test)]
-async fn fetch_multiple<R: Runtime>(
-    dirmgr: Arc<DirMgr<R>>,
-    attempt_id: AttemptId,
-    missing: &[DocId],
-    parallelism: usize,
-) -> Result<Vec<(ClientRequest, DirResponse)>> {
-    let requests = create_fetch_requests(&dirmgr, attempt_id, missing)?;
-
+    #[cfg(test)]
     {
         let m = CANNED_RESPONSE.lock().expect("Poisoned mutex");
         if !m.is_empty() {
@@ -350,28 +334,34 @@ async fn fetch_multiple<R: Runtime>(
     }
 
     let circmgr = dirmgr.circmgr()?;
+    // Only use timely directories for bootstrapping directories; otherwise, we'll try fallbacks.
     let netdir = dirmgr.netdir(tor_netdir::Timeliness::Timely).ok();
 
+    // TODO: instead of waiting for all the queries to finish, we
+    // could stream the responses back or something.
     let responses: Vec<Result<(ClientRequest, DirResponse)>> = futures::stream::iter(requests)
         .map(|query| fetch_single(&dirmgr.runtime, query, netdir.as_deref(), circmgr.clone()))
         .buffer_unordered(parallelism)
         .collect()
         .await;
 
-    let useful_responses: Vec<_> = responses
-        .into_iter()
-        .filter_map(|r| match r {
-            Ok((req, resp)) if resp.status_code() == 200 => Some((req, resp)),
-            Ok((_, resp)) => {
-                trace!("cache declined request; reported status {:?}", resp.status_code());
-                None
+    let mut useful_responses = Vec::new();
+    for r in responses {
+        // TODO: on some error cases we might want to stop using this source.
+        match r {
+            Ok((request, response)) => {
+                if response.status_code() == 200 {
+                    useful_responses.push((request, response));
+                } else {
+                    trace!(
+                        "cache declined request; reported status {:?}",
+                        response.status_code()
+                    );
+                }
             }
-            Err(e) => {
-                warn_report!(e, "error while downloading");
-                None
-            }
-        })
-        .collect();
+            Err(e) => warn_report!(e, "error while downloading"),
+        }
+    }
 
     trace!(attempt=%attempt_id, "received {} useful responses from our requests.", useful_responses.len());
 
@@ -379,7 +369,7 @@ async fn fetch_multiple<R: Runtime>(
 }
 
 /// Try to update `state` by loading cached information from `dirmgr`.
-async fn load_once<R: Runtime>(
+fn load_once<R: Runtime>(
     dirmgr: &Arc<DirMgr<R>>,
     state: &mut Box<dyn DirState>,
     attempt_id: AttemptId,
@@ -396,7 +386,7 @@ async fn load_once<R: Runtime>(
             missing.len()
         );
 
-        load_and_apply_documents(&missing, dirmgr, state, &mut changed).await
+        load_and_apply_documents(&missing, dirmgr, state, &mut changed)
     };
 
     // We have to update the status here regardless of the outcome, if we got
@@ -415,7 +405,7 @@ async fn load_once<R: Runtime>(
 ///
 /// No downloads are performed; the provided state will not be reset.
 #[allow(clippy::cognitive_complexity)] // TODO: Refactor? Somewhat due to tracing.
-pub(crate) async fn load<R: Runtime>(
+pub(crate) fn load<R: Runtime>(
     dirmgr: &Arc<DirMgr<R>>,
     mut state: Box<dyn DirState>,
     attempt_id: AttemptId,
@@ -424,7 +414,7 @@ pub(crate) async fn load<R: Runtime>(
     loop {
         trace!(attempt=%attempt_id, state=%state.describe(), "Loading from cache");
         let mut changed = false;
-        let outcome = load_once(dirmgr, &mut state, attempt_id, &mut changed).await;
+        let outcome = load_once(dirmgr, &mut state, attempt_id, &mut changed);
         {
             let mut store = dirmgr.store.lock().expect("store lock poisoned");
             dirmgr.apply_netdir_changes(&mut state, &mut **store)?;
@@ -465,85 +455,11 @@ pub(crate) async fn load<R: Runtime>(
     Ok(state)
 }
 
-/// Helper: Process a single download response.
-///
-/// Returns Ok(true) if processing should continue, Ok(false) if we hit a fatal error.
-fn process_download_response<R: Runtime>(
-    dirmgr: &Arc<DirMgr<R>>,
-    state: &mut Box<dyn DirState>,
-    attempt_id: AttemptId,
-    client_req: &ClientRequest,
-    dir_response: DirResponse,
-    n_errors: &mut usize,
-) -> Result<()> {
-    let source = dir_response.source().cloned();
-    let text = match String::from_utf8(dir_response.into_output_unchecked())
-        .map_err(Error::BadUtf8FromDirectory)
-    {
-        Ok(t) => t,
-        Err(e) => {
-            if let Some(source) = source {
-                *n_errors += 1;
-                note_cache_error(dirmgr.circmgr()?.deref(), &source, &e);
-            }
-            return Ok(());
-        }
-    };
-
-    let text = match dirmgr.expand_response_text(client_req, text) {
-        Ok(text) => text,
-        Err(e) => {
-            warn_report!(e, "Error when expanding directory text");
-            if let Some(source) = source {
-                *n_errors += 1;
-                note_cache_error(dirmgr.circmgr()?.deref(), &source, &e);
-            }
-            propagate_fatal_errors!(Err(e));
-            return Ok(());
-        }
-    };
-
-    let doc_source = DocSource::DirServer {
-        source: source.clone(),
-    };
-    let mut changed = false;
-    let outcome = state.add_from_download(
-        &text,
-        client_req,
-        doc_source,
-        Some(&dirmgr.store),
-        &mut changed,
-    );
-
-    if !changed {
-        debug_assert!(outcome.is_err());
-    }
-
-    if let Some(source) = source {
-        if let Err(e) = &outcome {
-            *n_errors += 1;
-            note_cache_error(dirmgr.circmgr()?.deref(), &source, e);
-        } else {
-            note_cache_success(dirmgr.circmgr()?.deref(), &source);
-        }
-    }
-
-    if let Err(e) = &outcome {
-        dirmgr.note_errors(attempt_id, 1);
-        warn_report!(e, "error while adding directory info");
-    }
-    propagate_fatal_errors!(outcome);
-    Ok(())
-}
-
 /// Helper: Make a set of download attempts for the current directory state,
 /// and on success feed their results into the state object.
 ///
 /// This can launch one or more download requests, but will not launch more
 /// than `parallelism` requests at a time.
-///
-/// Results are processed incrementally as they arrive, allowing storage
-/// persistence to happen before all downloads complete.
 #[allow(clippy::cognitive_complexity)] // TODO: Refactor?
 #[instrument(level = "trace", skip_all)]
 async fn download_attempt<R: Runtime>(
@@ -553,57 +469,69 @@ async fn download_attempt<R: Runtime>(
     attempt_id: AttemptId,
 ) -> Result<()> {
     let missing = state.missing_docs();
+    let fetched = fetch_multiple(Arc::clone(dirmgr), attempt_id, &missing, parallelism).await?;
+    let mut n_errors = 0;
+    for (client_req, dir_response) in fetched {
+        let source = dir_response.source().cloned();
+        let text = match String::from_utf8(dir_response.into_output_unchecked())
+            .map_err(Error::BadUtf8FromDirectory)
+        {
+            Ok(t) => t,
+            Err(e) => {
+                if let Some(source) = source {
+                    n_errors += 1;
+                    note_cache_error(dirmgr.circmgr()?.deref(), &source, &e);
+                }
+                continue;
+            }
+        };
+        match dirmgr.expand_response_text(&client_req, text) {
+            Ok(text) => {
+                let doc_source = DocSource::DirServer {
+                    source: source.clone(),
+                };
+                let mut changed = false;
+                let outcome = state.add_from_download(
+                    &text,
+                    &client_req,
+                    doc_source,
+                    Some(&dirmgr.store),
+                    &mut changed,
+                );
 
-    // In test mode, use the batch fetch_multiple function for canned responses
-    #[cfg(test)]
-    {
-        let fetched = fetch_multiple(Arc::clone(dirmgr), attempt_id, &missing, parallelism).await?;
-        let mut n_errors = 0;
-        for (client_req, dir_response) in fetched {
-            process_download_response(dirmgr, state, attempt_id, &client_req, dir_response, &mut n_errors)?;
-        }
-        if n_errors != 0 {
-            dirmgr.note_errors(attempt_id, n_errors);
-        }
-        dirmgr.update_progress(attempt_id, state.bootstrap_progress());
-    }
+                if !changed {
+                    debug_assert!(outcome.is_err());
+                }
 
-    // In production, process responses incrementally as they arrive
-    #[cfg(not(test))]
-    {
-        let requests = create_fetch_requests(dirmgr, attempt_id, &missing)?;
-
-        let circmgr = dirmgr.circmgr()?;
-        let netdir = dirmgr.netdir(tor_netdir::Timeliness::Timely).ok();
-
-        let mut n_errors = 0;
-        let mut response_stream = futures::stream::iter(requests)
-            .map(|query| fetch_single(&dirmgr.runtime, query, netdir.as_deref(), circmgr.clone()))
-            .buffer_unordered(parallelism);
-
-        // Process each response as it arrives - this enables incremental persistence
-        while let Some(result) = response_stream.next().await {
-            match result {
-                Ok((request, response)) => {
-                    if response.status_code() == 200 {
-                        process_download_response(dirmgr, state, attempt_id, &request, response, &mut n_errors)?;
-                        dirmgr.update_progress(attempt_id, state.bootstrap_progress());
+                if let Some(source) = source {
+                    if let Err(e) = &outcome {
+                        n_errors += 1;
+                        note_cache_error(dirmgr.circmgr()?.deref(), &source, e);
                     } else {
-                        trace!(
-                            "cache declined request; reported status {:?}",
-                            response.status_code()
-                        );
+                        note_cache_success(dirmgr.circmgr()?.deref(), &source);
                     }
                 }
-                Err(e) => warn_report!(e, "error while downloading"),
+
+                if let Err(e) = &outcome {
+                    dirmgr.note_errors(attempt_id, 1);
+                    warn_report!(e, "error while adding directory info");
+                }
+                propagate_fatal_errors!(outcome);
+            }
+            Err(e) => {
+                warn_report!(e, "Error when expanding directory text");
+                if let Some(source) = source {
+                    n_errors += 1;
+                    note_cache_error(dirmgr.circmgr()?.deref(), &source, &e);
+                }
+                propagate_fatal_errors!(Err(e));
             }
         }
-
-        if n_errors != 0 {
-            dirmgr.note_errors(attempt_id, n_errors);
-        }
-        dirmgr.update_progress(attempt_id, state.bootstrap_progress());
     }
+    if n_errors != 0 {
+        dirmgr.note_errors(attempt_id, n_errors);
+    }
+    dirmgr.update_progress(attempt_id, state.bootstrap_progress());
 
     Ok(())
 }
@@ -641,7 +569,7 @@ pub(crate) async fn download<R: Runtime>(
             let dirmgr = upgrade_weak_ref(&dirmgr)?;
             let mut changed = false;
             trace!(attempt=%attempt_id, state=%state.describe(),"Attempting to load directory information from cache.");
-            let load_result = load_once(&dirmgr, state, attempt_id, &mut changed).await;
+            let load_result = load_once(&dirmgr, state, attempt_id, &mut changed);
             trace!(attempt=%attempt_id, state=%state.describe(), outcome=?load_result, "Load attempt complete.");
             if let Err(e) = &load_result {
                 // If the load failed but the error can be blamed on a directory
