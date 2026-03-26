@@ -1,7 +1,7 @@
 //! Client support for the `v1` onion service proof of work scheme
 
 use crate::err::ProofOfWorkError;
-use std::time::Instant;
+use tor_time::Instant;
 use tor_async_utils::oneshot;
 use tor_async_utils::oneshot::Canceled;
 use tor_cell::relaycell::hs::pow::v1::ProofOfWorkV1;

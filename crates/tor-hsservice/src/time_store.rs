@@ -81,8 +81,7 @@
 use std::fmt::{self, Display};
 use std::str::FromStr;
 use std::time::Duration;
-use std::time::Instant;
-use tor_time::SystemTime;
+use tor_time::{Instant, SystemTime};
 
 use derive_deftly::{Deftly, define_derive_deftly};
 use serde::{Deserialize, Serialize};
