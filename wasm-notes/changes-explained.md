@@ -128,15 +128,6 @@ adjustments, not the primary migration.
 
 ---
 
-## tor-config-path
-
-### `src/addr.rs`
-**What:** Changes `return Err(...)` to `Err(...)` (removes unnecessary `return` keyword).
-
-**Why:** Clippy cleanup — the `return` was inside a `#[cfg(not(unix))]` block that is the last expression in the arm.
-
----
-
 ## tor-dirclient
 
 ### `src/lib.rs`
@@ -216,12 +207,6 @@ Read timeout change (total→idle) was reverted to upstream's original total tim
 **Why:** Bug fix for bridge descriptor management. Without this, a temporarily-unreachable primary bridge would lose its descriptor, making it permanently unavailable.
 
 **This is a real bug fix, not just WASM-related.** Worth noting for review.
-
----
-
-## tor-hsclient
-
-Time/async-compat migration only.
 
 ---
 
