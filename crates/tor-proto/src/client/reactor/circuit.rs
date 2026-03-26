@@ -577,8 +577,7 @@ impl Circuit {
             .ok_or_else(|| internal!("nonexistent hop {:?}", hopnum))?
             .decrement_inbound_cell_limit()?;
 
-        let cmds: Vec<_> = decode_res.cmds().collect();
-        let c_t_w = cmds.iter().any(|cmd| sendme::cmd_counts_towards_windows(*cmd));
+        let c_t_w = decode_res.cmds().any(sendme::cmd_counts_towards_windows);
 
         // Decrement the circuit sendme windows, and see if we need to
         // send a sendme cell.
