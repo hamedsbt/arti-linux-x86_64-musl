@@ -240,9 +240,16 @@ Small cfg guards, clippy fixes, and cleanup that don't introduce new logic.
 - **tor-memquota** `config.rs` — `#[expect(clippy::identity_op)]` on `1 * GIB`
 - **tor-hsservice** `pow/v1_stub.rs` — doc comments and `#[allow(clippy::...)]` attrs on stub methods
 
+**Cargo.toml changes (WASM platform gating):**
+- **arti-client** — `mmap` feature extracted (was hardcoded in tor-dirmgr dep); WASM dev-deps added (`wasm-bindgen`, `wasm-bindgen-futures`, `console_error_panic_hook`, `tracing-wasm`)
+- **tor-basic-utils** — `getrandom` with `wasm_js` feature for WASM random number generation
+- **tor-dirmgr** — `rusqlite`/`fslock` moved behind `cfg(not(wasm32))`; `gloo-timers` added for WASM; `zstd-wasm` feature forwarded from `tor-dirclient`
+
 **Cleanup:**
 - **arti** `proxy.rs` — `#[cfg_attr(feature = "experimental-api", non_exhaustive)]` on stub `RpcMgr`
 - **arti** `rpc_stub.rs` — removes unnecessary `visibility::make(pub)` attr
 - **tor-chanmgr** `builder.rs` / `transport.rs` / `transport/proxied.rs` — `Send + Sync` bounds consolidated into `TransportImplHelper` trait definition
 - **tor-proto** `maybenot_padding.rs` — `type Instant` reverted to `std::time::Instant` (native-only padding code)
 - **arti-client** `lib.rs` — `pub mod storage;` re-export
+
+See also `wasm-notes/trivial-changes.md` for mechanical fixes (clippy, cfg_attr).
