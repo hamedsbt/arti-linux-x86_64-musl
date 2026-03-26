@@ -46,3 +46,14 @@ implemented with a `#[cfg(target_arch = "wasm32")]` yield point.
 **Why not included:** This is a WASM-specific optimization that belongs in the
 WASM support branch, not in the basic time/async compatibility layer. It should
 be re-added when the full WASM changes are applied.
+
+## 3. Remove commented-out .get_mut() in GetMicrodescsState
+
+**File:** `crates/tor-dirmgr/src/state.rs:1118`
+
+**What:** There is a commented-out `//.get_mut()` call in `add_from_download`
+between `.lock()` and `.expect()`. It appears to be leftover from a refactor
+where the storage lock type changed.
+
+**Why not included:** Removing dead comments in upstream code is low-value churn.
+Could be cleaned up in a broader code quality pass.

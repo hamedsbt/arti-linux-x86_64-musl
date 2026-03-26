@@ -1115,6 +1115,7 @@ impl<R: Runtime> DirState for GetMicrodescsState<R> {
         if let Some(store) = storage {
             let mut s = store
                 .lock()
+                //.get_mut()
                 .expect("Directory storage lock poisoned");
             if !self.newly_listed.is_empty() {
                 s.update_microdescs_listed(&self.newly_listed, mark_listed)?;

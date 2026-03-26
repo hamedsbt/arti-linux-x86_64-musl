@@ -168,11 +168,6 @@ Read timeout change (total→idle) was reverted to upstream's original total tim
 
 **Why:** WASM support — custom storage backend.
 
-### `src/state.rs`
-**What:** Removes commented-out `.get_mut()` call.
-
-**Why:** Dead comment cleanup.
-
 ### `src/storage.rs`
 **What:** `File`, `IoResult`, `sqlite` module gated behind `not(wasm32)`. New `custom` module imported unconditionally. `InputString::load()` gated behind `not(wasm32)`. `ExpirationConfig::router_descs` gets dead_code allowance on WASM.
 
