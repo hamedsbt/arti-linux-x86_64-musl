@@ -14,6 +14,24 @@ adjustments, not the primary migration.
 
 ---
 
+## tor-js (not analyzed here)
+
+New crate (~6,100 lines Rust + TypeScript wrapper). WASM bindings for
+arti-client exposing a `fetch()`-like API to JavaScript. Includes:
+
+- **Rust** (`src/`): `TorClient` exposed via `wasm-bindgen`, HTTP/1.1
+  fetch over Tor circuits with rustls TLS, `CachedJsStorage` bridging
+  async JS storage to sync Rust reads, fast bootstrap from pre-packaged
+  consensus ZIP, structured error types.
+- **TypeScript** (`ts-wrapper/`): `TorClient`, `ArtiSocketProvider`
+  (direct TCP / WebRTC / WebSocket strategies with fallback), storage
+  adapters (IndexedDB, filesystem, memory, locking), logging, WASM
+  loader with CDN/base64/file entry points.
+
+See `wasm-notes/review.md` for a detailed code review of this crate.
+
+---
+
 ## tor-rtcompat
 
 ### `src/lib.rs`
