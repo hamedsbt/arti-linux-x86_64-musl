@@ -249,16 +249,6 @@ fn flavor_to_str(flavor: ConsensusFlavor) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
-/// Parse a string into a `ConsensusFlavor`, if recognized.
-fn str_to_flavor(s: &str) -> Option<ConsensusFlavor> {
-    match s {
-        "microdesc" => Some(ConsensusFlavor::Microdesc),
-        "plain" => Some(ConsensusFlavor::Plain),
-        _ => None,
-    }
-}
-
 // ============================================================================
 // BoxedDirStore - wrapper implementing Store for any CustomDirStore
 // ============================================================================
