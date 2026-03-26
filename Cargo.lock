@@ -7393,6 +7393,7 @@ dependencies = [
  "tor-protover",
  "tor-rtcompat",
  "tor-rtmock",
+ "tor-time",
  "tracing",
  "tracing-test",
 ]
