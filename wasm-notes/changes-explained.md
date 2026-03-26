@@ -102,14 +102,6 @@ adjustments, not the primary migration.
 
 **Why:** Cleanup. The `TransportImplHelper` trait now has `Send + Sync` supertraits (see `transport.rs`), making the explicit bounds redundant.
 
-### `src/factory.rs`
-**What:**
-- `BootstrapReporter` gets four new public methods: `record_attempt()`, `record_tcp_success()`, `record_tls_finished()`, `record_handshake_done()`. These expose the previously private `ChanMgrEventSender` methods.
-- Updates doc comments to be more descriptive.
-- Removes redundant `Sync` bound from `AbstractChannelFactory` impl.
-
-**Why:** Custom `ChannelFactory` implementations (e.g., WASM's WebSocket transport) need to report bootstrap progress.
-
 ### `src/lib.rs`
 **What:** `#[allow(unused)]` → `#[cfg_attr(not(feature = "relay"), expect(dead_code))]` on the `runtime` field.
 
