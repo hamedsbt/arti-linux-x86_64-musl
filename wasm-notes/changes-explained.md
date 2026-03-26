@@ -71,12 +71,10 @@ adjustments, not the primary migration.
 
 ### `src/lib.rs`
 **What:**
-1. **New `truncate_middle()` helper** — truncates long strings by keeping head/tail with "..." in the middle.
-2. **Added debug logging** for HTTP responses — logs request path (truncated), encoding, bytes read, and success status.
-3. **New `RuzstdDecoder`** — a pure-Rust zstd decoder using `ruzstd` for WASM targets (where C `zstd-sys` is unavailable). Gated behind `#[cfg(all(feature = "zstd-wasm", not(feature = "zstd")))]`. Buffers the entire compressed stream then decompresses synchronously.
-4. The `get_decoder` macro adds a case for `zstd-wasm`.
+1. **New `RuzstdDecoder`** — a pure-Rust zstd decoder using `ruzstd` for WASM targets (where C `zstd-sys` is unavailable). Gated behind `#[cfg(all(feature = "zstd-wasm", not(feature = "zstd")))]`. Buffers the entire compressed stream then decompresses synchronously.
+2. The `get_decoder` macro adds a case for `zstd-wasm`.
 
-**Why:** Items 1-2 are debugging improvements. Items 3-4 are for WASM where C libraries can't be linked.
+**Why:** WASM where C libraries can't be linked.
 
 ### `src/request.rs`
 **What:** `all_encodings()` adds `x-zstd` when `zstd-wasm` feature is enabled.

@@ -75,22 +75,7 @@ use futures::io::{
 use memchr::memchr;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, info, instrument, warn};
-
-/// Truncate a string to at most `max_len` code points, placing "..." in the middle if needed.
-fn truncate_middle(s: &str, max_len: usize) -> std::borrow::Cow<'_, str> {
-    let char_count = s.chars().count();
-    if char_count <= max_len {
-        return std::borrow::Cow::Borrowed(s);
-    }
-    // Reserve 3 chars for "..."
-    let available = max_len.saturating_sub(3);
-    let head_len = available.div_ceil(2);
-    let tail_len = available / 2;
-    let head: String = s.chars().take(head_len).collect();
-    let tail: String = s.chars().skip(char_count - tail_len).collect();
-    std::borrow::Cow::Owned(format!("{}...{}", head, tail))
-}
+use tracing::{info, instrument};
 
 pub use err::{Error, RequestError, RequestFailedError};
 pub use response::{DirResponse, SourceInfo};
@@ -323,14 +308,11 @@ where
         ));
     }
 
-    let req_path = truncate_middle(req.uri().path(), 100);
-    debug!("HTTP 200 received for {} (encoding: {:?})", req_path, header.encoding);
     let mut decoder =
         get_decoder(buffered, header.encoding.as_deref(), anonymized).map_err(wrap_err)?;
 
     let mut result = Vec::new();
     let ok = read_and_decompress(runtime, &mut decoder, maxlen, &mut result).await;
-    debug!("Read complete for {}: {} bytes, success={}", req_path, result.len(), ok.is_ok());
 
     let ok = match (partial_ok, ok, result.len()) {
         (true, Err(e), n) if n > 0 => {
