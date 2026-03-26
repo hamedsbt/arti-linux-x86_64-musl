@@ -142,11 +142,9 @@ adjustments, not the primary migration.
 Read timeout change (total→idle) was reverted to upstream's original total timeout.
 
 ### `src/request.rs`
-**What:**
-1. `max_response_len()` for `MicrodescRequest` gets a WASM-specific variant with 16KB per microdesc (vs 8KB on native) and a 128KB minimum.
-2. `all_encodings()` adds `x-zstd` when `zstd-wasm` feature is enabled.
+**What:** `all_encodings()` adds `x-zstd` when `zstd-wasm` feature is enabled.
 
-**Why:** WASM uses pure-Rust decompression which has different overhead characteristics. The larger buffer prevents truncation issues with zstd-wasm.
+**Why:** WASM uses pure-Rust zstd (`ruzstd`) and needs to advertise support.
 
 ---
 

@@ -426,12 +426,7 @@ impl sealed::RequestableInner for MicrodescRequest {
 
     fn max_response_len(&self) -> usize {
         // TODO: Pick a more principled number; I just made this one up.
-        // Use 16KB per microdesc to handle large individual microdescs and compression overhead.
-        // Minimum 128KB to ensure we have enough headroom for any batch.
-        #[cfg(not(target_arch = "wasm32"))]
-        { self.digests.len().saturating_mul(8 * 1024) }
-        #[cfg(target_arch = "wasm32")]
-        { self.digests.len().saturating_mul(16 * 1024).max(128 * 1024) }
+        self.digests.len().saturating_mul(8 * 1024)
     }
 
     fn anonymized(&self) -> AnonymizedRequest {
