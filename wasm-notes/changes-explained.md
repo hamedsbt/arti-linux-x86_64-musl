@@ -172,15 +172,6 @@ Read timeout change (total→idle) was reverted to upstream's original total tim
 
 ---
 
-## tor-dircommon
-
-### `src/retry.rs`
-**What:** Default parallelism for `DownloadSchedule` changed to 2 on WASM (vs 4 on native).
-
-**Why:** WASM is single-threaded; lower parallelism reduces memory pressure and avoids overwhelming the single-threaded event loop.
-
----
-
 ## tor-dirmgr
 
 ### `src/config.rs`
