@@ -1,5 +1,6 @@
 import type { Log } from './Log.js';
 import type { TorStorage } from '#wasm';
+import type { ArtiSocketProvider } from './socketProvider.js';
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 
@@ -32,6 +33,9 @@ export type TorClientOptions = {
    * The WASM subscriber auto-widens to the broadest level across all clients.
    */
   logLevel?: LogLevel;
+
+  /** Optional custom socket provider. When set, overrides the default ArtiSocketProvider created from the gateway URL. */
+  socketProvider?: ArtiSocketProvider;
 };
 
 export type { TorStorage } from '#wasm';

@@ -34,7 +34,7 @@ export class TorClient {
 
     // ArtiSocketProvider handles relay connections. In browsers it needs a gateway
     // URL for WebRTC/WebSocket proxying; in Node.js/Deno it connects via direct TCP.
-    this.socketProvider = new ArtiSocketProvider({ gateway: options.gateway });
+    this.socketProvider = options.socketProvider ?? new ArtiSocketProvider({ gateway: options.gateway });
     const sp = this.socketProvider;
 
     let wasmOptions = new WasmTorClientOptions(
