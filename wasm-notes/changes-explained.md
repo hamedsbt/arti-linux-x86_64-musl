@@ -47,43 +47,6 @@ adjustments, not the primary migration.
 
 **Flag:** The `wait_for_stop()` split into two near-identical methods (native vs WASM) is a bit unfortunate. A single method using the `AnyStateMgr::wait_for_unlock()` should work for both since `AnyStateMgr` already handles the dispatch internally.
 
-### `src/lib.rs`
-**What:** Adds `pub mod storage;`, re-exports `KeyValueStore`.
-
-**Why:** New storage module for WASM custom storage support.
-
----
-
-## arti
-
-### `src/proxy.rs`
-**What:** Adds `#[cfg_attr(feature = "experimental-api", non_exhaustive)]` to the stub `RpcMgr` enum.
-
-**Why:** Prevents exhaustive matching when `experimental-api` is enabled. Minor cleanup.
-
-### `src/rpc_stub.rs`
-**What:** Removes `#[cfg_attr(feature = "experimental-api", visibility::make(pub))]` from `RpcProxySupport`.
-
-**Why:** Cleanup — this type doesn't need to be public even with experimental-api.
-
----
-
-## fs-mistrust
-
-### `src/file_access.rs`
-**What:** Adds `#[cfg_attr(target_arch = "wasm32", expect(clippy::drop_non_drop))]` on a `drop(tmp_file)` call.
-
-**Why:** On WASM, the file type might not have a meaningful Drop, triggering a clippy warning.
-
----
-
-## hashx
-
-### `src/register.rs`
-**What:** `#[cfg(feature = "compiler")]` → `#[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]` on `RegisterId::as_u8()`.
-
-**Why:** The hashx compiler feature generates native code, which doesn't work on WASM.
-
 ---
 
 ## tor-basic-utils
@@ -95,36 +58,12 @@ adjustments, not the primary migration.
 
 ---
 
-## tor-chanmgr
-
-### `src/builder.rs`
-**What:** Removes redundant `Send + Sync` bounds from `ChannelFactory` and `IncomingChannelFactory` impls for `ChanBuilder<R, H>`. The bounds are already implied by the trait bounds on the types.
-
-**Why:** Cleanup. The `TransportImplHelper` trait now has `Send + Sync` supertraits (see `transport.rs`), making the explicit bounds redundant.
-
-### `src/transport.rs`
-**What:** `TransportImplHelper` trait gets `Send + Sync` supertraits added.
-
-**Why:** The bounds were previously specified at each impl site. Moving them to the trait definition is cleaner and ensures all implementations satisfy the bounds.
-
-### `src/transport/proxied.rs`
-**What:** Removes redundant `Send + Sync` bound from `ExternalProxyPlugin` impl.
-
-**Why:** Now implied by `TransportImplHelper: Send + Sync`.
-
----
-
 ## tor-circmgr
 
 ### `src/build.rs`
 **What:** `double_timeout` function split into two versions: native (spawns background task for the soft timeout) and WASM (simplified, just uses `abandon` timeout directly since WASM is single-threaded and can't spawn background tasks for the soft timeout pattern).
 
 **Why:** The native version uses `spawn_obj` which requires `Send` — not available on WASM's single-threaded model.
-
-### `src/hspool.rs`
-**What:** Adds `#[allow(clippy::unused_async)]` to `maybe_extend_stem_circuit`.
-
-**Why:** The method is async only when certain features (`vanguards` + `hs-common`) are enabled. Without them, clippy warns about unused async.
 
 ---
 
@@ -139,7 +78,6 @@ adjustments, not the primary migration.
 
 **Why:** Items 1-2 are debugging improvements. Items 3-4 are for WASM where C libraries can't be linked.
 
-
 ### `src/request.rs`
 **What:** `all_encodings()` adds `x-zstd` when `zstd-wasm` feature is enabled.
 
@@ -149,16 +87,6 @@ adjustments, not the primary migration.
 
 ## tor-dirmgr
 
-### `src/config.rs`
-**What:** `open_store()` gated behind `#[cfg(not(target_arch = "wasm32"))]`. Imports of `Result` and `DynStore` similarly gated.
-
-**Why:** SQLite-based store is not available on WASM.
-
-### `src/err.rs`
-**What:** `SqliteError` variant and all related match arms gated behind `#[cfg(not(target_arch = "wasm32"))]`. `from_lockfile` gets `#[cfg_attr(target_arch = "wasm32", expect(dead_code))]`.
-
-**Why:** SQLite is not available on WASM.
-
 ### `src/lib.rs`
 **What:**
 - `DirMgrStore::new()` gated behind `not(wasm32)`.
@@ -166,11 +94,6 @@ adjustments, not the primary migration.
 - Re-exports `BoxedDirStore`, `CustomDirStore`.
 
 **Why:** WASM support — custom storage backend.
-
-### `src/storage.rs`
-**What:** `File`, `IoResult`, `sqlite` module gated behind `not(wasm32)`. New `custom` module imported unconditionally. `InputString::load()` gated behind `not(wasm32)`. `ExpirationConfig::router_descs` gets dead_code allowance on WASM.
-
-**Why:** Separating filesystem-dependent code from cross-platform code.
 
 ### New file: `src/storage/custom.rs`
 **What:** 677-line new file implementing:
@@ -181,9 +104,6 @@ adjustments, not the primary migration.
 - Full implementation of all `Store` methods (consensus, authcerts, microdescs, router descs, bridge descs, protocol recommendations, expiration)
 
 **Why:** This is the directory storage adapter for custom backends. Allows non-SQLite storage (e.g., IndexedDB on WASM, or any key-value store).
-
-
----
 
 ---
 
@@ -210,23 +130,14 @@ adjustments, not the primary migration.
 
 **Why:** The stub PowManager expects a plain `StatusSender` while the real one expects a `PowManagerStatusSender` newtype. This was likely a compile error fix.
 
-### `src/pow/v1_stub.rs`
-**What:** Adds doc comments and `#[allow(clippy::...)]` attributes to the stub PowManager methods to match the real implementation's signature.
-
-**Why:** Clippy cleanup for the stub that must match the real impl's API.
-
 ---
 
 ## tor-memquota
 
 ### `src/config.rs`
-**What:**
-1. `1 * GIB` gets `#[expect(clippy::identity_op)]` with a reason comment.
-2. The 32-bit vs 64-bit memory threshold check is refactored from `#[cfg(target_pointer_width = "64")]` to a runtime boolean `is_64bit`.
+**What:** The 32-bit vs 64-bit memory threshold check is refactored from `#[cfg(target_pointer_width = "64")]` to a runtime boolean `is_64bit`.
 
-**Why:**
-1. Clippy warns about `1 *` being a no-op multiplication; the expect says it's for consistency with `8 * GIB`.
-2. The `#[cfg]` attribute on an `if` condition doesn't work well (it gates the entire `if` statement, not just the condition). The refactoring makes the logic compile on all platforms.
+**Why:** The `#[cfg]` attribute on an `if` condition doesn't work well (it gates the entire `if` statement, not just the condition). The refactoring makes the logic compile on all platforms.
 
 ---
 
@@ -262,11 +173,6 @@ adjustments, not the primary migration.
 
 **Why:** `CoarseDuration` → `Duration` conversion differs on WASM.
 
-### `src/client/circuit/padding/maybenot_padding.rs`
-**What:** `type Instant = tor_time::Instant` → `type Instant = std::time::Instant`.
-
-**FLAG:** Reversion. The padding code uses `Instant` for high-precision timing of padding injections. This only runs on native (WASM doesn't support circuit padding). The reversion is intentional but should be noted.
-
 ### `src/lib.rs`
 **What:** `time_since_last_incoming_traffic()` gets cfg-gated return (same pattern as `duration_unused()`).
 
@@ -275,21 +181,6 @@ adjustments, not the primary migration.
 ---
 
 ## tor-rtcompat
-
-### `src/dyn_time.rs`
-**What:** `PreferredRuntime` existence check gains `not(target_arch = "wasm32")` guard.
-
-**Why:** WASM doesn't have PreferredRuntime.
-
-### `src/impls.rs`
-**What:** All feature-gated module declarations gain `not(target_arch = "wasm32")` guards. `LISTEN_BACKLOG` and `tcp_listen()` gated behind `not(wasm32)`. `impl_unix_non_provider` macro gated behind `not(wasm32)`.
-
-**Why:** None of these native-only impls compile on WASM.
-
-### `src/impls/streamops.rs`
-**What:** `io` import and `UnsupportedStreamOp` gated behind `not(wasm32)`.
-
-**Why:** Stream operations (TCP socket options) don't exist on WASM.
 
 ### `src/lib.rs`
 **What:**
@@ -324,3 +215,30 @@ adjustments, not the primary migration.
 
 **Why:** Allows code to use `wasm_compat::Send` in bounds that become no-ops on WASM.
 
+---
+
+## Minor Changes
+
+Small cfg guards, clippy fixes, and cleanup that don't introduce new logic.
+
+**WASM cfg guards (exclude incompatible code):**
+- **fs-mistrust** `file_access.rs` — `#[cfg_attr(target_arch = "wasm32", expect(clippy::drop_non_drop))]` on `drop(tmp_file)`
+- **hashx** `register.rs` — `#[cfg(feature = "compiler")]` → `#[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]` on `RegisterId::as_u8()`
+- **tor-dirmgr** `config.rs` — `open_store()` gated behind `not(wasm32)` (SQLite unavailable)
+- **tor-dirmgr** `err.rs` — `SqliteError` variant gated behind `not(wasm32)`
+- **tor-dirmgr** `storage.rs` — `File`, `IoResult`, `sqlite` module, `InputString::load()` gated behind `not(wasm32)`; `router_descs` field gets dead_code allowance on WASM
+- **tor-rtcompat** `dyn_time.rs` — `PreferredRuntime` existence check gains `not(wasm32)` guard
+- **tor-rtcompat** `impls.rs` — native module declarations, `tcp_listen()`, `impl_unix_non_provider` gated behind `not(wasm32)`
+- **tor-rtcompat** `impls/streamops.rs` — `io` import and `UnsupportedStreamOp` gated behind `not(wasm32)`
+
+**Clippy / lint fixes:**
+- **tor-circmgr** `hspool.rs` — `#[allow(clippy::unused_async)]` on `maybe_extend_stem_circuit`
+- **tor-memquota** `config.rs` — `#[expect(clippy::identity_op)]` on `1 * GIB`
+- **tor-hsservice** `pow/v1_stub.rs` — doc comments and `#[allow(clippy::...)]` attrs on stub methods
+
+**Cleanup:**
+- **arti** `proxy.rs` — `#[cfg_attr(feature = "experimental-api", non_exhaustive)]` on stub `RpcMgr`
+- **arti** `rpc_stub.rs` — removes unnecessary `visibility::make(pub)` attr
+- **tor-chanmgr** `builder.rs` / `transport.rs` / `transport/proxied.rs` — `Send + Sync` bounds consolidated into `TransportImplHelper` trait definition
+- **tor-proto** `maybenot_padding.rs` — `type Instant` reverted to `std::time::Instant` (native-only padding code)
+- **arti-client** `lib.rs` — `pub mod storage;` re-export
