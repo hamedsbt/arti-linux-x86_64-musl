@@ -181,7 +181,6 @@ impl DocQuery {
         use DocQuery::*;
         /// How many objects can be put in a single HTTP GET line?
         const N: usize = 500;
-        const MICRODESC_N: usize = N;
         match self {
             LatestConsensus { .. } => vec![self],
             AuthCert(mut v) => {
@@ -190,7 +189,7 @@ impl DocQuery {
             }
             Microdesc(mut v) => {
                 v.sort_unstable();
-                v[..].chunks(MICRODESC_N).map(|s| Microdesc(s.to_vec())).collect()
+                v[..].chunks(N).map(|s| Microdesc(s.to_vec())).collect()
             }
             #[cfg(feature = "routerdesc")]
             RouterDesc(mut v) => {
