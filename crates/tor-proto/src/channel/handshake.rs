@@ -652,7 +652,7 @@ impl<
         self,
         peer: &U,
         peer_cert_digest: [u8; 32],
-        now: Option<std::time::SystemTime>,
+        now: Option<SystemTime>,
     ) -> Result<VerifiedChannel<T, S>> {
         use tor_cert::CertType;
 
@@ -727,7 +727,7 @@ impl<
 pub(crate) fn verify_link_auth_cert(
     certs: &msg::Certs,
     kp_relaysign_ed: &Ed25519Identity,
-    now: Option<std::time::SystemTime>,
+    now: Option<SystemTime>,
     clock_skew: ClockSkew,
 ) -> Result<Ed25519Identity> {
     use tor_cert::CertType;

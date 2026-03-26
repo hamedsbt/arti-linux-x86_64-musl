@@ -625,20 +625,20 @@ struct ExpiryHours(u32);
 /// The number of seconds in an hour.
 const SEC_PER_HOUR: u64 = 3600;
 
-impl From<ExpiryHours> for std::time::SystemTime {
+impl From<ExpiryHours> for SystemTime {
     fn from(value: ExpiryHours) -> Self {
         // TODO MSRV 1.91; use from_hours.
         let d = std::time::Duration::from_secs(u64::from(value.0) * SEC_PER_HOUR);
-        std::time::SystemTime::UNIX_EPOCH + d
+        SystemTime::UNIX_EPOCH + d
     }
 }
 
 #[cfg(feature = "encode")]
 impl ExpiryHours {
     /// Return the earliest possible `ExpiryHours` that is no earlier than `expiry`.
-    fn try_from_systemtime_ceil(expiry: std::time::SystemTime) -> Result<Self, CertEncodeError> {
+    fn try_from_systemtime_ceil(expiry: SystemTime) -> Result<Self, CertEncodeError> {
         let d = expiry
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .duration_since(SystemTime::UNIX_EPOCH)
             .map_err(|_| CertEncodeError::InvalidExpiration)?;
         let sec_ceil = d.as_secs() + if d.subsec_nanos() > 0 { 1 } else { 0 };
         let hours = sec_ceil

@@ -2,19 +2,19 @@
 //!
 //! Currently only async_std, tokio and smol are provided.
 
-#[cfg(feature = "async-std")]
+#[cfg(all(feature = "async-std", not(target_arch = "wasm32")))]
 pub(crate) mod async_std;
 
-#[cfg(feature = "tokio")]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub(crate) mod tokio;
 
-#[cfg(feature = "smol")]
+#[cfg(all(feature = "smol", not(target_arch = "wasm32")))]
 pub(crate) mod smol;
 
-#[cfg(feature = "rustls")]
+#[cfg(all(feature = "rustls", not(target_arch = "wasm32")))]
 pub(crate) mod rustls;
 
-#[cfg(feature = "native-tls")]
+#[cfg(all(feature = "native-tls", not(target_arch = "wasm32")))]
 pub(crate) mod native_tls;
 
 pub(crate) mod streamops;
@@ -161,7 +161,7 @@ pub(crate) fn tcp_listen(addr: &std::net::SocketAddr) -> std::io::Result<std::ne
 }
 
 /// Helper: Implement an unreachable NetProvider<unix::SocketAddr> for a given runtime.
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
 macro_rules! impl_unix_non_provider {
     { $for_type:ty } => {
 
@@ -179,5 +179,5 @@ macro_rules! impl_unix_non_provider {
         }
     }
 }
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
 pub(crate) use impl_unix_non_provider;

@@ -79,6 +79,46 @@ pub use atomic_opt_ts::AtomicOptTimestamp;
 
 pub mod serde_time;
 
+/// Extension trait providing `saturating_add` and `saturating_sub` for `SystemTime`.
+///
+/// On native Rust 1.91+, `std::time::SystemTime` has these methods built in.
+/// On WASM, `web_time::SystemTime` does not, so this trait provides equivalent behavior.
+pub trait SystemTimeExt {
+    /// Saturating addition: returns `self + duration`, or a far-future time on overflow.
+    fn saturating_add(&self, duration: Duration) -> SystemTime;
+    /// Saturating subtraction: returns `self - duration`, or `UNIX_EPOCH` on underflow.
+    fn saturating_sub(&self, duration: Duration) -> SystemTime;
+    /// Saturating duration since: returns `self - earlier` or `Duration::ZERO` if `earlier` is later.
+    fn saturating_duration_since(&self, earlier: SystemTime) -> Duration;
+}
+
+impl SystemTimeExt for SystemTime {
+    fn saturating_add(&self, duration: Duration) -> SystemTime {
+        self.checked_add(duration).unwrap_or(UNIX_EPOCH + Duration::MAX)
+    }
+    fn saturating_sub(&self, duration: Duration) -> SystemTime {
+        self.checked_sub(duration).unwrap_or(UNIX_EPOCH)
+    }
+    fn saturating_duration_since(&self, earlier: SystemTime) -> Duration {
+        self.duration_since(earlier).unwrap_or(Duration::ZERO)
+    }
+}
+
+/// Convert a `std::time::SystemTime` to `tor_time::SystemTime`.
+///
+/// On native, these are the same type so this is a no-op.
+/// On WASM, this converts from `std::time::SystemTime` to `web_time::SystemTime`
+/// via duration since the Unix epoch.
+pub fn from_std_time(t: std::time::SystemTime) -> SystemTime {
+    #[cfg(not(target_arch = "wasm32"))]
+    { t }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let d = t.duration_since(std::time::UNIX_EPOCH).unwrap_or(std::time::Duration::ZERO);
+        UNIX_EPOCH + Duration::from_secs(d.as_secs()) + Duration::from_nanos(u64::from(d.subsec_nanos()))
+    }
+}
+
 /// Format a `SystemTime` as an RFC3339 string (cross-platform).
 ///
 /// This function provides consistent time formatting across native and WASM platforms

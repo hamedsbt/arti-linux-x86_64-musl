@@ -621,12 +621,12 @@ pub mod test_data {
 
         let desc = HsDesc::parse(TEST_DATA, &blinded_id)?
             .check_signature()?
-            .check_valid_at(&humantime::parse_rfc3339("2023-01-23T15:00:00Z").unwrap())
+            .check_valid_at(&tor_time::from_std_time(humantime::parse_rfc3339("2023-01-23T15:00:00Z").unwrap()))
             .unwrap()
             .decrypt(&TEST_SUBCREDENTIAL.into(), None)
             .unwrap();
         let desc = desc
-            .check_valid_at(&humantime::parse_rfc3339("2023-01-24T03:00:00Z").unwrap())
+            .check_valid_at(&tor_time::from_std_time(humantime::parse_rfc3339("2023-01-24T03:00:00Z").unwrap()))
             .unwrap();
         let desc = desc.check_signature().unwrap();
         Ok(desc)

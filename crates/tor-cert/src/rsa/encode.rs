@@ -1,6 +1,6 @@
 //! RSA cross-cert generation
 
-use std::time::SystemTime;
+use tor_time::SystemTime;
 
 use derive_more::{AsRef, Deref, Into};
 use tor_bytes::Writer as _;
