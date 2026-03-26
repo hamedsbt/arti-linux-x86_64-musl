@@ -48,19 +48,9 @@ adjustments, not the primary migration.
 **Flag:** The `wait_for_stop()` split into two near-identical methods (native vs WASM) is a bit unfortunate. A single method using the `AnyStateMgr::wait_for_unlock()` should work for both since `AnyStateMgr` already handles the dispatch internally.
 
 ### `src/lib.rs`
-**What:** Adds `pub mod storage;`, re-exports `KeyValueStore`. Changes `software_release_date()` to use `tor_time::systemtime_from_offset_datetime()` instead of `.into()`.
+**What:** Adds `pub mod storage;`, re-exports `KeyValueStore`.
 
-**Why:** New storage module + SystemTime conversion for WASM (where `From<OffsetDateTime> for SystemTime` doesn't exist).
-
-### `src/protostatus.rs`
-**What:** `std::time::SystemTime` → `tor_time::SystemTime`, `humantime::format_rfc3339` → `tor_time::format_rfc3339`.
-
-**Why:** WASM compatibility for time types.
-
-### `src/status.rs`
-**What:** `std::time::SystemTime` → `tor_time::SystemTime`.
-
-**Why:** WASM compatibility.
+**Why:** New storage module for WASM custom storage support.
 
 ---
 
@@ -141,11 +131,6 @@ adjustments, not the primary migration.
 
 **Why:** Cleanup. The `TransportImplHelper` trait now has `Send + Sync` supertraits (see `transport.rs`), making the explicit bounds redundant.
 
-### `src/event.rs`
-**What:** `std::time::Instant` → `tor_time::Instant`.
-
-**Why:** WASM compatibility.
-
 ### `src/factory.rs`
 **What:**
 - `BootstrapReporter` gets four new public methods: `record_attempt()`, `record_tcp_success()`, `record_tls_finished()`, `record_handshake_done()`. These expose the previously private `ChanMgrEventSender` methods.
@@ -177,11 +162,6 @@ adjustments, not the primary migration.
 **What:** `double_timeout` function split into two versions: native (spawns background task for the soft timeout) and WASM (simplified, just uses `abandon` timeout directly since WASM is single-threaded and can't spawn background tasks for the soft timeout pattern).
 
 **Why:** The native version uses `spawn_obj` which requires `Send` — not available on WASM's single-threaded model.
-
-### `src/err.rs`
-**What:** `std::time::Instant` → `tor_time::Instant`.
-
-**Why:** WASM compatibility.
 
 ### `src/hspool.rs`
 **What:** Adds `#[allow(clippy::unused_async)]` to `maybe_extend_stem_circuit`.
@@ -239,52 +219,28 @@ Read timeout change (total→idle) was reverted to upstream's original total tim
 
 ## tor-dirmgr
 
-### `src/bootstrap.rs`
-**What:** `std::time::SystemTime` → `tor_time::SystemTime` import.
-
-Streaming/incremental download changes were reverted (see `wasm-notes/potential-improvements.md`).
-
-**Why:** WASM time compatibility only. The streaming improvement needs a testing strategy that exercises the same code path as production.
-
-### `src/bridgedesc.rs`
-**What:** `humantime::format_rfc3339_seconds` → `tor_time::format_rfc3339`.
-
-**Why:** WASM compatibility (humantime uses std::time directly).
-
 ### `src/config.rs`
 **What:** `open_store()` gated behind `#[cfg(not(target_arch = "wasm32"))]`. Imports of `Result` and `DynStore` similarly gated.
 
 **Why:** SQLite-based store is not available on WASM.
-
-### `src/docid.rs`
-No changes (reverted to upstream).
 
 ### `src/err.rs`
 **What:** `SqliteError` variant and all related match arms gated behind `#[cfg(not(target_arch = "wasm32"))]`. `from_lockfile` gets `#[cfg_attr(target_arch = "wasm32", expect(dead_code))]`.
 
 **Why:** SQLite is not available on WASM.
 
-### `src/event.rs`
-**What:** `std::time::SystemTime` → `tor_time::SystemTime`. `time::OffsetDateTime::from(t)` → `tor_time::offset_datetime_from_systemtime(t)`.
-
-**Why:** WASM compatibility.
-
 ### `src/lib.rs`
 **What:**
 - `DirMgrStore::new()` gated behind `not(wasm32)`.
 - New `DirMgrStore::from_custom_store()` method.
 - Re-exports `BoxedDirStore`, `CustomDirStore`.
-- `load_once()` (sync API) gated behind `not(wasm32)` and uses `futures::executor::block_on` for the now-async `load_directory`.
-- `load_directory()` and callers converted from sync to async.
 
-**Why:** WASM support — custom storage backend support and async conversion for yielding.
+**Why:** WASM support — custom storage backend.
 
 ### `src/state.rs`
-**What:**
-- `OffsetDateTime::from(...)` → `format_rfc3339(...)` for time formatting in log messages.
-- Removes commented-out `.get_mut()` call.
+**What:** Removes commented-out `.get_mut()` call.
 
-**Why:** WASM time compatibility + dead comment cleanup.
+**Why:** Dead comment cleanup.
 
 ### `src/storage.rs`
 **What:** `File`, `IoResult`, `sqlite` module gated behind `not(wasm32)`. New `custom` module imported unconditionally. `InputString::load()` gated behind `not(wasm32)`. `ExpirationConfig::router_descs` gets dead_code allowance on WASM.
@@ -301,16 +257,11 @@ No changes (reverted to upstream).
 
 **Why:** This is the directory storage adapter for custom backends. Allows non-SQLite storage (e.g., IndexedDB on WASM, or any key-value store).
 
-**Flag:** The `str_to_flavor` function is marked `#[allow(dead_code)]`. If it's never used, it should be removed or feature-gated. It was likely written in anticipation of a deserializer that was never needed.
+*(`str_to_flavor` dead code was identified and removed.)*
 
 ---
 
 ## tor-dirserver
-
-### `src/database.rs`
-**What:** Doc comment update: references `tor_time::SystemTimeExt` instead of the removed `saturating_time` crate.
-
-**Why:** The `saturating_time` crate dependency was removed.
 
 ### `src/mirror/operation.rs`
 **What:** In test code: `tor_time::SystemTime` → `std::time::SystemTime`.
@@ -323,10 +274,7 @@ No changes (reverted to upstream).
 
 ## tor-error
 
-### `src/retriable.rs`
-**What:** `std::time::Instant` → `tor_time::Instant`.
-
-**Why:** WASM compatibility.
+Time/async-compat migration only.
 
 ---
 
@@ -342,30 +290,15 @@ No changes (reverted to upstream).
 
 **This is a real bug fix, not just WASM-related.** Worth noting for review.
 
-### `src/sample/candidate.rs`
-**What:** `std::time::SystemTime` → `tor_time::SystemTime`.
-
-**Why:** WASM compatibility.
-
 ---
 
 ## tor-hsclient
 
-### `src/pow/v1.rs`
-**What:** Uses `tor_time::Instant` for timing the PoW solver.
-
-**Why:** WASM compatibility (migrated from `std::time::Instant`).
+Time/async-compat migration only.
 
 ---
 
 ## tor-hsservice
-
-### `src/internal_prelude.rs`
-**What:** `std::time::{Duration, Instant, SystemTime}` → split: `std::time::{Duration, Instant}` + `tor_time::SystemTime`.
-
-**Why:** WASM compatibility for `SystemTime` only. `Instant` stays as `std::time::Instant`.
-
-**FLAG:** `Instant` is kept as `std::time::Instant` while `SystemTime` is migrated to `tor_time::SystemTime`. This is inconsistent. The hsservice code uses `Instant` extensively for timeout tracking, and since hsservice is relay-side code that won't run on WASM, this is pragmatically fine. But it creates an inconsistent pattern.
 
 ### `src/lib.rs`
 **What:** The `PowManager::new()` call now wraps `status_tx.clone()` differently based on `hs-pow-full` feature:
@@ -384,19 +317,11 @@ No changes (reverted to upstream).
 
 **Why:** Consistent with the hsservice's use of native `Instant` for timeout tracking.
 
-### `src/time_store.rs` / `src/timeout_track.rs`
-**What:** Uses `tor_time::{Instant, SystemTime}` for timeout tracking.
-
-**Why:** WASM compatibility (migrated from `std::time::Instant`).
-
 ---
 
 ## tor-key-forge
 
-### `src/certs.rs`
-**What:** `std::time::SystemTime` → `tor_time::SystemTime`.
-
-**Why:** WASM compatibility.
+Time/async-compat migration only.
 
 ---
 
@@ -410,16 +335,6 @@ No changes (reverted to upstream).
 **Why:**
 1. Clippy warns about `1 *` being a no-op multiplication; the expect says it's for consistency with `8 * GIB`.
 2. The `#[cfg]` attribute on an `if` condition doesn't work well (it gates the entire `if` statement, not just the condition). The refactoring makes the logic compile on all platforms.
-
-### `src/internal_prelude.rs`
-**What:** `CoarseInstant`, `CoarseTimeProvider` imports moved from `tor_rtcompat` to `tor_time`.
-
-**Why:** These types are being migrated to `tor_time`.
-
-### `src/mtracker/test.rs`
-**What:** `CoarseDuration` import moved from `tor_rtcompat` to `tor_time`.
-
-**Why:** Same migration.
 
 ---
 
@@ -439,15 +354,7 @@ No changes (reverted to upstream).
 
 ## tor-netdoc
 
-### `src/doc/authcert.rs`
-**What:** `std::time::SystemTime` → `tor_time::SystemTime`. Method return types for `published()` and `expires()` updated accordingly.
-
-**Why:** WASM compatibility.
-
-### `src/types/misc.rs`
-**What:** `OffsetDateTime::from(t)` → `tor_time::offset_datetime_from_systemtime(t)`. `d.assume_utc().into()` → `tor_time::systemtime_from_offset_datetime(d.assume_utc())`.
-
-**Why:** WASM compatibility — the `From` impl between `OffsetDateTime` and `SystemTime` doesn't exist on WASM.
+Time/async-compat migration only.
 
 ---
 
@@ -474,37 +381,19 @@ No changes (reverted to upstream).
 
 **Why:** External implementations need the `Result` type.
 
-### `src/slug/timestamp.rs`
-**What:** `OffsetDateTime` import removed. Uses `tor_time::systemtime_from_offset_datetime()` and `tor_time::offset_datetime_from_systemtime()` instead of `Into`/`From` conversions.
-
-**Why:** WASM compatibility.
-
 ---
 
 ## tor-proto
 
 ### `src/channel.rs`
-**What:** Import reordering. `duration_unused()` method gets cfg-gated return: on WASM, returns `duration` directly (already `Option<Duration>`); on native, maps through `Into::into` (converting from `CoarseDuration`).
+**What:** `duration_unused()` method gets cfg-gated return: on WASM, returns `duration` directly (already `Option<Duration>`); on native, maps through `Into::into` (converting from `CoarseDuration`).
 
 **Why:** `CoarseDuration` → `Duration` conversion differs on WASM.
-
-### `src/channel/handshake.rs`
-**What:** Import cleanup — `CoarseInstant`, `CoarseTimeProvider` imported from `tor_time` instead of `tor_rtcompat`. Various type references use the short name instead of `tor_time::CoarseInstant`.
-
-**Why:** Migration of coarse time types to `tor_time`.
-
-### `src/channel/reactor.rs`, `src/client/channel.rs`, `src/client/channel/handshake.rs`, `src/client/stream/data.rs`, `src/relay/channel.rs`, `src/relay/channel/handshake.rs`, `src/relay/channel/initiator.rs`, `src/relay/channel/responder.rs`
-**What:** All the same pattern: `CoarseTimeProvider` (and sometimes `CoarseInstant`) imports moved from `tor_rtcompat` to `tor_time`.
-
-**Why:** Migration of coarse time types.
 
 ### `src/client/circuit/padding/maybenot_padding.rs`
 **What:** `type Instant = tor_time::Instant` → `type Instant = std::time::Instant`.
 
 **FLAG:** Reversion. The padding code uses `Instant` for high-precision timing of padding injections. This only runs on native (WASM doesn't support circuit padding). The reversion is intentional but should be noted.
-
-### `src/client/reactor/circuit.rs`
-No changes beyond time type migration (unnecessary `.collect()` was reverted to upstream's direct `.any()`).
 
 ### `src/congestion/rtt.rs`
 **What:** In test code: `tor_time::Instant` → `std::time::Instant`.
@@ -512,52 +401,28 @@ No changes beyond time type migration (unnecessary `.collect()` was reverted to 
 **Why:** Test code on native.
 
 ### `src/lib.rs`
-**What:** `AtomicOptTimestamp` imported from `tor_time` instead of using full path. `time_since_last_incoming_traffic()` gets cfg-gated return (same pattern as `duration_unused()`).
+**What:** `time_since_last_incoming_traffic()` gets cfg-gated return (same pattern as `duration_unused()`).
 
-**Why:** WASM compatibility for the coarse time return type.
+**Why:** `CoarseDuration` → `Duration` conversion differs on WASM.
 
 ### `src/relay/channel/initiator.rs`, `src/relay/channel/responder.rs`
 **What:** `now: Option<tor_time::SystemTime>` → `now: Option<std::time::SystemTime>`.
 
 **FLAG:** These are in the relay-side channel code (initiator/responder verification). Reverting to `std::time::SystemTime` is correct since relay code only runs on native, but it's inconsistent with the client-side channel code that uses `tor_time::SystemTime`. This could be confusing for developers working across both sides.
 
-### `src/util/tunnel_activity.rs`
-**What:** `std::time::Instant` → `tor_time::Instant`.
-
-**Why:** WASM compatibility.
-
----
-
-## tor-ptmgr
-
-### `src/ipc.rs`
-**What:** No .rs changes visible in the diff (only Cargo.toml changes if any).
-
-*Actually, no changes found for tor-ptmgr .rs files in this diff.*
-
 ---
 
 ## tor-rtcompat
 
-### `src/async_std.rs`, `src/smol.rs`, `src/tokio.rs`
-**What:** `RealCoarseTimeProvider` import moved from `crate` to `tor_time`.
-
-**Why:** Migration of coarse time types.
-
 ### `src/dyn_time.rs`
-**What:** `CoarseInstant`, `CoarseTimeProvider` imported from `tor_time` instead of `crate`. `PreferredRuntime` existence check gains `not(target_arch = "wasm32")` guard.
+**What:** `PreferredRuntime` existence check gains `not(target_arch = "wasm32")` guard.
 
-**Why:** Type migration + WASM doesn't have PreferredRuntime.
+**Why:** WASM doesn't have PreferredRuntime.
 
 ### `src/impls.rs`
 **What:** All feature-gated module declarations gain `not(target_arch = "wasm32")` guards. `LISTEN_BACKLOG` and `tcp_listen()` gated behind `not(wasm32)`. `impl_unix_non_provider` macro gated behind `not(wasm32)`.
 
 **Why:** None of these native-only impls compile on WASM.
-
-### `src/impls/rustls/rustls_server.rs`
-**What:** `tor_async_compat::async_trait` → `async_trait::async_trait`.
-
-**Why:** Direct import instead of re-export.
 
 ### `src/impls/streamops.rs`
 **What:** `io` import and `UnsupportedStreamOp` gated behind `not(wasm32)`.
@@ -567,20 +432,13 @@ No changes beyond time type migration (unnecessary `.collect()` was reverted to 
 ### `src/lib.rs`
 **What:**
 - New `pub mod wasm_compat;` and `pub mod wasm;` (WASM-only).
-- `CoarseInstant`, `CoarseTimeProvider`, `RealCoarseTimeProvider`, `CoarseDuration` no longer re-exported from tor-rtcompat (they now live in `tor_time`).
 - All PreferredRuntime-related `#[cfg]` blocks gain `not(target_arch = "wasm32")`.
 - Various feature gate combinations updated.
 
-**Why:** Core WASM support + type migration.
-
-### `src/timer.rs`
-**What:** `std::time::SystemTime` → `tor_time::SystemTime`.
-
-**Why:** WASM compatibility.
+**Why:** Core WASM support.
 
 ### `src/traits.rs`
 **What:**
-- `CoarseTimeProvider`, `Instant`, `SystemTime` imported from `tor_time` instead of re-exporting.
 - `SpawnExt::spawn()`: bound changed from `Send` to `crate::wasm_compat::Send`. On WASM, uses `wasm_bindgen_futures::spawn_local` instead of `spawn_obj`.
 - `SpawnExt::spawn_with_handle()`: bounds changed to `crate::wasm_compat::Send`.
 - Doc comment added about `unsafe impl Send` on WASM types.
@@ -607,21 +465,6 @@ No changes beyond time type migration (unnecessary `.collect()` was reverted to 
 ---
 
 ## tor-rtmock
-
-### `src/time.rs`
-**What:** `Instant`, `SystemTime` imports from `tor_time`. `CoarseInstant`, `CoarseTimeProvider` from `tor_time`. `humantime::parse_rfc3339` → `tor_time::parse_rfc3339`.
-
-**Why:** Type migration + WASM compatibility.
-
-### `src/time_core.rs`
-**What:** `CoarseDuration`, `CoarseInstant`, `CoarseTimeProvider`, `RealCoarseTimeProvider` all imported from `tor_time` instead of `tor_rtcompat`.
-
-**Why:** Type migration.
-
-### `src/util.rs`
-**What:** Same pattern — coarse time types moved from `tor_rtcompat` to `tor_time` in the prelude.
-
-**Why:** Type migration.
 
 ### `tests/rtcompat_timing.rs`
 **What:** `tor_time::SystemTime` → `std::time::SystemTime`.
