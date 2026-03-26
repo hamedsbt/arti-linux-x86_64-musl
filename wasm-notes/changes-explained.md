@@ -139,7 +139,6 @@ adjustments, not the primary migration.
 
 **Why:** Items 1-2 are debugging improvements. Items 3-4 are for WASM where C libraries can't be linked.
 
-Read timeout change (total→idle) was reverted to upstream's original total timeout.
 
 ### `src/request.rs`
 **What:** `all_encodings()` adds `x-zstd` when `zstd-wasm` feature is enabled.
@@ -183,7 +182,6 @@ Read timeout change (total→idle) was reverted to upstream's original total tim
 
 **Why:** This is the directory storage adapter for custom backends. Allows non-SQLite storage (e.g., IndexedDB on WASM, or any key-value store).
 
-*(`str_to_flavor` dead code was identified and removed.)*
 
 ---
 
@@ -326,20 +324,3 @@ Read timeout change (total→idle) was reverted to upstream's original total tim
 
 **Why:** Allows code to use `wasm_compat::Send` in bounds that become no-ops on WASM.
 
----
-
-## Summary of Flagged Issues
-
-### Resolved
-
-1. **`tor-proto/src/client/reactor/circuit.rs`** — ~~Unnecessary `.collect()` into Vec before `.any()`.~~ **FIXED:** Reverted to upstream's direct `.any()` on iterator. Was leftover from removed debug counters.
-
-2. **`tor-dirclient/src/lib.rs`** — ~~Read timeout changed from total to per-read idle.~~ **FIXED:** Reverted to upstream's total timeout. The idle timeout was for Snowflake compatibility which has been removed.
-
-3. **`tor-dirmgr/src/bootstrap.rs`** — ~~Streaming downloads with `#[cfg(test)]`/`#[cfg(not(test))]` split.~~ **FIXED:** Reverted to upstream's batch approach. The streaming improvement is documented in `wasm-notes/potential-improvements.md` for future work with proper test coverage.
-
-4. **`tor-dirmgr/src/docid.rs`** — ~~Dead `MICRODESC_N` constant.~~ **FIXED:** Reverted to upstream.
-
-5. **`tor-hsclient/src/pow/v1.rs`, `tor-hsservice/src/timeout_track.rs`, `tor-hsservice/src/time_store.rs`** — ~~Missed `std::time::Instant` migrations.~~ **FIXED:** Changed to `tor_time::Instant`.
-
-All flagged issues have been resolved.
