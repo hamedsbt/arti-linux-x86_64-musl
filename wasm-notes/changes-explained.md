@@ -1,4 +1,4 @@
-# Diff Analysis: `wasm-basic-compat` → `main`
+# Diff Analysis: `wasm-basic-compat` → `main` (at `2c7f788eb`)
 
 All `.rs` file changes in `crates/`, excluding `crates/tor-js/`,
 `crates/tor-time/`, and `crates/tor-async-compat/`.
@@ -14,7 +14,7 @@ adjustments, not the primary migration.
 
 ---
 
-## tor-js (not analyzed here)
+## tor-js (+6,100 lines Rust, not analyzed here)
 
 New crate (~6,100 lines Rust + TypeScript wrapper). WASM bindings for
 arti-client exposing a `fetch()`-like API to JavaScript. Includes:
@@ -32,7 +32,7 @@ See `wasm-notes/review.md` for a detailed code review of this crate.
 
 ---
 
-## tor-rtcompat
+## tor-rtcompat (+972 -37)
 
 ### `src/lib.rs`
 **What:**
@@ -71,10 +71,11 @@ See `wasm-notes/review.md` for a detailed code review of this crate.
 
 ## Storage Changes
 
-Three crates form the custom storage abstraction stack, replacing
-hard-coded filesystem/SQLite dependencies with injectable backends:
+Changes across these three crates form a custom storage abstraction
+stack, replacing hard-coded filesystem/SQLite dependencies with
+injectable backends:
 
-### arti-client
+### arti-client (+717 -18)
 
 #### New file: `src/storage.rs`
 **What:** Adds a `KeyValueStore` trait and `split_storage()` function. The trait is a simple key-value interface (`get`, `set`, `delete`, `keys`, `try_lock`, `can_store`, `unlock`, `wait_for_unlock`). `split_storage` creates two adapters from a single store: a `KvStateAdapter` (implements `StringStore`, prefixes keys with `"state:"`) and a `KvDirAdapter` (implements `CustomDirStore`, passes keys through). Includes unit tests with an in-memory store.
@@ -107,7 +108,7 @@ hard-coded filesystem/SQLite dependencies with injectable backends:
 
 **Flag:** The `wait_for_stop()` split into two near-identical methods (native vs WASM) is a bit unfortunate. A single method using the `AnyStateMgr::wait_for_unlock()` should work for both since `AnyStateMgr` already handles the dispatch internally.
 
-### tor-persist
+### tor-persist (+365 -5)
 
 #### New file: `src/custom.rs`
 **What:** 325-line new file implementing:
@@ -130,7 +131,7 @@ hard-coded filesystem/SQLite dependencies with injectable backends:
 
 **Why:** External implementations need the `Result` type.
 
-### tor-dirmgr
+### tor-dirmgr (+721 -14)
 
 #### `src/lib.rs`
 **What:**
@@ -152,7 +153,7 @@ hard-coded filesystem/SQLite dependencies with injectable backends:
 
 ---
 
-## tor-proto
+## tor-proto (+51 -36)
 
 ### `src/channel.rs`
 **What:** `duration_unused()` method gets cfg-gated return: on WASM, returns `duration` directly (already `Option<Duration>`); on native, maps through `Into::into` (converting from `CoarseDuration`).
@@ -166,7 +167,7 @@ hard-coded filesystem/SQLite dependencies with injectable backends:
 
 ---
 
-## tor-dirclient
+## tor-dirclient (+80 -1)
 
 ### `src/lib.rs`
 **What:**
@@ -182,7 +183,7 @@ hard-coded filesystem/SQLite dependencies with injectable backends:
 
 ---
 
-## tor-circmgr
+## tor-circmgr (+25 -3)
 
 ### `src/build.rs`
 **What:** `double_timeout` function split into two versions: native (spawns background task for the soft timeout) and WASM (simplified, just uses `abandon` timeout directly since WASM is single-threaded and can't spawn background tasks for the soft timeout pattern).
@@ -191,7 +192,7 @@ hard-coded filesystem/SQLite dependencies with injectable backends:
 
 ---
 
-## tor-basic-utils
+## tor-basic-utils (+19 -15)
 
 ### `src/lib.rs`
 **What:** `IoErrorExt::is_not_a_directory()` refactored from a single method with inline `#[cfg]` attributes around each error constant to three separate platform-specific method implementations (`unix`, `windows`, `not(any(unix, windows))`).
@@ -200,7 +201,7 @@ hard-coded filesystem/SQLite dependencies with injectable backends:
 
 ---
 
-## tor-hsservice
+## tor-hsservice (+21 -10)
 
 ### `src/lib.rs`
 **What:** The `PowManager::new()` call now wraps `status_tx.clone()` differently based on `hs-pow-full` feature:
@@ -211,7 +212,7 @@ hard-coded filesystem/SQLite dependencies with injectable backends:
 
 ---
 
-## tor-memquota
+## tor-memquota (+14 -5)
 
 ### `src/config.rs`
 **What:** The 32-bit vs 64-bit memory threshold check is refactored from `#[cfg(target_pointer_width = "64")]` to a runtime boolean `is_64bit`.
