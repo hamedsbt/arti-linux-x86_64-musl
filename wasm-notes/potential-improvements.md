@@ -57,3 +57,22 @@ where the storage lock type changed.
 
 **Why not included:** Removing dead comments in upstream code is low-value churn.
 Could be cleaned up in a broader code quality pass.
+
+## 4. Guard descriptor retention for unreachable primary bridges
+
+**File:** `crates/tor-guardmgr/src/sample.rs`
+
+**Problem:** When a primary bridge becomes temporarily unreachable, its
+descriptor is discarded by `select_guards_for_descriptor_purposes()` because
+it filters on `reachable() != Unreachable`. This creates a chicken-and-egg
+problem: the guard is marked "unsuitable to purpose" (dir_info_missing) until
+re-fetched, but the descriptor is needed to test reachability.
+
+**Proposed fix:** Primary guards should bypass the reachability filter so their
+descriptors are retained even when temporarily unreachable. Non-primary guards
+still get the filter to avoid holding descriptors for abandoned bridges.
+
+**Why not included:** This was originally developed for Snowflake bridge
+support. Since Snowflake transport has been removed, the immediate need is gone.
+The fix is correct in principle and may be needed if bridge support is revisited,
+but it changes guard selection logic and deserves its own review.

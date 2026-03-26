@@ -134,20 +134,6 @@ hard-coded filesystem/SQLite dependencies with injectable backends:
 
 ---
 
-## tor-guardmgr
-
-### `src/sample.rs`
-**What:** Significant logic change in `select_guards_for_descriptor_purposes()`:
-- Primary guards now bypass the `reachable() != Unreachable` filter.
-- Non-primary guards still get reachability checks.
-- Comment explains: discarding a primary bridge's descriptor creates a chicken-and-egg problem where the guard becomes "unsuitable to purpose" until re-fetched, but the descriptor is needed to test reachability.
-
-**Why:** Bug fix for bridge descriptor management. Without this, a temporarily-unreachable primary bridge would lose its descriptor, making it permanently unavailable.
-
-**This is a real bug fix, not just WASM-related.** Worth noting for review.
-
----
-
 ## tor-proto
 
 ### `src/channel.rs`
