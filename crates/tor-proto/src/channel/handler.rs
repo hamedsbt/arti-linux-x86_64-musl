@@ -107,7 +107,9 @@ impl ChannelCellHandler {
         if let Self::Handshake(handler) = self {
             handler
                 .take_send_log_digest()
-                .ok_or(ChanError::Bug(internal!("No send log digest on channel")))
+                .ok_or(ChanError::Bug(internal!(
+                    "No send log digest on channel, or already taken"
+                )))
         } else {
             Err(ChanError::Bug(internal!(
                 "Getting send log digest without a handshake handler"
@@ -127,7 +129,9 @@ impl ChannelCellHandler {
         if let Self::Handshake(handler) = self {
             handler
                 .take_recv_log_digest()
-                .ok_or(ChanError::Bug(internal!("No recv log digest on channel")))
+                .ok_or(ChanError::Bug(internal!(
+                    "No recv log digest on channel, or already taken"
+                )))
         } else {
             Err(ChanError::Bug(internal!(
                 "Getting recv log digest without a handshake handler"
@@ -306,7 +310,7 @@ impl futures_codec::Decoder for NewChannelHandler {
             recv_log.update(&data);
         }
 
-        // Get the actual boddy from the data.
+        // Get the actual body from the data.
         let body = data.split_off(HEADER_SIZE).freeze();
         let mut reader = Reader::from_bytes(&body);
 

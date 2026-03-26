@@ -4,7 +4,7 @@
 
 use crate::raw::{RawEntryId, RawKeystoreEntry};
 use crate::{
-    ArtiPath, BoxedKeystore, KeyCertificateSpecifier, KeyPath, KeyPathInfo, KeyPathInfoExtractor,
+    ArtiPath, BoxedKeystore, KeyPath, KeyPathError, KeyPathInfo, KeyPathInfoExtractor,
     KeyPathPattern, KeySpecifier, KeystoreCorruptionError, KeystoreEntryResult, KeystoreId,
     KeystoreSelector, Result,
 };
@@ -16,6 +16,9 @@ use tor_error::{bad_api_usage, internal, into_bad_api_usage};
 use tor_key_forge::{
     ItemType, Keygen, KeygenRng, KeystoreItemType, ToEncodableCert, ToEncodableKey,
 };
+
+#[cfg(feature = "experimental-api")]
+use crate::KeyCertificateSpecifier;
 
 /// A key manager that acts as a frontend to a primary [`Keystore`](crate::Keystore) and
 /// any number of secondary [`Keystore`](crate::Keystore)s.
@@ -178,15 +181,7 @@ impl KeyMgr {
     ///
     /// Returns `Ok(None)` if none of the key stores have the requested key.
     pub fn get<K: ToEncodableKey>(&self, key_spec: &dyn KeySpecifier) -> Result<Option<K>> {
-        let result = self.get_from_store(key_spec, &K::Key::item_type(), self.all_stores())?;
-        if result.is_none() {
-            // If the key_spec is the specifier for the public part of a keypair,
-            // try getting the pair and extracting the public portion from it.
-            if let Some(key_pair_spec) = key_spec.keypair_specifier() {
-                return Ok(self.get::<K::KeyPair>(&*key_pair_spec)?.map(|k| k.into()));
-            }
-        }
-        Ok(result)
+        self.get_from_store(key_spec, &K::Key::item_type(), self.all_stores())
     }
 
     /// Retrieve the specified keystore entry, and try to deserialize it as `K::Key`.
@@ -200,6 +195,45 @@ impl KeyMgr {
         let selector = entry.keystore_id().into();
         let store = self.select_keystore(&selector)?;
         self.get_from_store(entry.key_path(), entry.key_type(), [store].into_iter())
+    }
+
+    /// Retrieve the specified keystore certificate entry and the corresponding
+    /// subject and signing keys, deserializing the subject key as `K::Key`,
+    /// the cert as `C::Cert`, and the signing key as `C::SigningKey`.
+    ///
+    /// The `S` type parameter is the [`KeyCertificateSpecifier`] of the certificate.
+    ///
+    /// The key returned is retrieved from the key store specified in the [`KeystoreEntry`].
+    ///
+    /// Returns `Ok(None)` if the key store does not contain the requested entry.
+    ///
+    /// Returns an error if the item type of the [`KeystoreEntry`] does not match `C::item_type()`,
+    /// or if the certificate is not valid according to [`ToEncodableCert::validate`],
+    /// or if the [`ArtiPath`] of the entry cannot be converted to a certificate specifier
+    /// of type `S`.
+    #[cfg(feature = "experimental-api")]
+    pub fn get_cert_entry<
+        S: KeyCertificateSpecifier + for<'a> TryFrom<&'a KeyPath, Error = KeyPathError>,
+        K: ToEncodableKey,
+        C: ToEncodableCert<K>,
+    >(
+        &self,
+        entry: &KeystoreEntry,
+        signing_key_spec: &dyn KeySpecifier,
+    ) -> Result<Option<C>> {
+        let selector = entry.keystore_id().into();
+        let store = self.select_keystore(&selector)?;
+        let cert_spec = S::try_from(entry.key_path())
+            .map_err(into_bad_api_usage!("wrong cert specifier for entry?!"))?;
+        let subject_key_spec = cert_spec.subject_key_specifier();
+
+        self.get_cert_from_store(
+            entry.key_path(),
+            entry.key_type(),
+            signing_key_spec,
+            subject_key_spec,
+            [store].into_iter(),
+        )
     }
 
     /// Read the key identified by `key_spec`.
@@ -514,6 +548,33 @@ impl KeyMgr {
         Ok(None)
     }
 
+    /// Attempt to retrieve a certificate from one of the specified `stores`.
+    #[cfg(feature = "experimental-api")]
+    fn get_cert_from_store<'a, K: ToEncodableKey, C: ToEncodableCert<K>>(
+        &self,
+        cert_spec: &dyn KeySpecifier,
+        cert_type: &KeystoreItemType,
+        signing_cert_spec: &dyn KeySpecifier,
+        subject_cert_spec: &dyn KeySpecifier,
+        stores: impl Iterator<Item = &'a BoxedKeystore>,
+    ) -> Result<Option<C>> {
+        let Some(cert) = self.get_from_store_raw::<C::ParsedCert>(cert_spec, cert_type, stores)?
+        else {
+            return Ok(None);
+        };
+
+        // Get the subject key...
+        let Some(subject) =
+            self.get_from_store::<K>(subject_cert_spec, &K::Key::item_type(), self.all_stores())?
+        else {
+            return Ok(None);
+        };
+        let signed_with = self.get_cert_signing_key::<K, C>(signing_cert_spec)?;
+        let cert = C::validate(cert, &subject, &signed_with)?;
+
+        Ok(Some(cert))
+    }
+
     /// Attempt to retrieve a key from one of the specified `stores`.
     ///
     /// See [`KeyMgr::get`] for more details.
@@ -521,10 +582,20 @@ impl KeyMgr {
         &self,
         key_spec: &dyn KeySpecifier,
         key_type: &KeystoreItemType,
-        stores: impl Iterator<Item = &'a BoxedKeystore>,
+        stores: impl Iterator<Item = &'a BoxedKeystore> + Clone,
     ) -> Result<Option<K>> {
-        let Some(key) = self.get_from_store_raw::<K::Key>(key_spec, key_type, stores)? else {
-            return Ok(None);
+        let Some(key) = self.get_from_store_raw::<K::Key>(key_spec, key_type, stores.clone())?
+        else {
+            // If the key_spec is the specifier for the public part of a keypair,
+            // try getting the pair and extracting the public portion from it.
+            let Some(key_pair_spec) = key_spec.keypair_specifier() else {
+                return Ok(None);
+            };
+
+            let key_type = <K::KeyPair as ToEncodableKey>::Key::item_type();
+            return Ok(self
+                .get_from_store::<K::KeyPair>(&*key_pair_spec, &key_type, stores)?
+                .map(|k| k.into()));
         };
 
         Ok(Some(K::from_encodable_key(key)))
@@ -549,6 +620,7 @@ impl KeyMgr {
     pub fn get_key_and_cert<K, C>(
         &self,
         spec: &dyn KeyCertificateSpecifier,
+        signing_key_spec: &dyn KeySpecifier,
     ) -> Result<Option<(K, C)>>
     where
         K: ToEncodableKey,
@@ -562,12 +634,9 @@ impl KeyMgr {
             return Ok(None);
         };
 
-        let subject_key_arti_path = subject_key_spec
+        let cert_spec = spec
             .arti_path()
-            .map_err(|_| bad_api_usage!("subject key does not have an ArtiPath?!"))?;
-        let cert_spec =
-            ArtiPath::from_path_and_denotators(subject_key_arti_path, &spec.cert_denotators())
-                .map_err(into_bad_api_usage!("invalid certificate specifier"))?;
+            .map_err(into_bad_api_usage!("invalid key certificate specifier"))?;
 
         let Some(cert) = self.get_from_store_raw::<C::ParsedCert>(
             &cert_spec,
@@ -579,7 +648,7 @@ impl KeyMgr {
         };
 
         // Finally, get the signing key and validate the cert
-        let signed_with = self.get_cert_signing_key::<K, C>(spec)?;
+        let signed_with = self.get_cert_signing_key::<K, C>(signing_key_spec)?;
         let cert = C::validate(cert, &key, &signed_with)?;
 
         Ok(Some((key, cert)))
@@ -624,6 +693,7 @@ impl KeyMgr {
     pub fn get_or_generate_key_and_cert<K, C>(
         &self,
         spec: &dyn KeyCertificateSpecifier,
+        signing_key_spec: &dyn KeySpecifier,
         make_certificate: impl FnOnce(&K, &<C as ToEncodableCert<K>>::SigningKey) -> C,
         selector: KeystoreSelector,
         rng: &mut dyn KeygenRng,
@@ -660,10 +730,18 @@ impl KeyMgr {
         }
         let subject_key = match maybe_subject_key {
             Some(key) => key,
-            _ => self.generate(subject_key_spec, selector, rng, false)?,
+            _ => {
+                let subject_keypair_spec =
+                    subject_key_spec.keypair_specifier().ok_or_else(|| {
+                        internal!(
+                            "KeyCertificateSpecifier has no keypair specifier for the subject key?!"
+                        )
+                    })?;
+                self.generate(&*subject_keypair_spec, selector, rng, false)?
+            }
         };
 
-        let signed_with = self.get_cert_signing_key::<K, C>(spec)?;
+        let signed_with = self.get_cert_signing_key::<K, C>(signing_key_spec)?;
         let cert = match maybe_cert {
             Some(cert) => C::validate(cert, &subject_key, &signed_with)?,
             None => {
@@ -679,7 +757,7 @@ impl KeyMgr {
     }
 
     /// Return an iterator over all configured stores.
-    fn all_stores(&self) -> impl Iterator<Item = &BoxedKeystore> {
+    fn all_stores(&self) -> impl Iterator<Item = &BoxedKeystore> + Clone {
         iter::once(&self.primary_store).chain(self.secondary_stores.iter())
     }
 
@@ -711,19 +789,12 @@ impl KeyMgr {
     #[cfg(feature = "experimental-api")]
     fn get_cert_signing_key<K, C>(
         &self,
-        spec: &dyn KeyCertificateSpecifier,
+        signing_key_spec: &dyn KeySpecifier,
     ) -> Result<C::SigningKey>
     where
         K: ToEncodableKey,
         C: ToEncodableCert<K>,
     {
-        let Some(signing_key_spec) = spec.signing_key_specifier() else {
-            return Err(bad_api_usage!(
-                "signing key specifier is None, but external signing key was not provided?"
-            )
-            .into());
-        };
-
         let Some(signing_key) = self.get_from_store::<C::SigningKey>(
             signing_key_spec,
             &<C::SigningKey as ToEncodableKey>::Key::item_type(),
@@ -779,6 +850,7 @@ mod tests {
     use super::*;
     use crate::keystore::arti::err::{ArtiNativeKeystoreError, MalformedPathError};
     use crate::raw::{RawEntryId, RawKeystoreEntry};
+    use crate::test_utils::{TestDerivedKeySpecifier, TestDerivedKeypairSpecifier};
     use crate::{
         ArtiPath, ArtiPathUnavailableError, Error, KeyPath, KeystoreEntryResult, KeystoreError,
         UnrecognizedEntryError,
@@ -792,12 +864,20 @@ use tor_time::SystemTime;
     use tor_basic_utils::test_rng::testing_rng;
     use tor_cert::CertifiedKey;
     use tor_cert::Ed25519Cert;
+    use tor_checkable::TimeValidityError;
     use tor_error::{ErrorKind, HasKind};
     use tor_key_forge::{
-        CertData, EncodableItem, ErasedKey, InvalidCertError, KeyType, KeystoreItem,
+        CertData, CertType, EncodableItem, EncodedEd25519Cert, ErasedKey, InvalidCertError,
+        KeyType, KeystoreItem,
     };
     use tor_llcrypto::pk::ed25519::{self, Ed25519PublicKey as _};
     use tor_llcrypto::rng::FakeEntropicRng;
+
+    #[cfg(feature = "experimental-api")]
+    use {
+        crate::CertSpecifierPattern,
+        crate::test_utils::{TestCertSpecifier, TestCertSpecifierPattern},
+    };
 
     /// Metadata structure for tracking key operations in tests.
     #[derive(Clone, Debug, PartialEq)]
@@ -899,20 +979,41 @@ use tor_time::SystemTime;
         meta: ItemMetadata,
     }
 
+    /// The type of certificate stored in the test key stores.
+    struct TestCert(TestItem);
+
+    impl ItemType for TestCert {
+        fn item_type() -> KeystoreItemType
+        where
+            Self: Sized,
+        {
+            CertType::Ed25519TorCert.into()
+        }
+    }
+
     /// A "certificate" used for testing purposes.
     #[derive(Clone, Debug)]
     struct AlwaysValidCert(TestItem);
+
+    /// An expired "certificate" used for testing purposes.
+    #[derive(Clone, Debug)]
+    struct AlwaysExpiredCert(TestItem);
 
     /// The corresponding fake public key type.
     #[derive(Clone, Debug)]
     struct TestPublicKey {
         /// The underlying key.
         key: KeystoreItem,
+        /// Metadata about the key.
+        meta: ItemMetadata,
     }
 
     impl From<TestItem> for TestPublicKey {
         fn from(tk: TestItem) -> TestPublicKey {
-            TestPublicKey { key: tk.item }
+            TestPublicKey {
+                key: tk.item,
+                meta: tk.meta,
+            }
         }
     }
 
@@ -1007,7 +1108,7 @@ use tor_time::SystemTime;
     }
 
     impl ToEncodableCert<TestItem> for AlwaysValidCert {
-        type ParsedCert = TestItem;
+        type ParsedCert = TestCert;
         type EncodableCert = TestItem;
         type SigningKey = TestItem;
 
@@ -1017,7 +1118,28 @@ use tor_time::SystemTime;
             _signed_with: &Self::SigningKey,
         ) -> StdResult<Self, InvalidCertError> {
             // AlwaysValidCert is always valid
-            Ok(Self(cert))
+            Ok(Self(cert.0))
+        }
+
+        /// Convert this cert to a type that implements [`EncodableKey`].
+        fn to_encodable_cert(self) -> Self::EncodableCert {
+            self.0
+        }
+    }
+
+    impl ToEncodableCert<TestItem> for AlwaysExpiredCert {
+        type ParsedCert = TestCert;
+        type EncodableCert = TestItem;
+        type SigningKey = TestItem;
+
+        fn validate(
+            _cert: Self::ParsedCert,
+            _subject: &TestItem,
+            _signed_with: &Self::SigningKey,
+        ) -> StdResult<Self, InvalidCertError> {
+            Err(InvalidCertError::TimeValidity(TimeValidityError::Expired(
+                Duration::from_secs(60),
+            )))
         }
 
         /// Convert this cert to a type that implements [`EncodableKey`].
@@ -1047,196 +1169,175 @@ use tor_time::SystemTime;
         RawEntryId::Path(PathBuf::from(&path))
     }
 
-    macro_rules! impl_keystore {
-        ($name:tt, $id:expr $(,$unrec:expr)?) => {
-            struct $name {
-                inner: RwLock<
-                    Vec<StdResult<(ArtiPath, KeystoreItemType, TestItem), UnrecognizedEntryError>>,
-                >,
-                id: KeystoreId,
-            }
+    struct Keystore {
+        inner: RwLock<Vec<KeystoreEntryResult<(ArtiPath, KeystoreItemType, TestItem)>>>,
+        id: KeystoreId,
+    }
 
-            impl Default for $name {
-                fn default() -> Self {
-                    let id = KeystoreId::from_str($id).unwrap();
-                    let inner: RwLock<
-                        Vec<
-                            StdResult<
-                                (ArtiPath, KeystoreItemType, TestItem),
-                                UnrecognizedEntryError,
-                            >,
-                        >,
-                    > = Default::default();
-                    // Populate the Keystore with the specified number
-                    // of unrecognized entries.
-                    $(
-                        for i in 0..$unrec {
-                            let invalid_key_path =
-                                PathBuf::from(&format!("unrecognized_entry{}", i));
-                            let raw_id = RawEntryId::Path(invalid_key_path.clone());
-                            let entry = RawKeystoreEntry::new(raw_id, id.clone()).into();
-                            let entry = UnrecognizedEntryError::new(
-                                entry,
-                                Arc::new(ArtiNativeKeystoreError::MalformedPath {
-                                    path: invalid_key_path,
-                                    err: MalformedPathError::NoExtension,
-                                }),
-                            );
-                            inner.write().unwrap().push(Err(entry));
+    impl Keystore {
+        fn new(id: &str) -> Self {
+            let id = KeystoreId::from_str(id).unwrap();
+
+            Self {
+                inner: Default::default(),
+                id,
+            }
+        }
+
+        fn new_boxed(id: &str) -> BoxedKeystore {
+            Box::new(Self::new(id))
+        }
+    }
+
+    impl crate::Keystore for Keystore {
+        fn contains(
+            &self,
+            key_spec: &dyn KeySpecifier,
+            item_type: &KeystoreItemType,
+        ) -> Result<bool> {
+            let wanted_arti_path = key_spec.arti_path().unwrap();
+            Ok(self.inner.read().unwrap().iter().any(|res| match res {
+                Ok((spec, ty, _)) => spec == &wanted_arti_path && ty == item_type,
+                Err(_) => false,
+            }))
+        }
+
+        fn id(&self) -> &KeystoreId {
+            &self.id
+        }
+
+        fn get(
+            &self,
+            key_spec: &dyn KeySpecifier,
+            item_type: &KeystoreItemType,
+        ) -> Result<Option<ErasedKey>> {
+            let key_spec = key_spec.arti_path().unwrap();
+
+            Ok(self.inner.read().unwrap().iter().find_map(|res| {
+                if let Ok((arti_path, ty, k)) = res {
+                    if arti_path == &key_spec && ty == item_type {
+                        let mut k = k.clone();
+                        k.meta.set_retrieved_from(self.id().clone());
+
+                        match item_type {
+                            KeystoreItemType::Key(_) => {
+                                return Some(Box::new(k) as Box<dyn ItemType>);
+                            }
+                            KeystoreItemType::Cert(_) => {
+                                // Hack: the KeyMgr code will want to downcast cert types
+                                // to C::ParsedCert, so we need to avoid returning the bare
+                                // TestItem here
+                                return Some(Box::new(TestCert(k)) as Box<dyn ItemType>);
+                            }
+                            _ => panic!("unknown item type?!"),
                         }
-                    )?
-                    Self {
-                        inner,
-                        id,
                     }
                 }
-            }
+                None
+            }))
+        }
 
-            #[allow(dead_code)] // this is only dead code for Keystore1
-            impl $name {
-                fn new_boxed() -> BoxedKeystore {
-                    Box::<Self>::default()
+        #[cfg(feature = "onion-service-cli-extra")]
+        fn raw_entry_id(&self, raw_id: &str) -> Result<RawEntryId> {
+            Ok(RawEntryId::Path(PathBuf::from(raw_id.to_string())))
+        }
+
+        fn insert(&self, key: &dyn EncodableItem, key_spec: &dyn KeySpecifier) -> Result<()> {
+            let key = key.downcast_ref::<TestItem>().unwrap();
+
+            let item = key.as_keystore_item()?;
+            let item_type = item.item_type()?;
+
+            self.inner
+                .write()
+                .unwrap()
+                // TODO: `insert` is used instead of `push`, because some of the
+                // tests (mainly `insert_and_get` and `keygen`) fail otherwise.
+                // It could be a good idea to use `push` and adapt the tests,
+                // in order to reduce cognitive complexity.
+                .insert(
+                    0,
+                    Ok((key_spec.arti_path().unwrap(), item_type, key.clone())),
+                );
+
+            Ok(())
+        }
+
+        fn remove(
+            &self,
+            key_spec: &dyn KeySpecifier,
+            item_type: &KeystoreItemType,
+        ) -> Result<Option<()>> {
+            let wanted_arti_path = key_spec.arti_path().unwrap();
+            let index = self.inner.read().unwrap().iter().position(|res| {
+                if let Ok((arti_path, ty, _)) = res {
+                    arti_path == &wanted_arti_path && ty == item_type
+                } else {
+                    false
                 }
-            }
+            });
+            let Some(index) = index else {
+                return Ok(None);
+            };
+            let _ = self.inner.write().unwrap().remove(index);
 
-            impl crate::Keystore for $name {
-                fn contains(
-                    &self,
-                    key_spec: &dyn KeySpecifier,
-                    item_type: &KeystoreItemType,
-                ) -> Result<bool> {
-                    let wanted_arti_path = key_spec.arti_path().unwrap();
-                    Ok(self
-                        .inner
-                        .read()
-                        .unwrap()
-                        .iter()
-                        .find(|res| match res {
-                            Ok((spec, ty, _)) => spec == &wanted_arti_path && ty == item_type,
-                            Err(_) => false,
-                        })
-                        .is_some())
+            Ok(Some(()))
+        }
+
+        #[cfg(feature = "onion-service-cli-extra")]
+        fn remove_unchecked(&self, entry_id: &RawEntryId) -> Result<()> {
+            let index = self.inner.read().unwrap().iter().position(|res| match res {
+                Ok((spec, ty, _)) => {
+                    let id = build_raw_id_path(spec, ty);
+                    entry_id == &id
                 }
+                Err(e) => e.entry().raw_id() == entry_id,
+            });
+            let Some(index) = index else {
+                return Err(Error::Keystore(Arc::new(MockKeystoreError::NotFound)));
+            };
+            let _ = self.inner.write().unwrap().remove(index);
+            Ok(())
+        }
 
-                fn id(&self) -> &KeystoreId {
-                    &self.id
-                }
+        fn list(&self) -> Result<Vec<KeystoreEntryResult<KeystoreEntry>>> {
+            Ok(self
+                .inner
+                .read()
+                .unwrap()
+                .iter()
+                .map(|res| match res {
+                    Ok((arti_path, ty, _)) => {
+                        let raw_id = RawEntryId::Path(PathBuf::from(&arti_path.to_string()));
 
-                fn get(
-                    &self,
-                    key_spec: &dyn KeySpecifier,
-                    item_type: &KeystoreItemType,
-                ) -> Result<Option<ErasedKey>> {
-                    let key_spec = key_spec.arti_path().unwrap();
+                        Ok(KeystoreEntry::new(
+                            KeyPath::Arti(arti_path.clone()),
+                            ty.clone(),
+                            self.id(),
+                            raw_id,
+                        ))
+                    }
+                    Err(e) => Err(e.clone()),
+                })
+                .collect())
+        }
+    }
 
-                    Ok(self.inner.read().unwrap().iter().find_map(|res| {
-                        match res {
-                            Ok((arti_path, ty, k)) => {
-                                if arti_path == &key_spec && ty == item_type {
-                                    let mut k = k.clone();
-                                    k.meta.set_retrieved_from(self.id().clone());
-                                    return Some(Box::new(k) as Box<dyn ItemType>);
-                                }
-                            }
-                            Err(_) => {}
-                        }
-                        None
-                    }))
-                }
-
-                #[cfg(feature = "onion-service-cli-extra")]
-                fn raw_entry_id(&self, raw_id: &str) -> Result<RawEntryId> {
-                    Ok(RawEntryId::Path(
-                        PathBuf::from(raw_id.to_string()),
-                    ))
-                }
-
-                fn insert(
-                    &self,
-                    key: &dyn EncodableItem,
-                    key_spec: &dyn KeySpecifier,
-                ) -> Result<()> {
-                    let key = key.downcast_ref::<TestItem>().unwrap();
-
-                    let item = key.as_keystore_item()?;
-                    let meta = key.meta.clone();
-
-                    let item_type = item.item_type()?;
-                    let key = TestItem { item, meta };
-
-                    self.inner
-                        .write()
-                        .unwrap()
-                        // TODO: `insert` is used instead of `push`, because some of the
-                        // tests (mainly `insert_and_get` and `keygen`) fail otherwise.
-                        // It could be a good idea to use `push` and adapt the tests,
-                        // in order to reduce cognitive complexity.
-                        .insert(0, (Ok((key_spec.arti_path().unwrap(), item_type, key))));
-
-                    Ok(())
-                }
-
-                fn remove(
-                    &self,
-                    key_spec: &dyn KeySpecifier,
-                    item_type: &KeystoreItemType,
-                ) -> Result<Option<()>> {
-                    let wanted_arti_path = key_spec.arti_path().unwrap();
-                    let index = self.inner.read().unwrap().iter().position(|res| {
-                        if let Ok((arti_path, ty, _)) = res {
-                            arti_path == &wanted_arti_path && ty == item_type
-                        } else {
-                            false
-                        }
-                    });
-                    let Some(index) = index else {
-                        return Ok(None);
-                    };
-                    let _ = self.inner.write().unwrap().remove(index);
-
-                    Ok(Some(()))
-                }
-
-                #[cfg(feature = "onion-service-cli-extra")]
-                fn remove_unchecked(&self, entry_id: &RawEntryId) -> Result<()> {
-                    let index = self.inner.read().unwrap().iter().position(|res| match res {
-                        Ok((spec, ty, _)) => {
-                            let id = build_raw_id_path(spec, ty);
-                            entry_id == &id
-                        }
-                        Err(e) => {
-                            e.entry().raw_id() == entry_id
-                        }
-                    });
-                    let Some(index) = index else {
-                        return Err(Error::Keystore(Arc::new(MockKeystoreError::NotFound)));
-                    };
-                    let _ = self.inner.write().unwrap().remove(index);
-                    Ok(())
-                }
-
-                fn list(&self) -> Result<Vec<KeystoreEntryResult<KeystoreEntry>>> {
-                    Ok(self
-                        .inner
-                        .read()
-                        .unwrap()
-                        .iter()
-                        .map(|res| match res {
-                            Ok((arti_path, ty, _)) => {
-                                let raw_id = RawEntryId::Path(
-                                    PathBuf::from(
-                                        &arti_path.to_string(),
-                                    )
-                                );
-
-                                Ok(KeystoreEntry::new(KeyPath::Arti(arti_path.clone()), ty.clone(), self.id(), raw_id))
-                            }
-                            Err(e) => Err(e.clone()),
-                        })
-                        .collect())
-                }
-            }
-        };
+    // Populate `keystore` with the specified number of unrecognized entries.
+    fn add_unrecognized_entries(keystore: &mut Keystore, count: usize) {
+        for i in 0..count {
+            let invalid_key_path = PathBuf::from(&format!("unrecognized_entry{}", i));
+            let raw_id = RawEntryId::Path(invalid_key_path.clone());
+            let entry = RawKeystoreEntry::new(raw_id, keystore.id.clone()).into();
+            let entry = UnrecognizedEntryError::new(
+                entry,
+                Arc::new(ArtiNativeKeystoreError::MalformedPath {
+                    path: invalid_key_path,
+                    err: MalformedPathError::NoExtension,
+                }),
+            );
+            keystore.inner.write().unwrap().push(Err(entry));
+        }
     }
 
     macro_rules! impl_specifier {
@@ -1259,11 +1360,6 @@ use tor_time::SystemTime;
         };
     }
 
-    impl_keystore!(Keystore1, "keystore1");
-    impl_keystore!(Keystore2, "keystore2");
-    impl_keystore!(Keystore3, "keystore3");
-    impl_keystore!(KeystoreUnrec1, "keystore_unrec1", 1);
-
     impl_specifier!(TestKeySpecifier1, "spec1");
     impl_specifier!(TestKeySpecifier2, "spec2");
     impl_specifier!(TestKeySpecifier3, "spec3");
@@ -1272,12 +1368,16 @@ use tor_time::SystemTime;
     impl_specifier!(TestPublicKeySpecifier1, "pub-spec1");
 
     /// Create a test `KeystoreEntry`.
-    fn entry_descriptor(specifier: impl KeySpecifier, keystore_id: &KeystoreId) -> KeystoreEntry {
+    fn entry_descriptor(
+        specifier: impl KeySpecifier,
+        key_type: KeystoreItemType,
+        keystore_id: &KeystoreId,
+    ) -> KeystoreEntry {
         let arti_path = specifier.arti_path().unwrap();
         let raw_id = RawEntryId::Path(PathBuf::from(arti_path.as_ref()));
         KeystoreEntry {
             key_path: arti_path.into(),
-            key_type: TestItem::item_type(),
+            key_type,
             keystore_id,
             raw_id,
         }
@@ -1286,11 +1386,12 @@ use tor_time::SystemTime;
     #[test]
     #[allow(clippy::cognitive_complexity)]
     fn insert_and_get() {
-        let mut builder = KeyMgrBuilder::default().primary_store(Box::<Keystore1>::default());
+        let mut builder = KeyMgrBuilder::default().primary_store(Keystore::new_boxed("keystore1"));
 
-        builder
-            .secondary_stores()
-            .extend([Keystore2::new_boxed(), Keystore3::new_boxed()]);
+        builder.secondary_stores().extend([
+            Keystore::new_boxed("keystore2"),
+            Keystore::new_boxed("keystore3"),
+        ]);
 
         let mgr = builder.build().unwrap();
 
@@ -1419,11 +1520,12 @@ use tor_time::SystemTime;
     #[test]
     #[cfg(feature = "onion-service-cli-extra")]
     fn get_from() {
-        let mut builder = KeyMgrBuilder::default().primary_store(Box::<Keystore1>::default());
+        let mut builder = KeyMgrBuilder::default().primary_store(Keystore::new_boxed("keystore1"));
 
-        builder
-            .secondary_stores()
-            .extend([Keystore2::new_boxed(), Keystore3::new_boxed()]);
+        builder.secondary_stores().extend([
+            Keystore::new_boxed("keystore2"),
+            Keystore::new_boxed("keystore3"),
+        ]);
 
         let mgr = builder.build().unwrap();
 
@@ -1463,12 +1565,72 @@ use tor_time::SystemTime;
     }
 
     #[test]
-    fn remove() {
-        let mut builder = KeyMgrBuilder::default().primary_store(Box::<Keystore1>::default());
+    fn get_from_keypair() {
+        const KEYSTORE_ID1: &str = "keystore1";
+        const KEYSTORE_ID2: &str = "keystore2";
 
+        let mut builder = KeyMgrBuilder::default().primary_store(Keystore::new_boxed(KEYSTORE_ID1));
         builder
             .secondary_stores()
-            .extend([Keystore2::new_boxed(), Keystore3::new_boxed()]);
+            .extend([Keystore::new_boxed(KEYSTORE_ID2)]);
+        let mgr = builder.build().unwrap();
+
+        let keystore2 = KeystoreId::from_str(KEYSTORE_ID2).unwrap();
+
+        // Insert a key into Keystore2
+        let _ = mgr
+            .insert(
+                TestItem::new("nightjar"),
+                &TestDerivedKeypairSpecifier,
+                KeystoreSelector::Id(&keystore2),
+                true,
+            )
+            .unwrap();
+
+        macro_rules! boxed {
+            ($closure:expr) => {
+                Box::new($closure) as _
+            };
+        }
+
+        #[allow(clippy::type_complexity)]
+        let getters: &[(&'static str, Box<dyn Fn() -> Result<Option<TestPublicKey>>>)] = &[
+            (
+                "get",
+                boxed!(|| mgr.get::<TestPublicKey>(&TestDerivedKeySpecifier)),
+            ),
+            #[cfg(feature = "onion-service-cli-extra")]
+            (
+                "get_from",
+                boxed!(|| mgr.get_from::<TestPublicKey>(&TestDerivedKeySpecifier, &keystore2)),
+            ),
+            (
+                "remove",
+                boxed!(|| mgr.remove::<TestPublicKey>(
+                    &TestDerivedKeySpecifier,
+                    KeystoreSelector::Id(&keystore2)
+                )),
+            ),
+        ];
+
+        for (test_name, getter) in getters {
+            // Retrieve the public key (internally, the keymgr should be able
+            // to extract it from the TestItem "keypair" type).
+            let key = getter().unwrap().expect(test_name);
+
+            assert_eq!(key.meta.item_id(), "nightjar", "{test_name}");
+            assert_eq!(key.meta.retrieved_from(), Some(&keystore2), "{test_name}");
+        }
+    }
+
+    #[test]
+    fn remove() {
+        let mut builder = KeyMgrBuilder::default().primary_store(Keystore::new_boxed("keystore1"));
+
+        builder.secondary_stores().extend([
+            Keystore::new_boxed("keystore2"),
+            Keystore::new_boxed("keystore3"),
+        ]);
 
         let mgr = builder.build().unwrap();
 
@@ -1550,7 +1712,7 @@ use tor_time::SystemTime;
     fn keygen() {
         let mut rng = FakeEntropicRng(testing_rng());
         let mgr = KeyMgrBuilder::default()
-            .primary_store(Box::<Keystore1>::default())
+            .primary_store(Keystore::new_boxed("keystore1"))
             .build()
             .unwrap();
 
@@ -1633,16 +1795,17 @@ use tor_time::SystemTime;
     #[test]
     fn get_or_generate() {
         let mut rng = FakeEntropicRng(testing_rng());
-        let mut builder = KeyMgrBuilder::default().primary_store(Box::<Keystore1>::default());
+        let mut builder = KeyMgrBuilder::default().primary_store(Keystore::new_boxed("keystore1"));
 
-        builder
-            .secondary_stores()
-            .extend([Keystore2::new_boxed(), Keystore3::new_boxed()]);
+        builder.secondary_stores().extend([
+            Keystore::new_boxed("keystore2"),
+            Keystore::new_boxed("keystore3"),
+        ]);
 
         let mgr = builder.build().unwrap();
 
         let keystore2 = KeystoreId::from_str("keystore2").unwrap();
-        let entry_desc1 = entry_descriptor(TestKeySpecifier1, &keystore2);
+        let entry_desc1 = entry_descriptor(TestKeySpecifier1, TestItem::item_type(), &keystore2);
         assert!(mgr.get_entry::<TestItem>(&entry_desc1).unwrap().is_none());
 
         mgr.insert(
@@ -1700,7 +1863,7 @@ use tor_time::SystemTime;
         );
         assert_eq!(retrieved_key.meta.is_generated(), true);
 
-        let entry_desc2 = entry_descriptor(TestKeySpecifier2, &keystore3);
+        let entry_desc2 = entry_descriptor(TestKeySpecifier2, TestItem::item_type(), &keystore3);
         assert_eq!(
             mgr.get_entry::<TestItem>(&entry_desc2)
                 .unwrap()
@@ -1726,15 +1889,17 @@ use tor_time::SystemTime;
 
     #[test]
     fn list_matching_ignores_unrecognized_keys() {
-        let builder = KeyMgrBuilder::default().primary_store(Box::new(KeystoreUnrec1::default()));
+        let mut keystore = Keystore::new("keystore1");
+        add_unrecognized_entries(&mut keystore, 1);
+        let builder = KeyMgrBuilder::default().primary_store(Box::new(keystore));
 
         let mgr = builder.build().unwrap();
 
-        let unrec_1 = KeystoreId::from_str("keystore_unrec1").unwrap();
+        let keystore1 = KeystoreId::from_str("keystore1").unwrap();
         mgr.insert(
             TestItem::new("whale shark"),
             &TestKeySpecifier1,
-            KeystoreSelector::Id(&unrec_1),
+            KeystoreSelector::Id(&keystore1),
             true,
         )
         .unwrap();
@@ -1752,23 +1917,25 @@ use tor_time::SystemTime;
     /// Test all `arti keys` subcommands
     // TODO: split this in different tests
     fn keys_subcommands() {
-        let mut builder =
-            KeyMgrBuilder::default().primary_store(Box::new(KeystoreUnrec1::default()));
-        builder
-            .secondary_stores()
-            .extend([Keystore2::new_boxed(), Keystore3::new_boxed()]);
+        let mut keystore = Keystore::new("keystore1");
+        add_unrecognized_entries(&mut keystore, 1);
+        let mut builder = KeyMgrBuilder::default().primary_store(Box::new(keystore));
+        builder.secondary_stores().extend([
+            Keystore::new_boxed("keystore2"),
+            Keystore::new_boxed("keystore3"),
+        ]);
 
         let mgr = builder.build().unwrap();
-        let ks_unrec1id = KeystoreId::from_str("keystore_unrec1").unwrap();
+        let keystore1id = KeystoreId::from_str("keystore1").unwrap();
         let keystore2id = KeystoreId::from_str("keystore2").unwrap();
         let keystore3id = KeystoreId::from_str("keystore3").unwrap();
 
-        // Insert a key into KeystoreUnrec1
+        // Insert a key into Keystore1
         let _ = mgr
             .insert(
                 TestItem::new("pangolin"),
                 &TestKeySpecifier1,
-                KeystoreSelector::Id(&ks_unrec1id),
+                KeystoreSelector::Id(&keystore1id),
                 true,
             )
             .unwrap();
@@ -1804,7 +1971,7 @@ use tor_time::SystemTime;
         let entries = mgr.list().unwrap();
 
         let expected_items = [
-            (ks_unrec1id, TestKeySpecifier1.arti_path().unwrap()),
+            (keystore1id, TestKeySpecifier1.arti_path().unwrap()),
             (keystore2id, TestKeySpecifier2.arti_path().unwrap()),
             (keystore3id, TestKeySpecifier3.arti_path().unwrap()),
         ];
@@ -1841,7 +2008,7 @@ use tor_time::SystemTime;
         assert_eq!(keystores, 3);
 
         // Test `list_by_id`
-        let primary_keystore_id = KeystoreId::from_str("keystore_unrec1").unwrap();
+        let primary_keystore_id = KeystoreId::from_str("keystore1").unwrap();
         let entries = mgr.list_by_id(&primary_keystore_id).unwrap();
 
         // Primary keystore contains a valid key and an unrecognized key
@@ -1893,6 +2060,38 @@ use tor_time::SystemTime;
         No,
     }
 
+    fn make_certificate(subject_key: &TestItem, signed_with: &TestItem) -> AlwaysValidCert {
+        let subject_id = subject_key.meta.as_key().unwrap().item_id.clone();
+        let signing_id = signed_with.meta.as_key().unwrap().item_id.clone();
+
+        let meta = ItemMetadata::Cert(CertMetadata {
+            subject_key_id: subject_id,
+            signing_key_id: signing_id,
+            retrieved_from: None,
+            is_generated: true,
+        });
+
+        // Note: this is not really a cert for `subject_key` signed with the `signed_with`
+        // key!. The two are `TestItem`s and not keys, so we can't really generate a real
+        // cert from them. We can, however, pretend we did, for testing purposes.
+        // Eventually we might want to rewrite these tests to use real items
+        // (like the `ArtiNativeKeystore` tests)
+        let mut rng = FakeEntropicRng(testing_rng());
+        let keypair = ed25519::Keypair::generate(&mut rng);
+        let encoded_cert = Ed25519Cert::constructor()
+            .cert_type(tor_cert::CertType::IDENTITY_V_SIGNING)
+            .expiration(SystemTime::now() + Duration::from_secs(180))
+            .signing_key(keypair.public_key().into())
+            .cert_key(CertifiedKey::Ed25519(keypair.public_key().into()))
+            .encode_and_sign(&keypair)
+            .unwrap();
+        let test_cert = CertData::TorEd25519Cert(encoded_cert);
+        AlwaysValidCert(TestItem {
+            item: KeystoreItem::Cert(test_cert),
+            meta,
+        })
+    }
+
     #[cfg(feature = "experimental-api")]
     macro_rules! run_certificate_test {
         (
@@ -1903,18 +2102,17 @@ use tor_time::SystemTime;
             use GenerateItem::*;
 
             let mut rng = FakeEntropicRng(testing_rng());
-            let mut builder = KeyMgrBuilder::default().primary_store(Box::<Keystore1>::default());
+            let mut builder = KeyMgrBuilder::default().primary_store(Keystore::new_boxed("keystore1"));
 
             builder
                 .secondary_stores()
-                .extend([Keystore2::new_boxed(), Keystore3::new_boxed()]);
+                .extend([Keystore::new_boxed("keystore2"), Keystore::new_boxed("keystore3")]);
 
             let mgr = builder.build().unwrap();
 
             let spec = crate::test_utils::TestCertSpecifier {
-                subject_key_spec: TestKeySpecifier1,
-                signing_key_spec: TestKeySpecifier2,
-                denotator: vec!["foo".into()],
+                subject_key_spec: TestDerivedKeySpecifier,
+                denotator: "foo".into(),
             };
 
             if $generate_subject_key == Yes {
@@ -1939,41 +2137,12 @@ use tor_time::SystemTime;
                     .unwrap();
             }
 
-            let make_certificate = move |subject_key: &TestItem, signed_with: &TestItem| {
-                let subject_id = subject_key.meta.as_key().unwrap().item_id.clone();
-                let signing_id = signed_with.meta.as_key().unwrap().item_id.clone();
 
-                let meta = ItemMetadata::Cert(CertMetadata {
-                    subject_key_id: subject_id,
-                    signing_key_id: signing_id,
-                    retrieved_from: None,
-                    is_generated: true,
-                });
-
-                // Note: this is not really a cert for `subject_key` signed with the `signed_with`
-                // key!. The two are `TestItem`s and not keys, so we can't really generate a real
-                // cert from them. We can, however, pretend we did, for testing purposes.
-                // Eventually we might want to rewrite these tests to use real items
-                // (like the `ArtiNativeKeystore` tests)
-                let mut rng = FakeEntropicRng(testing_rng());
-                let keypair = ed25519::Keypair::generate(&mut rng);
-                let encoded_cert = Ed25519Cert::constructor()
-                    .cert_type(tor_cert::CertType::IDENTITY_V_SIGNING)
-                    .expiration(SystemTime::now() + Duration::from_secs(180))
-                    .signing_key(keypair.public_key().into())
-                    .cert_key(CertifiedKey::Ed25519(keypair.public_key().into()))
-                    .encode_and_sign(&keypair)
-                    .unwrap();
-                let test_cert = CertData::TorEd25519Cert(encoded_cert);
-                AlwaysValidCert(TestItem {
-                    item: KeystoreItem::Cert(test_cert),
-                    meta,
-                })
-            };
-
+            let signing_key_spec = TestKeySpecifier2;
             let res = mgr
                 .get_or_generate_key_and_cert::<TestItem, AlwaysValidCert>(
                     &spec,
+                    &signing_key_spec,
                     &make_certificate,
                     KeystoreSelector::Primary,
                     &mut rng,
@@ -2042,6 +2211,138 @@ use tor_time::SystemTime;
         run_certificate_test!(
             generate_subject_key = Yes,
             generate_signing_key = Yes,
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "experimental-api")]
+    fn get_cert_entry() {
+        let mut rng = FakeEntropicRng(testing_rng());
+        let builder = KeyMgrBuilder::default().primary_store(Keystore::new_boxed("keystore1"));
+        let mgr = builder.build().unwrap();
+
+        // Generate the subject key
+        let _ = mgr
+            .generate::<TestItem>(
+                &TestKeySpecifier1,
+                KeystoreSelector::Primary,
+                &mut rng,
+                false,
+            )
+            .unwrap();
+
+        // Generate the signing key
+        let _ = mgr
+            .generate::<TestItem>(
+                &TestKeySpecifier2,
+                KeystoreSelector::Primary,
+                &mut rng,
+                false,
+            )
+            .unwrap();
+
+        // Generate multiple test certificates for the same subject key
+        for cert_deno in 0..10 {
+            let cert_spec = TestCertSpecifier {
+                subject_key_spec: TestDerivedKeySpecifier,
+                denotator: cert_deno.to_string(),
+            };
+
+            let res = mgr.get_or_generate_key_and_cert::<TestItem, AlwaysValidCert>(
+                &cert_spec,
+                &TestKeySpecifier2,
+                &make_certificate,
+                KeystoreSelector::Primary,
+                &mut rng,
+            );
+
+            assert!(res.is_ok());
+        }
+
+        // Time to list all certs and retrieve them
+        let any_pat = TestCertSpecifierPattern::new_any().arti_pattern().unwrap();
+
+        // Ensure the pattern is what we expect it to be
+        assert_eq!(
+            any_pat,
+            KeyPathPattern::Arti("test/simple_key+@*".to_string())
+        );
+        let certs = mgr.list_matching(&any_pat).unwrap();
+
+        // We generated 10 certs, so there should be 10 matching entries
+        assert_eq!(certs.len(), 10);
+
+        // Ensure we collected all the expected paths
+        let all_paths = certs
+            .iter()
+            .map(|entry| entry.key_path().arti().unwrap().as_str().to_string())
+            .sorted()
+            .collect::<Vec<_>>();
+
+        let expected_paths = (0..10)
+            .map(|i| format!("test/simple_key+@{i}"))
+            .collect::<Vec<_>>();
+        assert_eq!(all_paths, expected_paths);
+
+        for entry in certs {
+            let always_valid_cert = mgr
+                .get_cert_entry::<TestCertSpecifier, TestItem, AlwaysValidCert>(
+                    &entry,
+                    &TestKeySpecifier2,
+                )
+                .unwrap();
+
+            // Check that the cert was found...
+            assert!(always_valid_cert.is_some());
+        }
+
+        /// A denotator for our expired cert specifier.
+        const EXPIRED_DENO: &str = "expired";
+
+        // Generate an invalid test certificate
+        let cert_spec = TestCertSpecifier {
+            subject_key_spec: TestDerivedKeySpecifier,
+            denotator: EXPIRED_DENO.to_string(),
+        };
+
+        // Dummy metadata
+        let meta = CertMetadata {
+            subject_key_id: "foo".to_string(),
+            signing_key_id: "bar".to_string(),
+            retrieved_from: None,
+            is_generated: false,
+        };
+        let test_cert =
+            CertData::TorEd25519Cert(EncodedEd25519Cert::dangerously_from_bytes(b"foobar"));
+        let cert = AlwaysExpiredCert(TestItem {
+            item: KeystoreItem::Cert(test_cert),
+            meta: ItemMetadata::Cert(meta),
+        });
+
+        let res = mgr.insert_cert::<TestItem, AlwaysExpiredCert>(
+            cert,
+            &cert_spec,
+            KeystoreSelector::Primary,
+        );
+        assert!(res.is_ok());
+
+        // Build a pattern for matching *only* the expired cert
+        let pat = KeyPathPattern::Arti(format!("test/simple_key+@{EXPIRED_DENO}"));
+        let certs = mgr.list_matching(&pat).unwrap();
+        assert_eq!(certs.len(), 1);
+        let entry = &certs[0];
+
+        let err = mgr
+            .get_cert_entry::<TestCertSpecifier, TestItem, AlwaysExpiredCert>(
+                entry,
+                &TestKeySpecifier2,
+            )
+            .unwrap_err();
+
+        // Can't retrieve the cert because it's expired!
+        assert!(
+            matches!(err, Error::InvalidCert(InvalidCertError::TimeValidity(_))),
+            "{err:?}"
         );
     }
 }

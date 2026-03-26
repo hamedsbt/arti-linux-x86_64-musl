@@ -4,7 +4,6 @@
 import argparse
 import os
 import shutil
-import shlex
 import subprocess
 import sys
 import textwrap
@@ -15,6 +14,7 @@ from pathlib import Path
 
 # "local" imports
 from config import Config
+from typing import Optional
 
 _SCRIPT_NAME = Path(sys.argv[0]).name
 _SCRIPT_DIR = Path(sys.argv[0]).parent.resolve()
@@ -24,11 +24,13 @@ _TOP_LEVEL = Path(
 
 
 class ChutneyBinResolver:
+    _DEST = "chutney_bin"
+
     def __init__(self, parser: ArgumentParser) -> None:
-        parser.add_argument("--chutney-bin", help="chutney executable")
+        parser.add_argument("--chutney-bin", dest=self._DEST, help="chutney executable")
 
     def resolve(self, args: Namespace) -> Path:
-        res_str = args.chutney_bin or shutil.which("chutney")
+        res_str = getattr(args, self._DEST) or shutil.which("chutney")
         if res_str is None:
             print(textwrap.dedent("""
                     chutney (https://gitlab.torproject.org/tpo/core/chutney) not found.
@@ -45,11 +47,13 @@ class ChutneyBinResolver:
 
 
 class ArtiBinResolver:
+    _DEST = "arti_bin"
+
     def __init__(self, parser: ArgumentParser) -> None:
-        parser.add_argument("--arti-bin", help="arti executable")
+        parser.add_argument("--arti-bin", dest=self._DEST, help="arti executable")
 
     def resolve(self, args: Namespace) -> Path:
-        res_str = args.arti_bin
+        res_str = getattr(args, self._DEST)
         if res_str is None:
             for s in [
                 "target/x86_64-unknown-linux-gnu/quicktest/arti",
@@ -75,12 +79,57 @@ class ArtiBinResolver:
         return res
 
 
-class ArtiBenchBinResolver:
+class ArtiExtraBinResolver:
+    _DEST = "arti_extra_bin"
+
     def __init__(self, parser: ArgumentParser) -> None:
-        parser.add_argument("--arti-bench-bin", help="arti-bench executable")
+        parser.add_argument(
+            "--arti-extra-bin",
+            dest=self._DEST,
+            help="arti executable with extra features",
+        )
 
     def resolve(self, args: Namespace) -> Path:
-        res_str = args.arti_bin
+        res_str = getattr(args, self._DEST)
+        if res_str is None:
+            for s in [
+                "target/x86_64-unknown-linux-gnu/quicktest/arti-extra",
+                "target/quicktest/arti-extra",
+                "target/x86_64-unknown-linux-gnu/debug/arti-extra",
+                "target/debug/arti-extra",
+            ]:
+                p = _TOP_LEVEL.joinpath(Path(s))
+                if p.exists():
+                    res_str = str(p)
+                    break
+        if res_str is None:
+            print(textwrap.dedent("""
+                    arti-extra client not found.
+                    Try setting --arti-extra-bin or building one in this repo.
+
+                    # See .rust-recent-arti-extra-features-template in .gitlab-ci.yml for current
+                    # --features list.
+                    $ cargo build --locked --profile=quicktest -p arti --features=full,experimental
+                    $ mv target/quicktest/arti target/quicktest/arti-extra
+                    """))
+            sys.exit(1)
+        res = Path(res_str)
+        if not os.access(res, os.X_OK):
+            print(f"arti resolved to {res}, but it isn't an executable file")
+            sys.exit(1)
+        return res
+
+
+class ArtiBenchBinResolver:
+    _DEST = "arti_bench_bin"
+
+    def __init__(self, parser: ArgumentParser) -> None:
+        parser.add_argument(
+            "--arti-bench-bin", dest=self._DEST, help="arti-bench executable"
+        )
+
+    def resolve(self, args: Namespace) -> Path:
+        res_str = getattr(args, self._DEST)
         if res_str is None:
             for s in [
                 "target/x86_64-unknown-linux-gnu/release/arti-bench",
@@ -109,33 +158,43 @@ class ArtiBenchBinResolver:
 
 
 class ChutneyDataDirResolver:
+    _DEST = "chutney_data_dir"
+
     def __init__(self, parser: ArgumentParser) -> None:
         parser.add_argument(
-            "--chutney-data-dir", help="directory for chutney to put its data"
+            "--chutney-data-dir",
+            dest=self._DEST,
+            help="directory for chutney to put its data",
         )
 
     def resolve(self, args: Namespace) -> Path:
         return Path(
-            args.chutney_data_dir or os.getenv("CHUTNEY_DATA_DIR") or os.getcwd()
+            getattr(args, self._DEST) or os.getenv("CHUTNEY_DATA_DIR") or os.getcwd()
         )
 
 
 class ChutneyNetworkResolver:
+    _DEST = "network"
+
     def __init__(self, parser: ArgumentParser) -> None:
         parser.add_argument(
-            "--network", "-n", help="flag to 'chutney init' specifying network to use."
+            "--network",
+            "-n",
+            dest=self._DEST,
+            help="flag to 'chutney init' specifying network to use."
+            " (Default: built-in network-builder)",
         )
 
-    def resolve(self, args: Namespace) -> str:
-        return args.network or "--net-from-script-path=" + str(
-            _SCRIPT_DIR.joinpath("networks", "arti-ci")
-        )
+    def resolve(self, args: Namespace) -> Optional[str]:
+        res: Optional[str] = getattr(args, self._DEST)
+        return res
 
 
 class ConfigResolver:
     def __init__(self, parser: ArgumentParser) -> None:
         self._chutney_resolver = ChutneyBinResolver(parser)
         self._arti_resolver = ArtiBinResolver(parser)
+        self._arti_extra_resolver = ArtiExtraBinResolver(parser)
         self._arti_bench_resolver = ArtiBenchBinResolver(parser)
         self._chutney_data_dir_resolver = ChutneyDataDirResolver(parser)
         self._network_resolver = ChutneyNetworkResolver(parser)
@@ -144,6 +203,7 @@ class ConfigResolver:
         return Config(
             chutney=str(self._chutney_resolver.resolve(args)),
             arti=str(self._arti_resolver.resolve(args)),
+            arti_extra=str(self._arti_extra_resolver.resolve(args)),
             arti_bench=str(self._arti_bench_resolver.resolve(args)),
             chutney_data_dir=str(self._chutney_data_dir_resolver.resolve(args)),
             network=self._network_resolver.resolve(args),
@@ -158,18 +218,6 @@ def _main() -> None:
     config_resolver = ConfigResolver(parser)
     args = parser.parse_args()
     config = config_resolver.resolve(args)
-
-    with Path(_SCRIPT_DIR).joinpath("arti.run").open("w") as c:
-        print(f"target={shlex.quote(config.network)}", file=c)
-        print(f"arti_bench_bin={shlex.quote(str(config.arti_bench))}", file=c)
-        print(f"chutney_bin={shlex.quote(str(config.chutney))}", file=c)
-        print(f"export CHUTNEY_ARTI={shlex.quote(str(config.arti))}", file=c)
-        print(
-            f"export CHUTNEY_DATA_DIR={shlex.quote(str(config.chutney_data_dir))}",
-            file=c,
-        )
-
-    # Also dump as json, for use by python scripts
     config.dump_json(_SCRIPT_DIR.joinpath("arti.run.json"))
 
 

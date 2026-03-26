@@ -132,6 +132,34 @@ pub trait KeySpecifierPattern {
     fn arti_pattern(&self) -> Result<KeyPathPattern, Bug>;
 }
 
+/// A pattern specifying some or all of a kind of certificate
+///
+/// Generally implemented on `SomeCertSpecifierPattern` by applying
+/// [`#[derive_deftly(CertSpecifier)`](crate::derive_deftly_template_CertSpecifier)
+/// to `SomeCertSpecifier`.
+#[cfg(feature = "experimental-api")]
+pub trait CertSpecifierPattern {
+    /// The key specifier pattern of the subject key.
+    ///
+    /// Used to build the first part of the certificate specifier pattern
+    /// (certificate paths consist of the ArtiPath of its subject key,
+    /// followed by the cert denotators)
+    type SubjectKeySpecifierPattern: KeySpecifierPattern;
+
+    /// Obtain a pattern template that matches all certs of this type.
+    ///
+    /// The pattern consists of the [`KeySpecifierPattern::new_any`]
+    /// of the `SubjectKeySpecifierPattern`, followed by a pattern
+    /// that matches all the certificate denotators, if there are any.
+    fn new_any() -> Self
+    where
+        Self: Sized;
+
+    /// Get a [`KeyPathPattern`] that can match the [`ArtiPath`]s
+    /// of some or all the keys of this type.
+    fn arti_pattern(&self) -> Result<KeyPathPattern, Bug>;
+}
+
 /// An error while attempting to extract information about a key given its path
 ///
 /// For example, from a [`KeyPathInfoExtractor`].
@@ -611,6 +639,19 @@ impl Display for KeySpecifierComponentPrettyHelper<'_> {
 ///
 /// Certificates can only be fetched from Arti key stores
 /// (we will not support loading certs from C Tor's key directory)
+///
+/// Types implementing this trait get an auto-generated [`KeySpecifier`] implementation
+/// that returns the `ArtiPath` of the certificate.
+///
+/// The generated [`KeySpecifier::arti_path()`] returns
+///
+///   * the `ArtiPath` of the [`KeyCertificateSpecifier::subject_key_specifier`],
+///     if [`KeyCertificateSpecifier::cert_denotators`] is empty, or
+///   * the `ArtiPath` of the [`KeyCertificateSpecifier::subject_key_specifier`],
+///     followed by a [`DENOTATOR_GROUP_SEP`](crate::DENOTATOR_GROUP_SEP) character and the
+///     [`KeyCertificateSpecifier::cert_denotators`] encoded as described
+///     in the [`ArtiPath`] docs,
+///     if [`KeyCertificateSpecifier::cert_denotators`] is non-empty
 pub trait KeyCertificateSpecifier {
     /// The denotators of the certificate.
     ///
@@ -621,16 +662,32 @@ pub trait KeyCertificateSpecifier {
     /// with a `+` between the `ArtiPath` of the subject key and
     /// the denotators (the `+` is omitted if there are no denotators).
     fn cert_denotators(&self) -> Vec<&dyn KeySpecifierComponent>;
-    /// The key specifier of the signing key.
-    ///
-    /// Returns `None` if the signing key should not be retrieved from the keystore.
-    ///
-    /// Note: a return value of `None` means the signing key will be provided
-    /// as an argument to the `KeyMgr` accessor this `KeyCertificateSpecifier`
-    /// will be used with.
-    fn signing_key_specifier(&self) -> Option<&dyn KeySpecifier>;
     /// The key specifier of the subject key.
     fn subject_key_specifier(&self) -> &dyn KeySpecifier;
+}
+
+impl<T: KeyCertificateSpecifier + ?Sized> KeySpecifier for T {
+    fn arti_path(&self) -> StdResult<ArtiPath, ArtiPathUnavailableError> {
+        let subject_key_arti_path = self
+            .subject_key_specifier()
+            .arti_path()
+            .map_err(|_| internal!("subject key does not have an ArtiPath?!"))?;
+
+        let path =
+            ArtiPath::from_path_and_denotators(subject_key_arti_path, &self.cert_denotators())
+                .map_err(into_internal!("invalid certificate specifier"))?;
+
+        Ok(path)
+    }
+
+    fn ctor_path(&self) -> Option<CTorPath> {
+        // Certificates don't have a CTorPath
+        None
+    }
+
+    fn keypair_specifier(&self) -> Option<Box<dyn KeySpecifier>> {
+        None
+    }
 }
 
 /// A trait for converting key specifiers to and from [`CTorPath`].
@@ -997,6 +1054,40 @@ KeyPathInfo {
         }
 
         check_key_specifier(&TestSpecifier { x: 1, z: true }, "prefix/1/fixed/true/role");
+    }
+
+    #[test]
+    #[cfg(feature = "experimental-api")]
+    fn define_cert_specifier_with_multiple_denotators() {
+        #[derive(Deftly, Debug, PartialEq)]
+        #[derive_deftly(KeySpecifier)]
+        #[deftly(prefix = "encabulator")]
+        #[deftly(role = "fan")]
+        #[deftly(summary = "test key")]
+        struct TestKeySpecifier {
+            casing: String,
+            bearings: String,
+            #[deftly(denotator)]
+            count: usize,
+        }
+
+        #[derive(Deftly, Debug, PartialEq)]
+        #[derive_deftly(CertSpecifier)]
+        #[allow(dead_code)]
+        struct TestCertSpecifier {
+            #[deftly(subject)]
+            subject: TestKeySpecifier,
+            #[deftly(denotator)]
+            length: usize,
+            #[deftly(denotator)]
+            width: usize,
+        }
+
+        let cert_pat = TestCertSpecifierPattern::new_any();
+        assert_eq!(
+            cert_pat.arti_pattern().unwrap(),
+            KeyPathPattern::Arti("encabulator/*/*/fan+*@*+*".into())
+        );
     }
 
     #[test]

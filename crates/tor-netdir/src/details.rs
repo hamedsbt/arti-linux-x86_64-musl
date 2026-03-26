@@ -43,6 +43,9 @@ use crate::{FamilyRules, Relay, SubnetConfig};
 /// Most callers should avoid using this structure;
 /// they should instead call higher-level functions
 /// like those in the `tor-relay-selection` crate.
+///
+/// For flags, see <https://spec.torproject.org/dir-spec/assigning-flags-vote.html>.
+
 #[derive(Clone)]
 pub struct RelayDetails<'a>(pub(crate) &'a super::Relay<'a>);
 
@@ -66,6 +69,10 @@ impl<'a> RelayDetails<'a> {
     /// circuits that need more than a minimal amount of bandwidth.
     pub fn is_flagged_fast(&self) -> bool {
         self.0.rs.is_flagged_fast()
+    }
+    /// Return true if this relay has the "Exit" flag.
+    pub fn is_flagged_exit(&self) -> bool {
+        self.0.rs.is_flagged_exit()
     }
     /// Return true if this relay has the "Stable" flag.
     ///

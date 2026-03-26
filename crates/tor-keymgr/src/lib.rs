@@ -68,7 +68,7 @@ mod mgr;
 #[cfg(not(feature = "keymgr"))]
 mod dummy;
 
-pub use arti_path::{ArtiPath, DENOTATOR_SEP};
+pub use arti_path::{ArtiPath, DENOTATOR_GROUP_SEP, DENOTATOR_SEP};
 pub use err::{
     ArtiPathSyntaxError, Error, KeystoreCorruptionError, KeystoreError, UnknownKeyTypeError,
     UnrecognizedEntry, UnrecognizedEntryError,
@@ -81,6 +81,9 @@ pub use key_specifier::{
 };
 #[cfg(feature = "onion-service-cli-extra")]
 pub use raw::{RawEntryId, RawKeystoreEntry};
+
+#[cfg(feature = "experimental-api")]
+pub use key_specifier::CertSpecifierPattern;
 
 #[cfg(feature = "keymgr")]
 pub use {

@@ -2,6 +2,8 @@
 
 use super::*;
 
+//==================== Common definitions used by many of the macros ====================
+
 /// Helper to implemnet `dtrace!` inside `NetdocParseable` derive-deftly macro.
 #[doc(hidden)]
 #[allow(clippy::print_stderr)]
@@ -23,7 +25,10 @@ pub fn netdoc_parseable_derive_debug(ttype: &str, msg: &str, vals: &[&dyn Debug]
 }
 
 define_derive_deftly_module! {
-    /// Common definitions for `NetdocParseable` and `NetdocParseableFields`
+    /// Common definitions for `NetdocParseable`, `NetdocParseableFields`,
+    /// and `NetdocParseableSignatures`
+    ///
+    /// The including macro is expected to define:
     ///
     ///  * **`THIS_ITEM`**: consumes the next item and evaluates to it as an `UnparsedItem`.
     ///    See the definition in `NetdocParseable`.
@@ -109,7 +114,9 @@ define_derive_deftly_module! {
                   }
                   F_SIGNATURE { check_signature_item_parseable }
                   F_SUBDOC    { check_subdoc_parseable         }
-          }} ();
+          }} (
+              ${if F_SIGNATURE { sig_hashes, }}
+          );
         }}
         )
     }}
@@ -138,6 +145,30 @@ define_derive_deftly_module! {
             Option::<$F_EFFECTIVE_TYPE>
         }
     }}}
+
+    // Parse the intro item and bind `$fpatname` accumulator for each field.
+    //
+    // For the intro item, parse it and bind it to $fpatname.
+    //
+    // For other items, set up a mutable $fpatname, initialised to `default()` (normally None).
+    ${define INIT_ACCUMULATE_VARS {
+        $( ${select1 F_INTRO {
+
+          let item = input.next_item()?.ok_or(EP::EmptyDocument)?;
+          dtrace!("intro", item);
+          if !Self::is_intro_item_keyword(item.keyword()) {
+              Err(EP::WrongDocumentType)?;
+          }
+          let $fpatname: $ftype = $ITEM_VALUE_FROM_UNPARSED;
+
+        } F_SKIP {
+
+        } else {
+
+          let mut $fpatname = $F_ACCUMULATE_TYPE::default();
+
+        }})
+    }}
 
     // Accumulates `item` (which must be `ItemSetMethods::Each`) into `$F_ACCUMULATE_VAR`
     ${define ACCUMULATE_ITEM_VALUE { {
@@ -172,8 +203,11 @@ define_derive_deftly_module! {
 
                 let item = $THIS_ITEM;
                 dtrace!("is signature", item);
-                let item =
-                    SignatureItemParseable::from_unparsed_and_body(item, &hash_inputs)?;
+                let item = SignatureItemParseable::from_unparsed_and_body(
+                    item,
+                    &hash_inputs,
+                    AsMut::as_mut(sig_hashes),
+                )?;
                 $ACCUMULATE_ITEM_VALUE
               }
               F_INTRO {
@@ -231,202 +265,29 @@ define_derive_deftly_module! {
     }}
 }
 
-define_derive_deftly! {
+//==================== Main whole document parsing impl ====================
+//
+// deftly module ` NetdocParseable`:
+//
+//   * IMPL_NETDOC_PARSEABLE expanding to `impl NetdocParseable { ... }`
+//
+// Much of the heavy lifting is done in the NetdocSomeItemsParseableCommon deftly module.
+
+define_derive_deftly_module! {
+    /// Provides `IMPL_NETDOC_PARSEABLE` which impls `NetdocParseable`
+    ///
+    /// Used by the `NetdocParseable` and `NetdocParseableUnverified` derives.
+    NetdocParseable beta_deftly:
+
     use NetdocDeriveAnyCommon;
     use NetdocEntireDeriveCommon;
     use NetdocSomeItemsDeriveCommon;
     use NetdocSomeItemsParseableCommon;
 
-    /// Derive [`NetdocParseable`] for a document (or sub-document)
-    ///
-    // NB there is very similar wording in the NetdocEncodable derive docs.
-    // If editing any of this derive's documentation, considering editing that too.
-    //
-    /// ### Expected input structure
-    ///
-    /// Should be applied named-field struct, where each field is
-    /// an Item which may appear in the document,
-    /// or a sub-document.
-    ///
-    /// The first field will be the document's intro Item.
-    /// The expected Keyword for each Item will be kebab-case of the field name.
-    ///
-    /// ### Field type
-    ///
-    /// Each field must be
-    ///  * `impl `[`ItemValueParseable`] for an "exactly once" field,
-    ///  * `Vec<T: ItemValueParseable>` for "zero or more", or
-    ///  * `BTreeSet<T: ItemValueParseable + Ord>`, or
-    ///  * `Option<T: ItemValueParseable>` for "zero or one".
-    ///
-    /// We don't directly support "at least once":
-    /// the parsed network document doesn't imply the invariant
-    /// that at least one such item was present.
-    // We could invent a `NonemptyVec` or something for this.
-    ///
-    /// (This is implemented via types in the [`multiplicity`] module,
-    /// specifically [`ItemSetSelector`].)
-    ///
-    /// ### Signed documents
-    ///
-    /// To handle signed documents define two structures:
-    ///
-    ///  * `Foo`, containing only the content, not the signatures.
-    ///    Derive `NetdocParseable` and [`NetdocUnverified`](derive_deftly_template_NetdocUnverified).
-    ///  * `FooSignatures`, containing only the signatures.
-    ///    Derive `NetdocParseable` with `#[deftly(netdoc(signatures))]`.
-    ///
-    /// Don't mix signature items with non-signature items in the same struct.
-    /// (This wouldn't compile, because the field type would implement the wrong trait.)
-    ///
-    /// ### Top-level attributes:
-    ///
-    /// * **`#[deftly(netdoc(doctype_for_error = "EXPRESSION"))]`**:
-    ///
-    ///   Specifies the value to be returned from
-    ///   [`NetdocParseable::doctype_for_error`].
-    ///
-    ///   Note, must be an expression, so for a literal, nested `""` are needed.
-    ///
-    ///   The default is the intro item keyword.
-    ///
-    /// * **`#[deftly(netdoc(signatures))]`**:
-    ///
-    ///   This type is the signatures section of another document.
-    ///   Signature sections have no separate intro keyword:
-    ///   every field is structural and they are recognised in any order.
-    ///
-    ///   Fields must implement [`SignatureItemParseable`],
-    ///   rather than [`ItemValueParseable`],
-    ///
-    ///   This signatures sub-document will typically be included in a
-    ///   `FooUnverified` struct derived with
-    ///   [`NetdocUnverified`](derive_deftly_template_NetdocUnverified),
-    ///   rather than included anywhere manually.
-    ///
-    /// * **`#[deftly(netdoc(debug))]`**:
-    ///
-    ///   The generated implementation will generate copious debug output
-    ///   to the program's stderr when it is run.
-    ///   Do not enable in production!
-    ///
-    /// ### Field-level attributes:
-    ///
-    /// * **`#[deftly(netdoc(keyword = STR))]`**:
-    ///
-    ///   Use `STR` as the Keyword for this Item.
-    ///
-    /// * **`#[deftly(netdoc(single_arg))]`**:
-    ///
-    ///   The field type implements `ItemArgumentParseable`,
-    ///   instead of `ItemValueParseable`,
-    ///   and is parsed as if `(FIELD_TYPE,)` had been written.
-    ///
-    /// * **`#[deftly(netdoc(with = "MODULE"))]`**:
-    ///
-    ///   Instead of `ItemValueParseable`, the item is parsed with `MODULE::from_unparsed`,
-    ///   which must have the same signature as [`ItemValueParseable::from_unparsed`].
-    ///
-    ///   (Not supported for sub-documents, signature items, or field collections.)
-    ///
-    /// * **`#[deftly(netdoc(default))]`**:
-    ///
-    ///   This field is optional ("at most once");
-    ///   if not present, `FIELD_TYPE::default()` will be used.
-    ///
-    ///   This is an alternative to declaring the field type as `Option`
-    ///   With `netdoc(default)`, the field value doesn't need unwrapping.
-    ///   With `Option` it is possible to see if the field was provided.
-    ///
-    /// * **`#[deftly(netdoc(flatten))]`**:
-    ///
-    ///   This field is a struct containing further individual normal fields.
-    ///   The Items for those individual fields can appear in *this*
-    ///   outer document in any order, interspersed with other normal fields.
-    ///
-    ///   The field type must implement [`NetdocParseableFields`].
-    ///
-    /// * **`#[deftly(netdoc(skip))]`**:
-    ///
-    ///   This field doesn't really appear in the network document.
-    ///   It won't be recognised during parsing.
-    ///   Instead, `Default::default()` will be used for the field value.
-    ///
-    /// * **`#[deftly(netdoc(subdoc))]`**:
-    ///
-    ///   This field is a sub-document.
-    ///   The value type `T` must implment [`NetdocParseable`]
-    ///   *instead of* `ItemValueParseable`.
-    ///
-    ///   The field name is not used for parsging;
-    ///   the sub-document's intro keyword is used instead.
-    ///
-    ///   Sub-documents are expected to appear after all normal items,
-    ///   in the order presented in the struct definition.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use derive_deftly::Deftly;
-    /// use tor_netdoc::derive_deftly_template_NetdocParseable;
-    /// use tor_netdoc::derive_deftly_template_NetdocUnverified;
-    /// use tor_netdoc::derive_deftly_template_ItemValueParseable;
-    /// use tor_netdoc::parse2::{parse_netdoc, ParseInput, VerifyFailed};
-    /// use tor_netdoc::parse2::{SignatureItemParseable, SignatureHashInputs};
-    ///
-    /// #[derive(Deftly, Debug, Clone)]
-    /// #[derive_deftly(NetdocParseable, NetdocUnverified)]
-    /// pub struct NdThing {
-    ///     pub thing_start: (),
-    ///     pub value: (String,),
-    /// }
-    ///
-    /// #[derive(Deftly, Debug, Clone)]
-    /// #[derive_deftly(NetdocParseable)]
-    /// #[deftly(netdoc(signatures))]
-    /// pub struct NdThingSignatures {
-    ///     pub signature: FoolishSignature,
-    /// }
-    ///
-    /// #[derive(Deftly, Debug, Clone)]
-    /// #[derive_deftly(ItemValueParseable)]
-    /// pub struct FoolishSignature {
-    ///     pub doc_len: usize,
-    ///
-    ///     #[deftly(netdoc(sig_hash = "use_length_as_foolish_hash"))]
-    ///     pub doc_len_actual_pretending_to_be_hash: usize,
-    /// }
-    ///
-    /// fn use_length_as_foolish_hash(body: &SignatureHashInputs) -> usize {
-    ///     body.body().body().len()
-    /// }
-    ///
-    /// let doc_text =
-    /// r#"thing-start
-    /// value something
-    /// signature 28
-    /// "#;
-    ///
-    /// impl NdThingUnverified {
-    ///     pub fn verify_foolish_timeless(self) -> Result<NdThing, VerifyFailed> {
-    ///         let sig = &self.signatures.signature;
-    ///         if sig.doc_len != sig.doc_len_actual_pretending_to_be_hash {
-    ///             return Err(VerifyFailed::VerifyFailed);
-    ///         }
-    ///         Ok(self.body)
-    ///     }
-    /// }
-    ///
-    /// let input = ParseInput::new(&doc_text, "<input>");
-    /// let doc: NdThingUnverified = parse_netdoc(&input).unwrap();
-    /// let doc = doc.verify_foolish_timeless().unwrap();
-    /// assert_eq!(doc.value.0, "something");
-    /// ```
-    export NetdocParseable for struct, expect items, beta_deftly:
-
     ${define F_ACCUMULATE_VAR { (&mut $fpatname) }}
 
-    impl<$tgens> $P::NetdocParseable for $ttype {
+  ${define IMPL_NETDOC_PARSEABLE {
+    impl<$tgens> $P::NetdocParseable for $NETDOC_PARSEABLE_TTYPE {
         fn doctype_for_error() -> &'static str {
             ${tmeta(netdoc(doctype_for_error)) as expr,
               default ${concat ${for fields { ${when F_INTRO} $F_KEYWORD_STR }}}}
@@ -436,7 +297,7 @@ define_derive_deftly! {
             use $P::*;
 
             ${for fields {
-                ${when any(F_SIGNATURE, F_INTRO)}
+                ${when F_INTRO}
                 kw == $F_KEYWORD
             }}
         }
@@ -465,7 +326,7 @@ define_derive_deftly! {
         fn from_items<'s>(
             input: &mut $P::ItemStream<'s>,
             outer_stop: $P::stop_at!(),
-        ) -> $P::Result<$ttype, $P::ErrorProblem> {
+        ) -> $P::Result<Self, $P::ErrorProblem> {
             use $P::*;
             $DEFINE_DTRACE
             $FIELD_ORDERING_CHECK
@@ -525,34 +386,14 @@ define_derive_deftly! {
             //   - F_INTRO - intro item for this document (maybe next instance in parent)
             //   - F_NORMAL - normal items
             //   - subdocuments, is_subdoc_kw and F_SUBDOC
-            //   - F_SIGNATURE
             //   - our parent's structural keywords, outer_stop
+            //     (this includes signature items for the signed version of this doc)
             // 5 cases in all.
 
-            // Note the body of the document (before the signatures)
-          ${if T_SIGNATURES {
-            let signed_doc_body = input.body_sofar_for_signature();
-          }}
-
             //----- Parse the intro item, and introduce bindings for the other items. -----
+
             dtrace!("looking for intro item");
-
-          $( ${select1 F_INTRO {
-
-            let item = input.next_item()?.ok_or(EP::EmptyDocument)?;
-            dtrace!("intro", item);
-            if !Self::is_intro_item_keyword(item.keyword()) {
-                Err(EP::WrongDocumentType)?;
-            }
-            let $fpatname: $ftype = $ITEM_VALUE_FROM_UNPARSED;
-
-          } F_SKIP {
-
-          } else {
-
-            let mut $fpatname = $F_ACCUMULATE_TYPE::default();
-
-          }})
+            $INIT_ACCUMULATE_VARS
 
             //----- Parse the normal items -----
             dtrace!("looking for normal items");
@@ -601,10 +442,384 @@ define_derive_deftly! {
             // Resolve all the fields
             dtrace!("reached end, resolving");
 
+            $FINISH_RESOLVE_PARSEABLE
+        }
+    }
+  }}
+}
+
+//==================== NetdocParseable user-facing derive macro ====================
+//
+// deftly template `NetdocParseable`:
+//
+//  * main entrypoint for deriving the `NetdocParseable` trait
+//  * docs for the meta attributes we support during document parsing
+//
+// The actual implementation is in  the `NetdocParseable` deftly module, above.
+
+define_derive_deftly! {
+    use NetdocParseable;
+
+    /// Derive [`NetdocParseable`] for a document (or sub-document)
+    ///
+    // NB there is very similar wording in the NetdocEncodable derive docs.
+    // If editing any of this derive's documentation, considering editing that too.
+    //
+    /// ### Expected input structure
+    ///
+    /// Should be applied named-field struct, where each field is
+    /// an Item which may appear in the document,
+    /// or a sub-document.
+    ///
+    /// The first field will be the document's intro Item.
+    /// The expected Keyword for each Item will be kebab-case of the field name.
+    ///
+    /// ### Field type
+    ///
+    /// Each field must be
+    ///  * `impl `[`ItemValueParseable`] for an "exactly once" field,
+    ///  * `Vec<T: ItemValueParseable>` for "zero or more", or
+    ///  * `BTreeSet<T: ItemValueParseable + Ord>`, or
+    ///  * `Option<T: ItemValueParseable>` for "zero or one".
+    ///
+    /// We don't directly support "at least once":
+    /// the parsed network document doesn't imply the invariant
+    /// that at least one such item was present.
+    // We could invent a `NonemptyVec` or something for this.
+    ///
+    /// (This is implemented via types in the [`multiplicity`] module,
+    /// specifically [`ItemSetSelector`].)
+    ///
+    /// ### Signed documents
+    ///
+    /// To handle signed documents define two structures:
+    ///
+    ///  * `Foo`, containing only the content, not the signatures.
+    ///    Derive [`NetdocParseableUnverified`](derive_deftly_template_NetdocUnverified).
+    ///  * `FooSignatures`, containing only the signatures.
+    ///    Derive `NetdocParseableSignatures`.
+    ///
+    /// Don't mix signature items with non-signature items in the same struct.
+    /// (This wouldn't compile, because the field type would implement the wrong trait.)
+    ///
+    /// ### Top-level attributes:
+    ///
+    /// * **`#[deftly(netdoc(doctype_for_error = "EXPRESSION"))]`**:
+    ///
+    ///   Specifies the value to be returned from
+    ///   [`NetdocParseable::doctype_for_error`].
+    ///
+    ///   Note, must be an expression, so for a literal, nested `""` are needed.
+    ///
+    ///   The default is the intro item keyword.
+    ///
+    /// * **`#[deftly(netdoc(debug))]`**:
+    ///
+    ///   The generated implementation will generate copious debug output
+    ///   to the program's stderr when it is run.
+    ///   Do not enable in production!
+    ///
+    /// ### Field-level attributes:
+    ///
+    /// * **`#[deftly(netdoc(keyword = STR))]`**:
+    ///
+    ///   Use `STR` as the Keyword for this Item.
+    ///
+    /// * **`#[deftly(netdoc(single_arg))]`**:
+    ///
+    ///   The field type implements `ItemArgumentParseable`,
+    ///   instead of `ItemValueParseable`,
+    ///   and is parsed as if `(FIELD_TYPE,)` had been written.
+    ///
+    /// * **`#[deftly(netdoc(with = "MODULE"))]`**:
+    ///
+    ///   Instead of `ItemValueParseable`, the item is parsed with `MODULE::from_unparsed`,
+    ///   which must have the same signature as [`ItemValueParseable::from_unparsed`].
+    ///
+    ///   (Not supported for sub-documents, signature items, or field collections.)
+    ///
+    /// * **`#[deftly(netdoc(default))]`**:
+    ///
+    ///   This field is optional ("at most once");
+    ///   if not present, `FIELD_TYPE::default()` will be used.
+    ///
+    ///   This is an alternative to declaring the field type as `Option`
+    ///   With `netdoc(default)`, the field value doesn't need unwrapping.
+    ///   With `Option` it is possible to see if the field was provided.
+    ///
+    /// * **`#[deftly(netdoc(flatten))]`**:
+    ///
+    ///   This field is a struct containing further individual normal fields.
+    ///   The Items for those individual fields can appear in *this*
+    ///   outer document in any order, interspersed with other normal fields.
+    ///
+    ///   The field type must implement [`NetdocParseableFields`].
+    ///
+    /// * **`#[deftly(netdoc(skip))]`**:
+    ///
+    ///   This field doesn't really appear in the network document.
+    ///   It won't be recognised during parsing.
+    ///   Instead, `Default::default()` will be used for the field value.
+    ///
+    /// * **`#[deftly(netdoc(subdoc))]`**:
+    ///
+    ///   This field is a sub-document.
+    ///   The value type `T` must implement [`NetdocParseable`]
+    ///   *instead of* `ItemValueParseable`.
+    ///
+    ///   The field name is not used for parsging;
+    ///   the sub-document's intro keyword is used instead.
+    ///
+    ///   Sub-documents are expected to appear after all normal items,
+    ///   in the order presented in the struct definition.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use derive_deftly::Deftly;
+    /// use tor_netdoc::derive_deftly_template_AsMutSelf;
+    /// use tor_netdoc::derive_deftly_template_NetdocParseableSignatures;
+    /// use tor_netdoc::derive_deftly_template_NetdocParseableUnverified;
+    /// use tor_netdoc::derive_deftly_template_ItemValueParseable;
+    /// use tor_netdoc::parse2::{
+    ///     parse_netdoc, ErrorProblem, ParseInput, VerifyFailed,
+    ///     SignatureItemParseable, SignatureHashesAccumulator, SignatureHashInputs,
+    /// };
+    ///
+    /// #[derive(Deftly, Debug, Clone)]
+    /// #[derive_deftly(NetdocParseableUnverified)]
+    /// pub struct NdThing {
+    ///     pub thing_start: (),
+    ///     pub value: (String,),
+    /// }
+    ///
+    /// #[derive(Deftly, Debug, Clone)]
+    /// #[derive_deftly(NetdocParseableSignatures)]
+    /// #[deftly(netdoc(signatures(hashes_accu = "UseLengthAsFoolishHash")))]
+    /// pub struct NdThingSignatures {
+    ///     pub signature: FoolishSignature,
+    /// }
+    ///
+    /// #[derive(Deftly, Debug, Clone)]
+    /// #[derive_deftly(ItemValueParseable)]
+    /// #[deftly(netdoc(signature(hash_accu = "UseLengthAsFoolishHash")))]
+    /// pub struct FoolishSignature {
+    ///     pub doc_len: usize,
+    /// }
+    ///
+    /// #[derive(Deftly, Debug, Default, Clone)]
+    /// #[derive_deftly(AsMutSelf)]
+    /// pub struct UseLengthAsFoolishHash {
+    ///     pub doc_len_actual_pretending_to_be_hash: Option<usize>,
+    /// }
+    /// impl SignatureHashesAccumulator for UseLengthAsFoolishHash {
+    ///     fn update_from_netdoc_body(
+    ///         &mut self,
+    ///         document_body: &SignatureHashInputs<'_>,
+    ///     ) -> Result<(), ErrorProblem> {
+    ///         self
+    ///             .doc_len_actual_pretending_to_be_hash
+    ///             .get_or_insert_with(|| document_body.body().body().len());
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// let doc_text =
+    /// r#"thing-start
+    /// value something
+    /// signature 28
+    /// "#;
+    ///
+    /// impl NdThingUnverified {
+    ///     pub fn verify_foolish_timeless(self) -> Result<NdThing, VerifyFailed> {
+    ///         let sig = &self.sigs.sigs.signature;
+    ///         let hash = self.sigs.hashes.doc_len_actual_pretending_to_be_hash
+    ///             .as_ref().ok_or(VerifyFailed::Bug)?;
+    ///         if sig.doc_len != *hash {
+    ///             return Err(VerifyFailed::VerifyFailed);
+    ///         }
+    ///         Ok(self.body)
+    ///     }
+    /// }
+    ///
+    /// let input = ParseInput::new(&doc_text, "<input>");
+    /// let doc: NdThingUnverified = parse_netdoc(&input).unwrap();
+    /// let doc = doc.verify_foolish_timeless().unwrap();
+    /// assert_eq!(doc.value.0, "something");
+    /// ```
+    export NetdocParseable for struct, expect items, beta_deftly:
+
+    ${define NETDOC_PARSEABLE_TTYPE { $ttype }}
+    ${define FINISH_RESOLVE_PARSEABLE $FINISH_RESOLVE}
+
+    $IMPL_NETDOC_PARSEABLE
+}
+
+//==================== NetdocParseableSignatures user-facing derive macro ====================
+//
+// deftly template `NetdocParseableSignatures`:
+//
+//  * entrypoint for deriving the `NetdocParseableSignatures` trait
+//  * docs for the signatures-section-specific attributes
+//  * implementation of that derive
+//
+// Much of the heavy lifting is done in the NetdocSomeItemsParseableCommon deftly module.
+
+define_derive_deftly! {
+    use NetdocDeriveAnyCommon;
+    use NetdocSomeItemsDeriveCommon;
+    use NetdocSomeItemsParseableCommon;
+
+    /// Derive [`NetdocParseable`] for the signatures section of a network document
+    ///
+    /// This type is the signatures section of another document.
+    /// Signature sections have no separate intro keyword:
+    /// every field is structural and they are recognised in any order.
+    ///
+    /// This signatures sub-document will typically be included in a
+    /// `FooUnverified` struct derived with
+    /// [`NetdocUnverified`](derive_deftly_template_NetdocUnverified),
+    /// rather than included anywhere manually.
+    ///
+    /// ### Expected input structure
+    ///
+    /// Should be applied named-field struct, where each field
+    /// implements [`SignatureItemParseable`],
+    /// or is a `SignatureItemParseable` in `Vec` or `BTreeSet` or `Option`.
+    ///
+    /// ### Attributes
+    ///
+    ///  * The following top-level attributes are supported:
+    ///    `#[deftly(netdoc(debug))]`
+    ///
+    ///  * The following field-level attributes are supported:
+    ///    `#[deftly(netdoc(keyword = STR))]`
+    ///    `#[deftly(netdoc(default))]`
+    ///    `#[deftly(netdoc(single_arg))]`
+    ///    `#[deftly(netdoc(with = "MODULE"))]`
+    ///    `#[deftly(netdoc(flatten))]`
+    ///    `#[deftly(netdoc(skip))]`
+    ///
+    /// ### Signature item ordering, and signatures covering signatures
+    ///
+    /// The derived code does not impose any mutual ordering of signatures.
+    /// If signatures are independent, hashing can be done with [`SignedDocumentBody`]
+    /// (from [`SignatureHashInputs::body`]).
+    ///
+    /// In sane netdoc signature scheme, no signatures would cover other signatures,
+    /// and there would be no ordering requirement on signatures on the same document.
+    ///  A relying party would verify the signatures that they are proposing to rely on
+    /// (which would generally include signatures for *one* algorithm, not several)
+    /// and ignore the others.
+    ///
+    /// (Such a signature, which also does not include any of its own item encoding
+    /// in its hash, is called Orderly.  See [SignedDocumentBody].)
+    ///
+    /// Unfortunately, many Tor netdocs have signature schemes
+    /// which are not sane (by this definition).
+    ///
+    /// When signatures are specified to cover other signatures,
+    /// the signature item implementation must contain ad-hoc code in
+    /// [`SignatureItemParseable::from_unparsed_and_body`].
+    /// to hash not only the body, but also the prior signatures.
+    /// Methods on [`SignatureHashInputs`] are available to get
+    /// the relevant parts of the input document text
+    /// (eg, [`document_sofar`](SignatureHashInputs::document_sofar)).
+    ///
+    /// When the spec states a required ordering on signature items,
+    /// this should be enforced by ad-hoc code in implementation(s) of
+    /// `SignatureItemParseable`.
+    /// The implementation should use
+    /// [`HashAccu`](SignatureItemParseable::HashAccu)
+    /// to store any necessary state.
+    /// Usually, this can be achieved by using the same Rust struct for the
+    /// `HashAccu` of each of the signature items:
+    /// that will make the signature hashes computed so far, for items seen so far,
+    /// visible to subsequent items;
+    /// the subsequent items can check that the prior items filled in the hash,
+    /// thus imposing an ordering.
+    ///
+    /// Alternatively, the ordering could be enforced in the user-supplied
+    /// ad-hoc `verify` function(s) on `FooUUnverified`.
+    ///
+    /// Note that this enforcement should be done for protocol compliance
+    /// and availability reasons, but is not a security issue.
+    /// There is not a security risk from accepting documents some of whose signatures
+    /// aren't covered by other signatures even though the protocol specifies they should be:
+    /// relying parties *verify* the signatures but do not treat them as trusted data.
+    /// So there is no engineered safeguard against failing to implement
+    /// signature item ordering checks.
+    export NetdocParseableSignatures for struct, expect items, beta_deftly:
+
+    ${defcond F_INTRO false}
+    ${defcond F_SUBDOC false}
+    ${defcond F_SIGNATURE true}
+
+    // NetdocParseableSignatures::HashesAccu
+    ${define SIGS_HASHES_ACCU_TYPE { ${tmeta(netdoc(signatures(hashes_accu))) as ty} }}
+
+    ${define THIS_ITEM { input.next_item()?.expect("peeked") }}
+    ${define F_ACCUMULATE_VAR { (&mut $fpatname) }}
+
+    impl<$tgens> $P::NetdocParseableSignatures for $ttype {
+        type HashesAccu = $SIGS_HASHES_ACCU_TYPE;
+
+        fn is_item_keyword(kw: $P::KeywordRef<'_>) -> bool {
+            use $P::*;
+            ${for fields {
+                kw == $F_KEYWORD ||
+            }}
+                false
+        }
+
+        #[allow(clippy::redundant_locals)] // let item = $THIS_ITEM, which might be item
+        fn from_items<'s>(
+            input: &mut $P::ItemStream<'s>,
+            signed_doc_body: $P::SignedDocumentBody<'s>,
+            sig_hashes: &mut $SIGS_HASHES_ACCU_TYPE,
+            outer_stop: $P::stop_at!(),
+        ) -> $P::Result<$ttype, $P::ErrorProblem> {
+            use $P::*;
+            $DEFINE_DTRACE
+
+            //----- prepare item set selectors for every field -----
+            $ITEM_SET_SELECTORS
+            $CHECK_FIELD_TYPES_PARSEABLE
+            $INIT_ACCUMULATE_VARS
+
+            //----- parse the items -----
+            dtrace!("looking for signature items");
+
+            while let Some(kw) = input.peek_keyword()? {
+                dtrace!("for signatures, peeked", kw);
+                if outer_stop.stop_at(kw) {
+                    dtrace!("is outer stop", kw);
+                    break;
+                };
+
+                $NONSTRUCTURAL_ACCUMULATE_ELSE
+                {
+                    dtrace!("is unknown (in signatures)");
+                    let _: UnparsedItem = $THIS_ITEM;
+                }
+            }
+
+            // Resolve all the fields
+            dtrace!("reached end, resolving");
+
             $FINISH_RESOLVE
         }
     }
 }
+
+//==================== NetdocParseableFields user-facing derive macro ====================
+//
+// deftly template `NetdocParseableFields`
+//
+//  * entrypoint for deriving the `NetdocParseableFields` trait
+//  * docs and implementation for that derive
+//
+// Much of the heavy lifting is done in the NetdocSomeItemsParseableCommon deftly module.
 
 define_derive_deftly! {
     use NetdocDeriveAnyCommon;
@@ -677,7 +892,7 @@ define_derive_deftly! {
 
             $NONSTRUCTURAL_ACCUMULATE_ELSE
             {
-                panic!("accumulate_item called though is_intro_item_keyword returns false");
+                panic!("accumulate_item called though is_item_keyword returns false");
             }
 
             #[allow(unreachable_code)] // If there are no fields!
@@ -702,18 +917,55 @@ define_derive_deftly! {
     }
 }
 
-define_derive_deftly! {
-    use NetdocDeriveAnyCommon;
+//==================== NetdocParseableUnverified user-facing derive macro ====================
+//
+// deftly template `NetdocParseableUnverified`
+//
+//  * entrypoint for deriving the `FooUnverified` struct implementing `NetdocParseable`
+//    (and supporting items such as `FooUnverifiedParsedBody` structs and its impl).
+//  * docs for that derive, including doc-level signatures-related attributes
+//  * implementation glue for those derived impls
+//
+// The principal derived parsing impl on the body type `Foo` is expanded by this macro,
+// but that is implemented via IMPL_NETDOC_PARSEABLE in the NetdocParseable deftly module.
+//
+// The substantive code to implement `NetdocParseable` for `FooUnverified` is
+// in the `ItemStream::parse_signed` helper function; a call to that is expanded here.
 
-    /// Derive `FooUnverified` from `Foo`
+define_derive_deftly! {
+    use NetdocParseable;
+
+    /// Derive `NetdocParseable` for a top-level signed document
     ///
-    /// Apply this derive to the main body struct `Foo`.
+    /// ### Expected input structure
     ///
-    /// Usually, provide suitable `.verify_...` methods.
+    /// Apply this derive to the main body struct `Foo`,
+    /// which should meet all the requirements to derive
+    /// [`NetdocParseable`](derive_deftly_template_NetdocParseable).
     ///
-    /// The body and signature types have to implement `Clone` and `Debug`.
+    /// Usually, the caller will provide suitable ad-hoc `.verify_...` methods
+    /// on `FooUnverified`.
     ///
-    /// ### Top-level attributes:
+    /// ### Generated code
+    ///
+    /// Supposing your input structure is `Foo`, this macro will
+    /// generate a `**struct FooUnverified`**
+    /// implementing [`NetdocParseable`] and [`NetdocUnverified`]:
+    ///
+    /// ```rust,ignore
+    /// # struct Foo; struct FooSignatures;
+    /// pub struct FooUnverified {
+    ///     body: Foo,
+    ///     pub sigs: SignaturesData<FooUnverified>,
+    /// }
+    /// ```
+    ///
+    /// Also generated is `FooUnverifiedParsedBody`
+    /// and an impl of [`HasUnverifiedParsedBody`] on `Foo`.
+    /// These allow the generated code to call [`ItemStream::parse_signed`]
+    /// and it should not normally be necessary to use them elsewhere.
+    ///
+    /// ### Required top-level attributes:
     ///
     /// * **`#[deftly(netdoc(signature = "TYPE"))]`**:
     ///   Type of the signature(s) section.
@@ -723,32 +975,28 @@ define_derive_deftly! {
     ///   Normally this is achieved with
     ///   `#[derive_deftly(NetdocParseable)] #[deftly(netdoc(signatures))]`.
     ///
-    $DOC_DEBUG_PLACEHOLDER
+    /// ### Optional attributes
     ///
-    /// ### Generated struct
-    ///
-    /// ```
-    /// # struct Foo; struct FooSignatures;
-    /// pub struct FooUnverified {
-    ///     body: Foo,
-    ///     pub signatures: FooSignatures,
-    /// }
-    ///
-    /// # #[cfg(all())] { r##"
-    /// impl NetdocParseable for FooUnverified { .. }
-    /// impl NetdocUnverified for FooUnverified { .. }
-    /// # "##; }
-    /// ```
+    /// All the attributes supported by the `NetdocParseable` derive are supported.
     //
-    // We don't make this a generic struct because the defining module (crate)
-    // will want to add verification methods, which means they must define the struct.
-    export NetdocUnverified for struct, expect items, beta_deftly:
+    // We don't make NetdocUnverified a generic struct because
+    //  - the defining module (crate) will want to add verification methods,
+    //    which means they must define the struct
+    //  - that lets the actual `body` field be private to the defining module.
+    export NetdocParseableUnverified for struct, expect items, beta_deftly:
 
-    // Convenience alias for our prelude
-    ${define P { $crate::parse2::internal_prelude }}
+    ${define NETDOC_PARSEABLE_TTYPE { $<$ttype UnverifiedParsedBody> }}
+    ${define FINISH_RESOLVE_PARSEABLE {
+        { $FINISH_RESOLVE }
+        .map(|unverified| $<$tname UnverifiedParsedBody> { unverified })
+    }}
+
+    $IMPL_NETDOC_PARSEABLE
 
     // FooSignatures (type name)
     ${define SIGS_TYPE { $< ${tmeta(netdoc(signatures)) as ty, default $<$ttype Signatures>} > }}
+    ${define SIGS_DATA_TYPE { $P::SignaturesData<$<$ttype Unverified>> }}
+    ${define SIGS_HASHES_ACCU_TYPE { <$SIGS_TYPE as $P::NetdocParseableSignatures>::HashesAccu }}
 
     #[doc = ${concat "Signed (unverified) form of [`" $tname "`]"}]
     ///
@@ -770,21 +1018,50 @@ define_derive_deftly! {
         body: $ttype,
 
         /// Signatures
-        $tvis signatures: $SIGS_TYPE,
+        $tvis sigs: $SIGS_DATA_TYPE,
+    }
+
+    /// The parsed but unverified body part of a signed network document (working type)
+    ///
+    #[doc = ${concat "Contains a " $tname " which has been parsed"}]
+    /// as part of a signed document,
+    /// but the signatures aren't embodied here, and have not been verified.
+    ///
+    /// Not very useful to callers, who should use the `BodyUnverified` type instead,
+    /// and its implementation of `NetdocParseable`.
+    //
+    // We implement NetdocParseable on FooUnverified using ItemStream::parse_signed.
+    // ItemStream::parse_signed is a fairly normal but ad-hoc
+    // implementation of NetdocParseable which uses as subroutines implementations
+    // of NetdocParseable for the body and NetdocParseableSignatures for the signatures.
+    //
+    // We need a newtype because we don't want to implement `NetdocParseable`
+    // for a type which is just the body.  Such an impl would be usable by mistake,
+    // via the top-level parse2 functions, and it would then simply discard the signatures
+    // and return unverified data, bypassing our efforts to prevent such bugs.
+    //
+    // Ideally we would have a generic `UnverifiedParsedBody<B>` type or something
+    // but then this macro, invoked in other crates, couldn't impl NetdocParseable for
+    // UnverifiedParsedBody<TheirType>, due to trait coherence rules.
+    //
+    #[derive(derive_more::From)]
+    pub struct $NETDOC_PARSEABLE_TTYPE<$tdefgens> {
+        /// The unverified body
+        unverified: $ttype,
     }
 
     impl<$tgens> $P::NetdocParseable for $<$ttype Unverified> {
         fn doctype_for_error() -> &'static str {
-            $ttype::doctype_for_error()
+            $NETDOC_PARSEABLE_TTYPE::doctype_for_error()
         }
 
         fn is_intro_item_keyword(kw: $P::KeywordRef<'_>) -> bool {
-            $ttype::is_intro_item_keyword(kw)
+            $NETDOC_PARSEABLE_TTYPE::is_intro_item_keyword(kw)
         }
 
         fn is_structural_keyword(kw: $P::KeywordRef<'_>) -> Option<$P::IsStructural> {
-            $ttype::is_structural_keyword(kw)
-                .or_else(|| $SIGS_TYPE::is_structural_keyword(kw))
+            $NETDOC_PARSEABLE_TTYPE::is_structural_keyword(kw)
+                .or_else(|| <$SIGS_TYPE as $P::NetdocParseableSignatures>::is_item_keyword(kw).then_some($P::IsStructural))
         }
 
         fn from_items<'s>(
@@ -799,23 +1076,38 @@ define_derive_deftly! {
     impl<$tgens> $P::NetdocUnverified for $<$ttype Unverified> {
         type Body = $ttype;
         type Signatures = $SIGS_TYPE;
-        fn inspect_unverified(&self) -> (&Self::Body, &Self::Signatures) {
-            (&self.body, &self.signatures)
+        fn inspect_unverified(&self) -> (&Self::Body, &$SIGS_DATA_TYPE) {
+            (&self.body, &self.sigs)
         }
-        fn unwrap_unverified(self) -> (Self::Body, Self::Signatures) {
-            (self.body, self.signatures)
+        fn unwrap_unverified(self) -> (Self::Body, $SIGS_DATA_TYPE) {
+            (self.body, self.sigs)
         }
-        fn from_parts(body: Self::Body, signatures: Self::Signatures) -> Self {
-            Self { body, signatures }
+        fn from_parts(body: Self::Body, sigs: $SIGS_DATA_TYPE) -> Self {
+            Self { body, sigs }
+        }
+    }
+
+    impl<$tgens> $P::HasUnverifiedParsedBody for $ttype {
+        type UnverifiedParsedBody = $NETDOC_PARSEABLE_TTYPE;
+        fn unverified_into_inner_unchecked(unverified: Self::UnverifiedParsedBody) -> Self {
+            unverified.unverified
         }
     }
 }
+
+//==================== ItemValueParseable user-facing derive macro ====================
+//
+// deftly template `ItemValueParseable`
+//
+//  * entrypoint for deriving the `ItemValueParseable` and `SignatureItemParseable` traits
+//  * docs for the meta attributes we support during *item* parsing
+//  * implementation of those derives
 
 define_derive_deftly! {
     use NetdocDeriveAnyCommon;
     use NetdocItemDeriveCommon;
 
-    /// Derive `ItemValueParseable`
+    /// Derive `ItemValueParseable` (or `SignatureItemParseable`)
     ///
     // NB there is very similar wording in the ItemValueEncodable derive docs.
     // If editing any of this derive's documentation, considering editing that too.
@@ -854,9 +1146,18 @@ define_derive_deftly! {
     ///    Reject, rather than ignore, additional arguments found in the document
     ///    which aren't described by the struct.
     ///
+    ///  * **`#[deftly(netdoc(signature(hash_accu = "HASH_ACCU"))]**:
+    ///
+    ///    This item is a signature item.
+    ///    [`SignatureItemParseable`] will be implemented instead of [`ItemValueParseable`].
+    ///
+    ///    **`HASH_ACCU`** is the type in which the hash(es) for this item will be accumulated,
+    ///    and must implement [`SignatureHashesAccumulator`].
+    ///    It is used as [`SignatureItemParseable::HashAccu`].
+    ///
     /// * **`#[deftly(netdoc(debug))]`**:
     ///
-    ///   Currently implemented only as a placeholde
+    ///   Currently implemented only as a placeholder
     ///
     ///   The generated implementation may in future generate copious debug output
     ///   to the program's stderr when it is run.
@@ -906,17 +1207,6 @@ define_derive_deftly! {
     ///    unless the object also implements `ItemObjectParseable`.
     ///    Errors from parsing will all be collapsed into
     ///    [`ErrorProblem::ObjectInvalidData`].
-    ///
-    ///  * **`#[deftly(netdoc(sig_hash = "HASH_METHOD"))]**:
-    ///
-    ///    This item is a signature item.
-    ///    [`SignatureItemParseable`] will be implemented instead of [`ItemValueParseable`].
-    ///
-    ///    This field is a document hash.
-    ///    The hash will be computed using `HASH_METHOD`,
-    ///    which will be resolved with `sig_hash_methods::*` in scope.
-    ///
-    ///    `fn HASH_METHOD(body: &SignatureHashInputs) -> HASH_FIELD_VALUE`.
     export ItemValueParseable for struct, expect items, beta_deftly:
 
     ${define P { $crate::parse2::internal_prelude }}
@@ -924,11 +1214,19 @@ define_derive_deftly! {
     ${define TRAIT ${if T_IS_SIGNATURE { SignatureItemParseable } else { ItemValueParseable }}}
     ${define METHOD ${if T_IS_SIGNATURE { from_unparsed_and_body } else { from_unparsed }}}
 
+    // SignatureItemParseable::HashAccu
+    ${define SIG_HASH_ACCU_TYPE ${tmeta(netdoc(signature(hash_accu))) as ty}}
+
     impl<$tgens> $P::$TRAIT for $ttype {
+      ${if T_IS_SIGNATURE {
+        type HashAccu = $SIG_HASH_ACCU_TYPE;
+      }}
+
         fn $METHOD<'s>(
             mut input: $P::UnparsedItem<'s>,
           ${if T_IS_SIGNATURE {
             document_body: &SignatureHashInputs<'_>,
+            hash_accu: &mut $SIG_HASH_ACCU_TYPE,
           }}
         ) -> $P::Result<Self, $P::EP>
         {
@@ -936,6 +1234,13 @@ define_derive_deftly! {
             use $P::*;
 
             $EMIT_DEBUG_PLACEHOLDER
+
+            ${if T_IS_SIGNATURE {
+                <$SIG_HASH_ACCU_TYPE as SignatureHashesAccumulator>::update_from_netdoc_body(
+                    hash_accu,
+                    document_body
+                )?;
+            }}
 
             let object = input.object();
             #[allow(unused)]
@@ -988,11 +1293,6 @@ define_derive_deftly! {
                       (args_consume.into_remaining())
                       .map_err(|_| AE::Invalid)
                       .map_err(args_consume.error_handler(stringify!($fname)))?
-              } }
-              F_SIG_HASH { {
-                  #[allow(unused_imports)]
-                  use $P::sig_hash_methods::*;
-                  ${fmeta(netdoc(sig_hash)) as path}(&document_body)
               } }
             };
           )

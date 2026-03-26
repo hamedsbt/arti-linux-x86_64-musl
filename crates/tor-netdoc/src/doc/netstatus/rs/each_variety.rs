@@ -19,7 +19,7 @@ use super::*;
 // https://spec.torproject.org/dir-spec/computing-consensus.html#flavor:microdesc
 //
 // The document digest moves about, and vote `m` items are even more exciting.
-// This is for the benefit of the `with` annotations for theses two fields:
+// This is for the benefit of the `with` annotations for these two fields:
 //
 //  RouterStatus.r.doc_digest aka RouterStatusIntroItem.doc_digest
 //  RouterStatus.m
@@ -94,7 +94,7 @@ pub struct RouterStatus {
     /// `r` --- Introduce a routerstatus entry
     ///
     /// <https://spec.torproject.org/dir-spec/consensus-formats.html#item:r>
-    /// (and, the the md version, which is different).
+    /// (and, the md version, which is different).
     pub r: RouterStatusIntroItem,
 
     /// `m` --- Microdescriptor or document digest
@@ -112,7 +112,7 @@ pub struct RouterStatus {
     /// `a` --- Further router address(es) (IPv6)
     ///
     /// <https://spec.torproject.org/dir-spec/consensus-formats.html#item:a>
-    /// (and, the the md version, which is different).
+    /// (and, the md version, which is different).
     #[cfg_attr(feature = "parse2", deftly(netdoc(single_arg)))]
     pub a: Vec<net::SocketAddr>,
 

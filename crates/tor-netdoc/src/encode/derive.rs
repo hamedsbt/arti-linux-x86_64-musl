@@ -37,7 +37,7 @@ define_derive_deftly_module! {
 
     ${define P { $crate::encode }}
 
-    // Suffix for error handling - specifically to add field informaton.
+    // Suffix for error handling - specifically to add field information.
     //
     // Usage:
     //    some_function().$BUG_CONTEXT?;
@@ -223,7 +223,7 @@ define_derive_deftly! {
     /// * **`#[deftly(netdoc(subdoc))]`**:
     ///
     ///   This field is a sub-document.
-    ///   The value type `T` must implment [`NetdocEncodable`]
+    ///   The value type `T` must implement [`NetdocEncodable`]
     ///   *instead of* `ItemValueEncodable`.
     ///
     ///   The field name is not used for parsging;
@@ -239,8 +239,6 @@ define_derive_deftly! {
     ///
     /// TODO NETDOC ENCODE provide an example when signatures are implemented.
     export NetdocEncodable beta_deftly, for struct, expect items:
-
-    ${if T_SIGNATURES { ${error "Encoding of signatures sub-documents is not yet supported" }}}
 
     impl<$tgens> $P::NetdocEncodable for $ttype {
         fn encode_unsigned(&self, out: &mut $P::NetdocEncoder) -> Result<(), $P::Bug> {
@@ -424,9 +422,6 @@ define_derive_deftly! {
                                 <$ftype as Display>::fmt
                       }}
                                 ));
-                  }
-                  F_SIG_HASH {
-                    ${error "NYI"}
                   }
                   F_OBJECT {
                             // We do this one later, in case it's not last in the struct.

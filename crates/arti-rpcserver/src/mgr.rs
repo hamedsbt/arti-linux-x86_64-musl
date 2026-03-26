@@ -6,7 +6,6 @@ use rand::Rng;
 use rpc::InvalidRpcIdentifier;
 use tor_rpcbase as rpc;
 use tracing::warn;
-use weak_table::WeakValueHashMap;
 
 use crate::{
     RpcAuthentication,
@@ -14,10 +13,10 @@ use crate::{
     globalid::{GlobalId, MacKey},
 };
 
-/// A function we use to construct Session objects in response to authentication.
-//
-// TODO RPC: Perhaps this should return a Result?
-type SessionFactory = Box<dyn Fn(&RpcAuthentication) -> Arc<dyn rpc::Object> + Send + Sync>;
+/// Alias to force use of RandomState, regardless of features enabled in `weak_tables`.
+///
+/// See <https://github.com/tov/weak-table-rs/issues/23> for discussion.
+type WeakValueHashMap<K, V> = weak_table::WeakValueHashMap<K, V, std::hash::RandomState>;
 
 /// Shared state, configuration, and data for all RPC sessions.
 ///
@@ -38,10 +37,6 @@ pub struct RpcMgr {
     ///
     /// **NOTE: observe the [Lock hierarchy](crate::mgr::Inner#lock-hierarchy)**
     dispatch_table: Arc<RwLock<rpc::DispatchTable>>,
-
-    /// A function that we use to construct new Session objects when authentication
-    /// is successful.
-    session_factory: SessionFactory,
 
     /// Lock-protected view of the manager's state.
     ///
@@ -107,10 +102,7 @@ type ObjectWithContext = (Arc<dyn rpc::Context>, Arc<dyn rpc::Object>);
 
 impl RpcMgr {
     /// Create a new RpcMgr.
-    pub fn new<F>(make_session: F) -> Result<Arc<Self>, RpcMgrError>
-    where
-        F: Fn(&RpcAuthentication) -> Arc<dyn rpc::Object> + Send + Sync + 'static,
-    {
+    pub fn new() -> Result<Arc<Self>, RpcMgrError> {
         let problems = rpc::check_method_names([]);
         // We warn about every problem.
         for (m, err) in &problems {
@@ -127,7 +119,6 @@ impl RpcMgr {
         Ok(Arc::new(RpcMgr {
             global_id_mac_key: MacKey::new(&mut rand::rng()),
             dispatch_table: Arc::new(RwLock::new(rpc::DispatchTable::from_inventory())),
-            session_factory: Box::new(make_session),
             inner: Mutex::new(Inner {
                 connections: WeakValueHashMap::new(),
             }),
@@ -165,17 +156,21 @@ impl RpcMgr {
     }
 
     /// Start a new session based on this RpcMgr, with a given TorClient.
-    pub fn new_connection(
+    pub fn new_connection<F>(
         self: &Arc<Self>,
         require_auth: tor_rpc_connect::auth::RpcAuth,
-    ) -> Arc<Connection> {
+        create_session: F,
+    ) -> Arc<Connection>
+    where
+        F: Fn(&RpcAuthentication) -> Arc<dyn rpc::Object> + Send + Sync + 'static,
+    {
         let connection_id = ConnectionId::from(rand::rng().random::<[u8; 16]>());
         let connection = Connection::new(
             connection_id,
             self.dispatch_table.clone(),
             self.global_id_mac_key.clone(),
-            Arc::downgrade(self),
             require_auth,
+            Box::new(create_session) as _,
         );
 
         let mut inner = self.inner.lock().expect("poisoned lock");
@@ -217,10 +212,5 @@ impl RpcMgr {
         };
         let obj = connection.lookup_by_idx(id.local_id)?;
         Some((connection, obj))
-    }
-
-    /// Construct a new object to serve as the `session` for a connection.
-    pub(crate) fn create_session(&self, auth: &RpcAuthentication) -> Arc<dyn rpc::Object> {
-        (self.session_factory)(auth)
     }
 }

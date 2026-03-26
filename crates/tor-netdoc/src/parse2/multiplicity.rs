@@ -136,9 +136,10 @@ pub trait ItemSetMethods: Copy + Sized {
     {
     }
     /// Check that the element type is a Signature
-    fn check_signature_item_parseable(self)
+    fn check_signature_item_parseable<H>(self, _: &mut H)
     where
         Self::Each: SignatureItemParseable,
+        H: AsMut<<Self::Each as SignatureItemParseable>::HashAccu>,
     {
     }
     /// Check that the element type is a sub-document
@@ -258,7 +259,7 @@ pub trait ArgumentSetMethods: Copy + Sized {
     /// The output type: the type of the field in the Item struct.
     ///
     /// This is *not* the type of an individual netdoc argument;
-    /// that is not explicity represented in the trait.
+    /// that is not explicitly represented in the trait.
     type Field: Sized;
 
     /// Parse zero or more argument(s) into `Self::Field`.

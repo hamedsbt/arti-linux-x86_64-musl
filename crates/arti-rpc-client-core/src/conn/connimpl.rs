@@ -319,7 +319,7 @@ enum ResponseDisposition<'a, Q: QueueId + ?Sized> {
     ForwardWaiting(&'a mut ResponseQueue<AnyRequestId>),
 
     /// This message is for some other request;
-    ///  we should instead forward it to the the polled request queue.
+    ///  we should instead forward it to the polled request queue.
     ForwardPollable(UserTag, &'a mut ResponseQueue<PolledRequests>),
 }
 
@@ -603,7 +603,7 @@ impl Receiver {
         &self,
         queue_id: &Q,
     ) -> Result<(Q::UserTag, ValidatedResponse), ProtoError> {
-        // Here in wait_on_message_for_impl, we do the the actual work
+        // Here in wait_on_message_for_impl, we do the actual work
         // of waiting for the message.
         let state = self.state.lock().expect("poisoned");
         let (result, mut state, should_alert) = self.wait_on_message_for_impl(state, queue_id);
@@ -871,7 +871,7 @@ impl RpcPoll {
     /// This method reads and writes data from the RPC server,
     /// until either:
     ///
-    ///   * A response is available to a request crated with [`RpcConn::submit`];
+    ///   * A response is available to a request created with [`RpcConn::submit`];
     ///     in which case, `RpcPoll::poll` returns that response.
     ///
     ///   * No further progress can be made without blocking;
@@ -879,9 +879,6 @@ impl RpcPoll {
     ///
     /// This is used in conjunction with `EventLoop` and/or `wants_to_write`;
     /// see [the `EventLoop` documentation] for details.
-    ///
-    /// Only one thread may call this method at a time.
-    /// (In Rust, this is enforced by having the method take a mutable reference.)
     pub fn poll(&mut self) -> Result<Result<(UserTag, AnyResponse), WouldBlock>, ProtoError> {
         use crate::nb_stream::PollStatus;
         // We try reading _and_ writing regardless; it won't hurt anything.

@@ -37,6 +37,11 @@
 //!
 //! TODO: This module doesn't implement plain consensuses.
 //!
+//! TODO: We need an object safe trait that combines the common operations found
+//! on netstatus documents, so we can store one in a `Box<dyn CommonNs>` or
+//! something similar; otherwise interfacing applications have a hard time to
+//! process netstatus documents in a flavor agnostic fashion.
+//!
 //! TODO: More testing is needed!
 //!
 //! TODO: There should be accessor functions for most of the fields here.
@@ -288,7 +293,7 @@ pub mod consensus_methods_comma_separated {
 /// <https://spec.torproject.org/dir-spec/consensus-formats.html#item:params>
 ///
 /// The same syntax is also used, and this type used for parsing, in various other places,
-/// for example routerstatus entry `w` items (bandwith weights):
+/// for example routerstatus entry `w` items (bandwidth weights):
 /// <https://spec.torproject.org/dir-spec/consensus-formats.html#item:w>
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct NetParams<T> {

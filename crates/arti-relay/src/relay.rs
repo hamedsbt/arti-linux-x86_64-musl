@@ -7,7 +7,9 @@ use std::sync::Arc;
 use anyhow::Context;
 use tokio::task::JoinSet;
 use tor_proto::RelayIdentities;
-use tracing::{debug, warn};
+use tracing::debug;
+#[cfg(unix)]
+use tracing::warn;
 
 use fs_mistrust::Mistrust;
 use tor_basic_utils::iter_join;
@@ -123,7 +125,7 @@ impl InertTorRelay {
     /// Connect the [`InertTorRelay`] to the Tor network.
     pub(crate) async fn init<R: Runtime>(self, runtime: R) -> anyhow::Result<TorRelay<R>> {
         // Attempt to generate any missing keys/cert from the KeyMgr.
-        let identities = crate::tasks::crypto::try_generate_keys(&self.keymgr)
+        let identities = crate::tasks::crypto::try_generate_keys(&runtime, &self.keymgr)
             .context("Failed to generate keys")?;
 
         TorRelay::init(runtime, self, identities).await
@@ -343,5 +345,10 @@ impl<R: Runtime> TorRelay<R> {
 
         // We can never get here since a `Void` cannot be constructed.
         void::unreachable(void);
+    }
+
+    /// Access the relay's key manager.
+    pub(crate) fn keymgr(&self) -> &Arc<KeyMgr> {
+        &self.keymgr
     }
 }

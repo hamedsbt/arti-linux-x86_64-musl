@@ -1,6 +1,6 @@
-//! A relay binary use to join the Tor network to relay anonymous communication.
+//! A relay binary used to join the Tor network to relay anonymous communication.
 //!
-//! NOTE: This binary is still highly experimental as in in active development, not stable and
+//! NOTE: This binary is still highly experimental as in active development, not stable and
 //! without any type of guarantee of running or even working.
 //!
 //! ## Error handling
@@ -70,6 +70,11 @@ use clap::Parser;
 use futures::FutureExt;
 use safelog::with_safe_logging_suppressed;
 use tor_basic_utils::iter_join;
+use tor_error::warn_report;
+use tor_relay_crypto::pk::{
+    RelayIdentityKeypair, RelayIdentityKeypairSpecifier, RelayIdentityRsaKeypair,
+    RelayIdentityRsaKeypairSpecifier,
+};
 use tor_rtcompat::SpawnExt;
 use tor_rtcompat::tokio::TokioRustlsRuntime;
 use tor_rtcompat::{Runtime, ToplevelRuntime};
@@ -197,12 +202,31 @@ fn start_relay(_args: cli::RunArgs, global_args: cli::GlobalArgs) -> anyhow::Res
         .finish();
     let logger = tracing::Dispatch::new(logger);
 
+    // Disable safe logging if requested.
+    // This guard will be dropped at the end of this function,
+    // which means we effectively re-enable safe logging once this function returns.
+    // TODO: Do we want this guard behaviour?
+    // I think it would be better to enable safe-logging forever?
+    let _safelog_guard = if config.logging.log_sensitive_information {
+        match safelog::disable_safe_logging() {
+            Ok(guard) => Some(guard),
+            Err(e) => {
+                // We don't need to propagate this error;
+                // it isn't the end of the world if we were unable to disable safe logging.
+                warn_report!(e, "Unable to disable safe logging");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     tracing::dispatcher::with_default(&logger, || {
         let runtime = init_runtime().context("Failed to initialize the runtime")?;
 
         // Configure tor-log-ratelim early before we begin logging.
         tor_log_ratelim::install_runtime(runtime.clone())
-            .context("Failed to initialze tor-log-ratelim")?;
+            .context("Failed to initialize tor-log-ratelim")?;
 
         let path_resolver = base_resolver();
         let relay =
@@ -264,6 +288,30 @@ async fn run_relay<R: Runtime>(
         .init(runtime)
         .await
         .context("Failed to bootstrap")?;
+
+    let keymgr = relay.keymgr();
+    let rsa_id = keymgr
+        .get::<RelayIdentityRsaKeypair>(&RelayIdentityRsaKeypairSpecifier::new())
+        .context("Failed to get RSA identity from key manager")?
+        .context("Missing RSA identity")?
+        .to_rsa_identity();
+    let ed_id = keymgr
+        .get::<RelayIdentityKeypair>(&RelayIdentityKeypairSpecifier::new())
+        .context("Failed to get Ed25519 identity from key manager")?
+        .context("Missing Ed25519 identity")?
+        .to_ed25519_id();
+
+    // Log the relay's identities.
+    // TODO: We should also log this after a key rotation:
+    // https://gitlab.torproject.org/tpo/core/arti/-/merge_requests/3773#note_3367789
+    // TODO: This is useful at info level while we're developing,
+    // but the level should probably be lowered in the future.
+    tracing::info!("RSA identity: {rsa_id}");
+    tracing::info!("Ed25519 identity: {ed_id}");
+
+    // TODO: I'd like to log the ntor key here as well so that we can build ntor circuits to the
+    // relay.
+
     // This blocks until end of time or an error.
     relay.run().await
 }

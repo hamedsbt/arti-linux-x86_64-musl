@@ -59,6 +59,25 @@ pub struct ParseError {
     pub column: Option<usize>,
 }
 
+impl ParseError {
+    /// Constructs a new [`ParseError`].
+    pub fn new(
+        problem: ErrorProblem,
+        doctype: &'static str,
+        file: &str,
+        lno: usize,
+        column: Option<usize>,
+    ) -> Self {
+        Self {
+            problem,
+            doctype,
+            file: file.to_owned(),
+            lno,
+            column,
+        }
+    }
+}
+
 /// Problem found when parsing a document
 ///
 /// Just the nature of the problem, including possibly which field or argument
@@ -154,7 +173,7 @@ pub enum ErrorProblem {
     /// Base64-encoded Object contains valid base64 specifying invalid data
     #[error("base64-encoded Object contains invalid data")]
     ObjectInvalidData,
-    /// Other parsing proble
+    /// Other parsing problem
     #[error("other problem: {0}")]
     OtherBadDocument(&'static str),
     /// Internal error in document parser
@@ -225,6 +244,9 @@ pub enum VerifyFailed {
     /// Something else is wrong
     #[error("document has uncategorised problem found during verification")]
     Other,
+    /// Bug
+    #[error("verification prevented by software bug")]
+    Bug,
 }
 
 impl From<signature::Error> for VerifyFailed {

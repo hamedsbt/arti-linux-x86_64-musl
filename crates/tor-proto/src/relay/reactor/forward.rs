@@ -29,6 +29,7 @@ use tor_rtcompat::{Runtime, SpawnExt as _};
 
 use futures::channel::mpsc;
 use futures::{SinkExt as _, StreamExt as _, future};
+use tracing::{debug, trace};
 
 use std::result::Result as StdResult;
 use std::sync::Arc;
@@ -62,7 +63,7 @@ pub(crate) struct Forward {
     /// Note: all circuit reactors of a relay need to be initialized
     /// with the *same* underlying Tor channel provider (`ChanMgr`),
     /// to enable the reuse of existing Tor channels where possible.
-    chan_provider: Arc<dyn ChannelProvider<BuildSpec = OwnedChanTarget> + Send>,
+    chan_provider: Arc<dyn ChannelProvider<BuildSpec = OwnedChanTarget> + Send + Sync>,
     /// Whether we have received an EXTEND2 on this circuit.
     ///
     // TODO(relay): bools can be finicky.
@@ -120,7 +121,7 @@ impl Forward {
     pub(crate) fn new(
         unique_id: UniqId,
         crypto_out: Box<dyn OutboundRelayLayer + Send>,
-        chan_provider: Arc<dyn ChannelProvider<BuildSpec = OwnedChanTarget> + Send>,
+        chan_provider: Arc<dyn ChannelProvider<BuildSpec = OwnedChanTarget> + Send + Sync>,
         event_tx: mpsc::Sender<CircEvent>,
     ) -> Self {
         Self {
@@ -153,7 +154,7 @@ impl Forward {
         let mut hops = hop_mgr.hops().write().expect("poisoned lock");
         let decode_res = hops
             .get_mut(hopnum)
-            .ok_or_else(|| internal!("msg from non-existant hop???"))?
+            .ok_or_else(|| internal!("msg from non-existent hop???"))?
             .inbound
             .decode(body.into())?;
 
@@ -225,6 +226,7 @@ impl Forward {
 
         let mut result_tx = self.event_tx.clone();
         let rt = runtime.clone();
+        let unique_id = self.unique_id;
 
         // TODO(relay): because we dispatch this the entire EXTEND2 handling to a background task,
         // we don't really need the channel provider to send us the outcome via an MPSC channel,
@@ -232,7 +234,7 @@ impl Forward {
         // because it runs in another task). Maybe we need to rethink the ChannelProvider API?
         runtime
             .spawn(async move {
-                let res = Self::extend_circuit(rt, extend2, chan_rx).await;
+                let res = Self::extend_circuit(rt, unique_id, extend2, chan_rx).await;
 
                 // Discard the error if the reactor shut down before we had
                 // a chance to complete the extend handshake
@@ -271,6 +273,7 @@ impl Forward {
     #[allow(unused_variables)] // will become used once we implement CREATED2 timeouts
     async fn extend_circuit<R: Runtime>(
         _runtime: R,
+        unique_id: UniqId,
         extend2: Extend2,
         mut chan_rx: mpsc::UnboundedReceiver<ChannelResult>,
     ) -> StdResult<ExtendResult, ReactorError> {
@@ -291,6 +294,11 @@ impl Forward {
             }
         };
 
+        debug!(
+            circ_id = %unique_id,
+            "Launched channel to the next hop"
+        );
+
         // Now that we finally have a forward Tor channel,
         // it's time to forward the onion skin and extend the circuit...
         //
@@ -310,6 +318,12 @@ impl Forward {
         // Time to write the CREATE2 to the outbound channel...
         let mut outbound_chan_tx = channel.sender();
         let cell = AnyChanCell::new(Some(circ_id), create2);
+
+        trace!(
+            circ_id = %unique_id,
+            "Sending CREATE2 to the next hop"
+        );
+
         outbound_chan_tx.send((cell, None)).await?;
 
         // TODO(relay): we need a timeout here, otherwise we might end up waiting forever
@@ -320,6 +334,11 @@ impl Forward {
         let response = createdreceiver
             .await
             .map_err(|_| internal!("channel disappeared?"))?;
+
+        trace!(
+            circ_id = %unique_id,
+            "Got CREATED2 response from next hop"
+        );
 
         let outbound = Outbound {
             circ_id,
@@ -361,7 +380,7 @@ impl Forward {
         let (hopnum, res) = self.decode_relay_cell(hop_mgr, cell)?;
         let (tag, decode_res) = match res {
             CellDecodeResult::Unrecognizd(body) => {
-                self.handle_unrecognized_cell(body, None)?;
+                self.handle_unrecognized_cell(body, None, early)?;
                 return Ok(None);
             }
             CellDecodeResult::Recognized(tag, res) => (tag, res),
@@ -373,6 +392,45 @@ impl Forward {
             hopnum,
             tag,
         }))
+    }
+
+    /// Handle a forward cell that we could not decrypt.
+    fn handle_unrecognized_cell(
+        &mut self,
+        body: RelayCellBody,
+        info: Option<QueuedCellPaddingInfo>,
+        early: bool,
+    ) -> StdResult<(), ReactorError> {
+        // TODO(relay): remove this log once we add some tests
+        // and confirm relaying cells works as expected
+        // (in practice it will be too noisy to be useful, even at trace level).
+        trace!(
+            circ_id = %self.unique_id,
+            "Forwarding unrecognized cell"
+        );
+
+        let Some(chan) = self.outbound.as_mut() else {
+            // The client shouldn't try to send us any cells before it gets
+            // an EXTENDED2 cell from us
+            return Err(Error::CircProto(
+                "Asked to forward cell before the circuit was extended?!".into(),
+            )
+            .into());
+        };
+
+        let msg = Relay::from(BoxedCellBody::from(body));
+        let relay = if early {
+            AnyChanMsg::RelayEarly(msg.into())
+        } else {
+            AnyChanMsg::Relay(msg)
+        };
+        let cell = AnyChanCell::new(Some(chan.circ_id), relay);
+
+        // Note: this future is always `Ready`, because we checked the sink for readiness
+        // before polling the input channel, so await won't block.
+        chan.outbound_chan_tx.start_send_unpin((cell, info))?;
+
+        Ok(())
     }
 
     /// Handle a TRUNCATE cell.
@@ -418,31 +476,6 @@ impl ForwardHandler for Forward {
             RelayCmd::TRUNCATE => self.handle_truncate().await,
             cmd => Err(internal!("relay cmd {cmd} not supported").into()),
         }
-    }
-
-    fn handle_unrecognized_cell(
-        &mut self,
-        body: RelayCellBody,
-        info: Option<QueuedCellPaddingInfo>,
-    ) -> StdResult<(), ReactorError> {
-        let Some(chan) = self.outbound.as_mut() else {
-            // The client shouldn't try to send us any cells before it gets
-            // an EXTENDED2 cell from us
-            return Err(Error::CircProto(
-                "Asked to forward cell before the circuit was extended?!".into(),
-            )
-            .into());
-        };
-
-        let msg = Relay::from(BoxedCellBody::from(body));
-        let relay = AnyChanMsg::Relay(msg);
-        let cell = AnyChanCell::new(Some(chan.circ_id), relay);
-
-        // Note: this future is always `Ready`, because we checked the sink for readiness
-        // before polling the input channel, so await won't block.
-        chan.outbound_chan_tx.start_send_unpin((cell, info))?;
-
-        Ok(())
     }
 
     async fn handle_forward_cell<R: Runtime>(
