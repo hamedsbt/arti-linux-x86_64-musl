@@ -102,11 +102,6 @@ adjustments, not the primary migration.
 
 **Why:** Cleanup. The `TransportImplHelper` trait now has `Send + Sync` supertraits (see `transport.rs`), making the explicit bounds redundant.
 
-### `src/lib.rs`
-**What:** `#[allow(unused)]` → `#[cfg_attr(not(feature = "relay"), expect(dead_code))]` on the `runtime` field.
-
-**Why:** Cleanup — more precise dead_code suppression.
-
 ### `src/transport.rs`
 **What:** `TransportImplHelper` trait gets `Send + Sync` supertraits added.
 
