@@ -86,17 +86,6 @@ adjustments, not the primary migration.
 
 ---
 
-## retry-error
-
-### `src/lib.rs`
-**What:** Doc example changed from `tor_time::{Instant, SystemTime}` to `std::time::{Instant, SystemTime}`.
-
-**Why:** The doc example shows user-facing code. Since `retry-error` is a standalone crate, using `std::time` in docs is correct.
-
-**FLAG:** The doctest explicitly uses `std::time::{Instant, SystemTime}`. If retry-error is used in WASM contexts, this doctest would fail to compile since `std::time::SystemTime` is not available on WASM. However, retry-error itself doesn't use these types internally (they're only in the example), so this is likely fine for now.
-
----
-
 ## tor-basic-utils
 
 ### `src/lib.rs`
@@ -149,13 +138,6 @@ adjustments, not the primary migration.
 **What:** Adds `#[allow(clippy::unused_async)]` to `maybe_extend_stem_circuit`.
 
 **Why:** The method is async only when certain features (`vanguards` + `hs-common`) are enabled. Without them, clippy warns about unused async.
-
-### `src/preemptive.rs`
-**What:** In test code: `tor_time::Instant` → `std::time::Instant` (combined with Duration import).
-
-**Why:** Test code only runs on native.
-
-**FLAG:** Reversion from `tor_time::Instant` to `std::time::Instant` in test code. Acceptable since tests only run on native, but inconsistent with the migration pattern in non-test code.
 
 ---
 
@@ -243,21 +225,6 @@ Read timeout change (total→idle) was reverted to upstream's original total tim
 
 ---
 
-## tor-dirserver
-
-### `src/mirror/operation.rs`
-**What:** In test code: `tor_time::SystemTime` → `std::time::SystemTime`.
-
-**Why:** Test-only code that runs on native.
-
-**FLAG:** Reversion in test code. Same pattern as other test reversions.
-
----
-
-## tor-error
-
-Time/async-compat migration only.
-
 ---
 
 ## tor-guardmgr
@@ -294,17 +261,6 @@ Time/async-compat migration only.
 
 **Why:** Clippy cleanup for the stub that must match the real impl's API.
 
-### `src/rend_handshake.rs`
-**What:** `RendCircConnector::now()` return type changed from `tor_time::Instant` to `std::time::Instant`.
-
-**Why:** Consistent with the hsservice's use of native `Instant` for timeout tracking.
-
----
-
-## tor-key-forge
-
-Time/async-compat migration only.
-
 ---
 
 ## tor-memquota
@@ -317,26 +273,6 @@ Time/async-compat migration only.
 **Why:**
 1. Clippy warns about `1 *` being a no-op multiplication; the expect says it's for consistency with `8 * GIB`.
 2. The `#[cfg]` attribute on an `if` condition doesn't work well (it gates the entire `if` statement, not just the condition). The refactoring makes the logic compile on all platforms.
-
----
-
-## tor-netdir
-
-### `src/testnet.rs`
-**What:** `tor_time::SystemTime` → `std::time::SystemTime`.
-
-**Why:** Test code that only runs on native.
-
-### `src/testprovider.rs`
-**What:** `tor_time::SystemTime` → `std::time::SystemTime` in `protocol_statuses()` return type.
-
-**FLAG:** This is in a public method signature of `TestNetDirProvider`. This reverts `SystemTime` to `std::time::SystemTime` in the test provider. Since this is test infrastructure, it's less concerning, but it's inconsistent with the migration direction. If `NetDirProvider::protocol_statuses()` uses `tor_time::SystemTime` in its trait definition, this impl should match.
-
----
-
-## tor-netdoc
-
-Time/async-compat migration only.
 
 ---
 
@@ -377,20 +313,10 @@ Time/async-compat migration only.
 
 **FLAG:** Reversion. The padding code uses `Instant` for high-precision timing of padding injections. This only runs on native (WASM doesn't support circuit padding). The reversion is intentional but should be noted.
 
-### `src/congestion/rtt.rs`
-**What:** In test code: `tor_time::Instant` → `std::time::Instant`.
-
-**Why:** Test code on native.
-
 ### `src/lib.rs`
 **What:** `time_since_last_incoming_traffic()` gets cfg-gated return (same pattern as `duration_unused()`).
 
 **Why:** `CoarseDuration` → `Duration` conversion differs on WASM.
-
-### `src/relay/channel/initiator.rs`, `src/relay/channel/responder.rs`
-**What:** `now: Option<tor_time::SystemTime>` → `now: Option<std::time::SystemTime>`.
-
-**FLAG:** These are in the relay-side channel code (initiator/responder verification). Reverting to `std::time::SystemTime` is correct since relay code only runs on native, but it's inconsistent with the client-side channel code that uses `tor_time::SystemTime`. This could be confusing for developers working across both sides.
 
 ---
 
@@ -446,15 +372,6 @@ Time/async-compat migration only.
 
 ---
 
-## tor-rtmock
-
-### `tests/rtcompat_timing.rs`
-**What:** `tor_time::SystemTime` → `std::time::SystemTime`.
-
-**FLAG:** Test reversion. The test file uses `std::time::{Duration, SystemTime}` instead of `tor_time` equivalents. Since this is a test that only runs on native, it's fine, but inconsistent.
-
----
-
 ## Summary of Flagged Issues
 
 ### Resolved
@@ -469,17 +386,4 @@ Time/async-compat migration only.
 
 5. **`tor-hsclient/src/pow/v1.rs`, `tor-hsservice/src/timeout_track.rs`, `tor-hsservice/src/time_store.rs`** — ~~Missed `std::time::Instant` migrations.~~ **FIXED:** Changed to `tor_time::Instant`.
 
-### Open (Low Priority)
-
-- **`tor-dirmgr/src/storage/custom.rs`** — `str_to_flavor()` is `#[allow(dead_code)]`. Should be removed if unused.
-
-
-
-### Remaining `std::time` Direct Usage (Acceptable)
-
-These files use `std::time` types directly. All are server-side, native-only, or test-only code that won't run on WASM:
-
-- **Native-only code:** `tor-proto/padding`, `tor-proto/relay/initiator+responder`, `tor-circmgr/preemptive` (test), `tor-proto/congestion/rtt` (test)
-- **Relay/hsservice code:** `tor-hsservice` (multiple files using `std::time::Instant` for timeout tracking)
-- **Test code:** `tor-netdir/testnet.rs`, `tor-netdir/testprovider.rs`, `tor-dirserver/mirror/operation.rs` (test), `tor-rtmock/tests`
-- **Docs:** `retry-error/src/lib.rs`
+All flagged issues have been resolved.
