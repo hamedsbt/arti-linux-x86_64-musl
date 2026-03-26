@@ -79,13 +79,6 @@ adjustments, not the primary migration.
 
 ## hashx
 
-### `bench/benches/hashx_bench.rs`
-**What:** `tor_time::Instant` → `std::time::Instant`.
-
-**Why:** Benchmark code — uses native `Instant` directly since benchmarks only run on native.
-
-**FLAG:** This is a reversion from `tor_time::Instant` back to `std::time::Instant`. This is correct for benchmark code that only runs on native, but it's inconsistent with the migration direction.
-
 ### `src/register.rs`
 **What:** `#[cfg(feature = "compiler")]` → `#[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]` on `RegisterId::as_u8()`.
 
@@ -110,17 +103,6 @@ adjustments, not the primary migration.
 **What:** `IoErrorExt::is_not_a_directory()` refactored from a single method with inline `#[cfg]` attributes around each error constant to three separate platform-specific method implementations (`unix`, `windows`, `not(any(unix, windows))`).
 
 **Why:** WASM (and other non-unix/non-windows) platforms don't have `ENOTDIR` or `ERROR_DIRECTORY`. The previous code using inline `#[cfg]` inside a single method body wouldn't compile on WASM because neither branch would exist.
-
----
-
-## tor-cert
-
-### `tests/invalid_certs.rs`
-**What:** Changes commented-out import from `use tor_time::SystemTime;` to `//use std::time::{Duration, SystemTime};`.
-
-**Why:** Cleanup of dead code in tests.
-
-**FLAG:** This is cosmetic — the import is commented out in both versions. No functional impact.
 
 ---
 
@@ -491,13 +473,13 @@ Time/async-compat migration only.
 
 - **`tor-dirmgr/src/storage/custom.rs`** — `str_to_flavor()` is `#[allow(dead_code)]`. Should be removed if unused.
 
-- **`tor-cert/tests/invalid_certs.rs`** — Editing a commented-out import is pure cosmetic noise.
+
 
 ### Remaining `std::time` Direct Usage (Acceptable)
 
 These files use `std::time` types directly. All are server-side, native-only, or test-only code that won't run on WASM:
 
-- **Native-only code:** `hashx/bench`, `tor-proto/padding`, `tor-proto/relay/initiator+responder`, `tor-circmgr/preemptive` (test), `tor-proto/congestion/rtt` (test)
+- **Native-only code:** `tor-proto/padding`, `tor-proto/relay/initiator+responder`, `tor-circmgr/preemptive` (test), `tor-proto/congestion/rtt` (test)
 - **Relay/hsservice code:** `tor-hsservice` (multiple files using `std::time::Instant` for timeout tracking)
 - **Test code:** `tor-netdir/testnet.rs`, `tor-netdir/testprovider.rs`, `tor-dirserver/mirror/operation.rs` (test), `tor-rtmock/tests`
 - **Docs:** `retry-error/src/lib.rs`
