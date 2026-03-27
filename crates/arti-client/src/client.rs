@@ -894,6 +894,7 @@ impl<R: Runtime> TorClient<R> {
 
         let path_resolver = Arc::new(config.path_resolver.clone());
 
+        #[cfg(not(target_arch = "wasm32"))]
         let (state_dir, mistrust) = config.state_dir()?;
         #[cfg(feature = "onion-service-service")]
         let state_directory =
