@@ -35,6 +35,28 @@ See `wasm-notes/review.md` for a detailed code review of this crate.
 
 ## tor-rtcompat (+972 -37)
 
+Arti is runtime-agnostic — it works with Tokio, async-std, or anything
+implementing its `Runtime` trait. This crate provides those
+implementations. On WASM, we add a new one: `WasmRuntime`.
+
+The central problem is that WASM is single-threaded but Arti's trait
+bounds assume `Send` (for multi-threaded runtimes). The solution is a
+two-part trick:
+
+1. **`wasm_compat` module** defines `Send` and `Sync` traits that are
+   real `std::marker::Send/Sync` on native but empty auto-implemented
+   traits on WASM. Code that uses `wasm_compat::Send` in bounds compiles
+   on both platforms — on WASM the bound is trivially satisfied.
+
+2. **`WasmRuntime`** implements `Runtime` using browser APIs:
+   `setTimeout` (via `gloo-timers`) for sleep, `spawn_local` for task
+   spawning, and a JS callback for opening socket connections (since
+   WASM can't do TCP). TLS uses `rustls` with `rustls-rustcrypto`
+   (pure-Rust crypto that compiles to WASM). JS types like
+   `JsProxyStream` get `unsafe impl Send` — safe because WASM is
+   single-threaded, so the `Send` bound is just satisfying the type
+   system.
+
 ### `src/lib.rs`
 **What:**
 - New `pub mod wasm_compat;` and `pub mod wasm;` (WASM-only).
@@ -72,14 +94,34 @@ See `wasm-notes/review.md` for a detailed code review of this crate.
 
 ## Storage Changes
 
-Changes across these three crates replace hard-coded filesystem/SQLite
-storage with an injectable `KeyValueStore` trait. Users implement one
-trait (get/set/delete strings by key), pass it to the builder, done.
+Arti normally persists two kinds of data: **state** (guard lists,
+bridge configs — small JSON blobs keyed by name) and **directory cache**
+(consensus documents, microdescriptors, authority certs — large,
+structured, with complex query patterns). On native, state goes to
+the filesystem via `FsStateMgr` and the directory cache goes to SQLite
+via `SqliteStore`. Neither exists on WASM.
 
-- `KeyValueStore` lives in `tor-persist`
-- `AnyStateMgr` (tor-persist) and `BoxedDirStore` (tor-dirmgr) both
-  take `Arc<dyn KeyValueStore>` directly — no intermediate adapter traits
-- `split_storage()` in arti-client passes the same Arc to both
+The solution is a single `KeyValueStore` trait: get/set/delete strings
+by key, plus a lock. Users implement this once (e.g., backed by
+IndexedDB in the browser, or the filesystem in Node.js). Internally,
+the same store is shared by two consumers:
+
+- **`AnyStateMgr`** (tor-persist) handles state. It prefixes keys with
+  `"state:"`, serializes Rust values to JSON via serde, and stores the
+  JSON string. Loading deserializes back. On native, `AnyStateMgr`
+  dispatches to `FsStateMgr` instead.
+
+- **`BoxedDirStore`** (tor-dirmgr) handles the directory cache. It
+  implements the full 20+ method `Store` trait by mapping each operation
+  to key-value calls. Consensus documents are stored as
+  `dir:consensus:microdesc:<sha3>`, microdescriptors as
+  `dir:microdesc:<digest>`, etc. Each is wrapped in a JSON-serializable
+  struct that captures the metadata (timestamps, hashes, flags) alongside
+  the content.
+
+`split_storage()` in arti-client just wraps the user's store in an
+`Arc` and passes the same Arc to both `AnyStateMgr` and `BoxedDirStore`.
+They share the lock.
 
 ### arti-client (+499 -14)
 
@@ -153,6 +195,13 @@ trait (get/set/delete strings by key), pass it to the builder, done.
 
 ## tor-proto (+51 -36)
 
+Arti tracks "time since last activity" on channels using
+`CoarseInstant` (a cheap monotonic timestamp from `tor-time`). On
+native, `CoarseDuration` converts to `std::time::Duration` via
+`Into::into`. On WASM, `CoarseDuration` *is* `Duration` (same
+underlying type), so the conversion is identity. The cfg-gated returns
+handle this: native goes through `Into::into`, WASM returns directly.
+
 ### `src/channel.rs`
 **What:** `duration_unused()` method gets cfg-gated return: on WASM, returns `duration` directly (already `Option<Duration>`); on native, maps through `Into::into` (converting from `CoarseDuration`).
 
@@ -166,6 +215,16 @@ trait (get/set/delete strings by key), pass it to the builder, done.
 ---
 
 ## tor-dirclient (+80 -1)
+
+Tor directory servers prefer zstd compression for directory downloads —
+it's significantly smaller than deflate. The standard `zstd` crate wraps
+a C library that can't compile to WASM. `RuzstdDecoder` plugs into the
+existing decoder pipeline (which already supports deflate, xz, and
+native zstd) as a fourth option using `ruzstd`, a pure-Rust zstd
+implementation. It buffers the entire compressed stream then decompresses
+in one shot — acceptable since directory documents are a few MB at most.
+The `zstd-wasm` feature flag controls which decoder is used; when both
+features are enabled, native zstd wins.
 
 ### `src/lib.rs`
 **What:**
@@ -182,6 +241,13 @@ trait (get/set/delete strings by key), pass it to the builder, done.
 ---
 
 ## tor-circmgr (+25 -3)
+
+Circuit building uses a "double timeout" pattern: a soft timeout fires
+first and logs a warning, while a hard "abandon" timeout kills the
+attempt. On native, the soft timeout runs in a spawned background task
+(requires `Send`). On WASM, spawning a `Send` future isn't possible
+(single-threaded), so the WASM version skips the soft timeout and just
+uses the abandon timeout directly.
 
 ### `src/build.rs`
 **What:** `double_timeout` function split into two versions: native (spawns background task for the soft timeout) and WASM (simplified, just uses `abandon` timeout directly since WASM is single-threaded and can't spawn background tasks for the soft timeout pattern).
