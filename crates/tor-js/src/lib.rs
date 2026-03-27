@@ -498,8 +498,9 @@ async fn fetch_impl(
     }
     let signal = extract_signal_from_js(&init)?;
 
-    // Parse method
-    let method = match fetch_init.method.as_deref() {
+    // Parse method (normalize to uppercase per Fetch spec)
+    let method_upper = fetch_init.method.as_deref().map(str::to_ascii_uppercase);
+    let method = match method_upper.as_deref() {
         Some("GET") | None => http::Method::GET,
         Some("POST") => http::Method::POST,
         Some("PUT") => http::Method::PUT,
