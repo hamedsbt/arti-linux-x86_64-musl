@@ -1303,17 +1303,19 @@ impl<R: Runtime> TorClient<R> {
         // non-reconfigurable anyways.
 
         let dir_cfg = new_config.dir_mgr_config().map_err(wrap_err)?;
-        let state_cfg = new_config
-            .storage
-            .expand_state_dir(&self.path_resolver)
-            .map_err(wrap_err)?;
         let addr_cfg = &new_config.address_filter;
         let timeout_cfg = &new_config.stream_timeouts;
 
         // Check that state_dir hasn't changed (only meaningful for filesystem-based state manager)
         #[cfg(not(target_arch = "wasm32"))]
-        if self.statemgr.path().is_some_and(|p| state_cfg != p) {
-            how.cannot_change("storage.state_dir").map_err(wrap_err)?;
+        {
+            let state_cfg = new_config
+                .storage
+                .expand_state_dir(&self.path_resolver)
+                .map_err(wrap_err)?;
+            if self.statemgr.path().is_some_and(|p| state_cfg != p) {
+                how.cannot_change("storage.state_dir").map_err(wrap_err)?;
+            }
         }
 
         self.memquota
