@@ -72,23 +72,24 @@ See `wasm-notes/review.md` for a detailed code review of this crate.
 
 ## Storage Changes
 
-Changes across these three crates form a custom storage abstraction
-stack, replacing hard-coded filesystem/SQLite dependencies with
-injectable backends:
+Changes across these three crates replace hard-coded filesystem/SQLite
+storage with an injectable `KeyValueStore` trait. Users implement one
+trait (get/set/delete strings by key), pass it to the builder, done.
 
-### arti-client (+717 -18)
+- `KeyValueStore` lives in `tor-persist`
+- `AnyStateMgr` (tor-persist) and `BoxedDirStore` (tor-dirmgr) both
+  take `Arc<dyn KeyValueStore>` directly — no intermediate adapter traits
+- `split_storage()` in arti-client passes the same Arc to both
 
-#### New file: `src/storage.rs`
-**What:** Adds a `KeyValueStore` trait and `split_storage()` function. The trait is a simple key-value interface (`get`, `set`, `delete`, `keys`, `try_lock`, `can_store`, `unlock`, `wait_for_unlock`). `split_storage` creates two adapters from a single store: a `KvStateAdapter` (implements `StringStore`, prefixes keys with `"state:"`) and a `KvDirAdapter` (implements `CustomDirStore`, passes keys through). Includes unit tests with an in-memory store.
+### arti-client (+499 -14)
 
-**Why:** WASM support. There is no filesystem or SQLite on WASM, so users need to provide custom storage. This is the public API surface for that.
+#### `src/storage.rs`
+**What:** Re-exports `KeyValueStore` and `StorageError` from `tor-persist`. Provides `split_storage()` which wraps a `KeyValueStore` in an Arc and passes it to both `AnyStateMgr::from_custom()` and `BoxedDirStore::new()`. Includes unit tests with an in-memory store.
 
-**Notes:** Well-structured. The `StorageError` type is `Box<dyn Error + Send + Sync>` which is simple but adequate.
+**Why:** Convenience API so users call `builder.storage(my_store)` and both state + directory subsystems use it.
 
 #### New file: `examples/readme_custom_storage.rs`
 **What:** Example demonstrating the `KeyValueStore` trait with a file-backed implementation.
-
-**Why:** Documentation/onboarding for the new storage API.
 
 #### `src/builder.rs`
 **What:** Adds `statemgr: Option<AnyStateMgr>` and `dirstore: Option<BoxedDirStore>` fields to `TorClientBuilder`. New methods: `state_mgr()`, `dir_store()`, `storage()` (convenience that calls `split_storage`). New `resolve_statemgr()` method that returns the override or constructs from config (with `#[cfg(target_arch = "wasm32")]` error path). The builder now passes `statemgr` and `dirstore` through to `TorClient::create_inner`.
@@ -109,48 +110,44 @@ injectable backends:
 
 **Flag:** The `wait_for_stop()` split into two near-identical methods (native vs WASM) is a bit unfortunate. A single method using the `AnyStateMgr::wait_for_unlock()` should work for both since `AnyStateMgr` already handles the dispatch internally.
 
-### tor-persist (+365 -5)
+### tor-persist (+391 -2)
 
 #### New file: `src/custom.rs`
-**What:** 325-line new file implementing:
-- `StringStore` trait (object-safe: `load_str`, `store_str`, `can_store`, `try_lock`, `unlock`, `wait_for_unlock`)
-- `AnyStateMgr` enum dispatching between `Fs(FsStateMgr)` (native only) and `Custom(Arc<dyn StringStore>)`
-- `StateMgr` impl for `AnyStateMgr` that delegates to either variant
-- `path()` method that returns `None` for custom backends
-- `wait_for_unlock()` with cfg-gated implementations
+**What:** Defines `KeyValueStore` trait (the single user-facing storage interface) and `AnyStateMgr` enum:
+- `KeyValueStore`: object-safe trait with `get`, `set`, `delete`, `keys`, `try_lock`, `can_store`, `unlock`, `wait_for_unlock`
+- `AnyStateMgr`: dispatches between `Fs(FsStateMgr)` (native) and `Custom(Arc<dyn KeyValueStore>)`
+- Custom variant prefixes keys with `"state:"`, handles JSON serde
 - Unit tests with in-memory store
 
-**Why:** Core abstraction for custom storage backends.
+**Why:** Core storage abstraction — the one trait users implement.
 
 #### `src/err.rs`
 **What:** New `Resource::Memory` variant. New public error constructors: `load_error()`, `store_error()`, `lock_error()`, `unlock_error()`.
 
-**Why:** External `StringStore` implementations need to construct errors.
+**Why:** External `KeyValueStore` implementations need to construct errors.
 
 #### `src/lib.rs`
-**What:** `Result<T>` type alias changed from `pub(crate)` to `pub`. Exports `AnyStateMgr`, `StringStore` from `custom` module.
+**What:** `Result<T>` type alias changed from `pub(crate)` to `pub`. Exports `AnyStateMgr`, `KeyValueStore`, `StorageError` from `custom` module.
 
 **Why:** External implementations need the `Result` type.
 
-### tor-dirmgr (+721 -14)
+### tor-dirmgr (+679 -3)
 
 #### `src/lib.rs`
 **What:**
 - `DirMgrStore::new()` gated behind `not(wasm32)`.
 - New `DirMgrStore::from_custom_store()` method.
-- Re-exports `BoxedDirStore`, `CustomDirStore`.
+- Re-exports `BoxedDirStore`.
 
 **Why:** WASM support — custom storage backend.
 
 #### New file: `src/storage/custom.rs`
-**What:** 677-line new file implementing:
-- `CustomDirStore` trait (object-safe: `load`, `store`, `delete`, `keys`, `is_readonly`, `upgrade_to_readwrite`)
+**What:** `BoxedDirStore` wrapping `Arc<dyn KeyValueStore>` directly, implementing the full `Store` trait:
 - JSON-serializable types: `StoredConsensus`, `StoredAuthcert`, `StoredMicrodesc`, `StoredRouterdesc`, `StoredBridgedesc`, `StoredProtocols`
-- Helper functions for key building, time conversion, hex encoding
-- `BoxedDirStore` wrapper implementing the full `Store` trait
+- Helper functions for key building (`dir:consensus:`, `dir:authcert:`, etc.), time conversion, hex encoding
 - Full implementation of all `Store` methods (consensus, authcerts, microdescs, router descs, bridge descs, protocol recommendations, expiration)
 
-**Why:** This is the directory storage adapter for custom backends. Allows non-SQLite storage (e.g., IndexedDB on WASM, or any key-value store).
+**Why:** Directory storage adapter for non-SQLite backends (e.g., IndexedDB on WASM).
 
 ---
 
