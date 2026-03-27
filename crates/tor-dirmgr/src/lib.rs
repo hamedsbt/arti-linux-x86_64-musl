@@ -85,7 +85,7 @@ use tor_netdir::params::NetParameters;
 use tor_netdir::{DirEvent, MdReceiver, NetDir, NetDirProvider};
 
 use tor_async_compat::async_trait;
-pub use storage::{BoxedDirStore, CustomDirStore};
+pub use storage::BoxedDirStore;
 use futures::stream::BoxStream;
 use oneshot_fused_workaround as oneshot;
 use tor_netdoc::doc::netstatus::ProtoStatuses;

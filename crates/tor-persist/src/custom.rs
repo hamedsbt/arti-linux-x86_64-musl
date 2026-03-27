@@ -1,8 +1,9 @@
-//! Object-safe custom storage trait and unified state manager enum.
+//! Key-value storage trait and unified state manager enum.
 //!
-//! This module provides [`StringStore`], an object-safe trait for custom storage
-//! backends that work with JSON strings, and [`AnyStateMgr`], an enum that
-//! dispatches between the native [`FsStateMgr`] and a custom [`StringStore`].
+//! This module provides [`KeyValueStore`], a simple key-value trait that users
+//! implement to provide custom storage for both state persistence and directory
+//! cache. [`AnyStateMgr`] dispatches between the native [`FsStateMgr`] and a
+//! custom [`KeyValueStore`] backend.
 
 use crate::err::{Action, Resource};
 use crate::{Error, ErrorSource, LockStatus, Result, StateMgr};
@@ -17,59 +18,45 @@ use crate::FsStateMgr;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
-/// An object-safe trait for custom storage backends.
+/// Error type for [`KeyValueStore`] operations.
+pub type StorageError = Box<dyn std::error::Error + Send + Sync>;
+
+/// A simple key-value storage backend.
 ///
-/// This trait provides a simplified interface for external storage implementations
-/// that work with JSON strings instead of generic types. This allows the trait
-/// to be object-safe and used with `Arc<dyn StringStore>`.
+/// Implement this trait once to provide both state persistence and directory
+/// cache storage. Use [`TorClientBuilder::storage()`](arti_client::TorClientBuilder::storage)
+/// to wire it in, or call [`split_storage()`](arti_client::storage::split_storage) directly.
 ///
-/// # Example
-///
-/// ```ignore
-/// use tor_persist::{StringStore, LockStatus};
-///
-/// struct MyStorage {
-///     // ... storage implementation
-/// }
-///
-/// impl StringStore for MyStorage {
-///     fn load_str(&self, key: &str) -> tor_persist::Result<Option<String>> {
-///         // Load JSON string from your storage
-///         # Ok(None)
-///     }
-///
-///     fn store_str(&self, key: &str, value: &str) -> tor_persist::Result<()> {
-///         // Store JSON string to your storage
-///         # Ok(())
-///     }
-///
-///     // ... implement other methods
-///     # fn can_store(&self) -> bool { true }
-///     # fn try_lock(&self) -> tor_persist::Result<LockStatus> { Ok(LockStatus::AlreadyHeld) }
-///     # fn unlock(&self) -> tor_persist::Result<()> { Ok(()) }
-/// }
-/// ```
-pub trait StringStore: Send + Sync {
-    /// Load a value as a JSON string from storage.
+/// Locking is shared between state and directory storage -- when the store
+/// is locked, both sides can write.
+pub trait KeyValueStore: Send + Sync {
+    /// Load a value by key. Returns `Ok(None)` if the key does not exist.
+    fn get(&self, key: &str) -> std::result::Result<Option<String>, StorageError>;
+
+    /// Store a value by key, replacing any previous value.
+    fn set(&self, key: &str, value: &str) -> std::result::Result<(), StorageError>;
+
+    /// Delete a key. Not an error if the key does not exist.
+    fn delete(&self, key: &str) -> std::result::Result<(), StorageError>;
+
+    /// List all keys whose names begin with `prefix`.
+    fn keys(&self, prefix: &str) -> std::result::Result<Vec<String>, StorageError>;
+
+    /// Try to acquire exclusive write access.
     ///
-    /// Returns `Ok(None)` if the key doesn't exist.
-    fn load_str(&self, key: &str) -> Result<Option<String>>;
+    /// Returns `Ok(true)` if the lock was newly acquired, `Ok(false)` if
+    /// already held. Implementations may use file locks, Web Locks API,
+    /// or any other advisory locking mechanism.
+    fn try_lock(&self) -> std::result::Result<bool, StorageError>;
 
-    /// Store a JSON string value to storage.
-    fn store_str(&self, key: &str, value: &str) -> Result<()>;
-
-    /// Return true if this storage currently holds the write lock.
+    /// Return true if this store currently holds the write lock.
     ///
     /// Returns `false` if the lock is not held by this instance, regardless
-    /// of whether another instance holds it. Matches the semantics of
-    /// [`StateMgr::can_store`].
-    fn can_store(&self) -> bool;
+    /// of whether another instance holds it.
+    fn can_store(&self) -> std::result::Result<bool, StorageError>;
 
-    /// Try to acquire the lock for exclusive write access.
-    fn try_lock(&self) -> Result<LockStatus>;
-
-    /// Release the lock.
-    fn unlock(&self) -> Result<()>;
+    /// Release the write lock.
+    fn unlock(&self) -> std::result::Result<(), StorageError>;
 
     /// Return a future that resolves when this store is dropped/unlocked.
     ///
@@ -80,7 +67,7 @@ pub trait StringStore: Send + Sync {
 }
 
 /// A state manager that dispatches between the native filesystem backend
-/// and a custom [`StringStore`] backend.
+/// and a custom [`KeyValueStore`] backend.
 ///
 /// On native platforms, the default is [`FsStateMgr`] (zero overhead).
 /// Custom storage can be provided via [`AnyStateMgr::from_custom`].
@@ -92,14 +79,14 @@ pub enum AnyStateMgr {
     /// Filesystem-based storage (native only).
     #[cfg(not(target_arch = "wasm32"))]
     Fs(FsStateMgr),
-    /// Custom string-based storage backend.
-    Custom(Arc<dyn StringStore>),
+    /// Custom key-value storage backend.
+    Custom(Arc<dyn KeyValueStore>),
 }
 
 impl AnyStateMgr {
-    /// Create an `AnyStateMgr` from a custom [`StringStore`] implementation.
-    pub fn from_custom<S: StringStore + 'static>(storage: S) -> Self {
-        Self::Custom(Arc::new(storage))
+    /// Create an `AnyStateMgr` from a custom [`KeyValueStore`] implementation.
+    pub fn from_custom(storage: Arc<dyn KeyValueStore>) -> Self {
+        Self::Custom(storage)
     }
 
     /// Construct from a filesystem path (native only).
@@ -129,7 +116,7 @@ impl AnyStateMgr {
     /// Return a future that resolves when this manager is dropped/unlocked.
     ///
     /// For filesystem-backed managers, this waits for the lock file to be released.
-    /// For custom backends, this defers to [`StringStore::wait_for_unlock`].
+    /// For custom backends, this defers to [`KeyValueStore::wait_for_unlock`].
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait_for_unlock(
         &self,
@@ -142,7 +129,7 @@ impl AnyStateMgr {
 
     /// Return a future that resolves when this manager is dropped/unlocked.
     ///
-    /// Defers to [`StringStore::wait_for_unlock`].
+    /// Defers to [`KeyValueStore::wait_for_unlock`].
     #[cfg(target_arch = "wasm32")]
     pub fn wait_for_unlock(
         &self,
@@ -164,6 +151,13 @@ impl AnyStateMgr {
     }
 }
 
+impl AnyStateMgr {
+    /// Add the `"state:"` prefix to a key for custom storage.
+    fn prefixed(key: &str) -> String {
+        format!("state:{}", key)
+    }
+}
+
 impl StateMgr for AnyStateMgr {
     fn load<D>(&self, key: &str) -> Result<Option<D>>
     where
@@ -172,15 +166,20 @@ impl StateMgr for AnyStateMgr {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Fs(fs) => fs.load(key),
-            Self::Custom(s) => match s.load_str(key)? {
-                Some(json_str) => {
-                    let value: D = serde_json::from_str(&json_str).map_err(|e| {
-                        Self::make_error(Arc::new(e).into(), Action::Loading, key)
-                    })?;
-                    Ok(Some(value))
+            Self::Custom(s) => {
+                let prefixed = Self::prefixed(key);
+                match s.get(&prefixed).map_err(|e| {
+                    Error::load_error(key, std::io::Error::other(e))
+                })? {
+                    Some(json_str) => {
+                        let value: D = serde_json::from_str(&json_str).map_err(|e| {
+                            Self::make_error(Arc::new(e).into(), Action::Loading, key)
+                        })?;
+                        Ok(Some(value))
+                    }
+                    None => Ok(None),
                 }
-                None => Ok(None),
-            },
+            }
         }
     }
 
@@ -192,7 +191,7 @@ impl StateMgr for AnyStateMgr {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Fs(fs) => fs.store(key, val),
             Self::Custom(s) => {
-                if !s.can_store() {
+                if !s.can_store().unwrap_or(false) {
                     return Err(Self::make_error(ErrorSource::NoLock, Action::Storing, key));
                 }
 
@@ -200,7 +199,10 @@ impl StateMgr for AnyStateMgr {
                     Self::make_error(Arc::new(e).into(), Action::Storing, key)
                 })?;
 
-                s.store_str(key, &json_str)
+                let prefixed = Self::prefixed(key);
+                s.set(&prefixed, &json_str).map_err(|e| {
+                    Error::store_error(key, std::io::Error::other(e))
+                })
             }
         }
     }
@@ -209,7 +211,7 @@ impl StateMgr for AnyStateMgr {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Fs(fs) => fs.can_store(),
-            Self::Custom(s) => s.can_store(),
+            Self::Custom(s) => s.can_store().unwrap_or(false),
         }
     }
 
@@ -217,7 +219,11 @@ impl StateMgr for AnyStateMgr {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Fs(fs) => fs.try_lock(),
-            Self::Custom(s) => s.try_lock(),
+            Self::Custom(s) => match s.try_lock() {
+                Ok(true) => Ok(LockStatus::NewlyAcquired),
+                Ok(false) => Ok(LockStatus::AlreadyHeld),
+                Err(e) => Err(Error::lock_error(std::io::Error::other(e))),
+            },
         }
     }
 
@@ -225,7 +231,9 @@ impl StateMgr for AnyStateMgr {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Fs(fs) => fs.unlock(),
-            Self::Custom(s) => s.unlock(),
+            Self::Custom(s) => s.unlock().map_err(|e| {
+                Error::unlock_error(std::io::Error::other(e))
+            }),
         }
     }
 }
@@ -240,17 +248,22 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct TestData {
+        /// Name field.
         name: String,
+        /// Value field.
         value: i32,
     }
 
     /// A simple in-memory implementation for testing.
     struct TestStorage {
+        /// Data store.
         data: RwLock<HashMap<String, String>>,
+        /// Lock state.
         locked: RwLock<bool>,
     }
 
     impl TestStorage {
+        /// Create a new empty test storage.
         fn new() -> Self {
             Self {
                 data: RwLock::new(HashMap::new()),
@@ -259,33 +272,49 @@ mod tests {
         }
     }
 
-    impl StringStore for TestStorage {
-        fn load_str(&self, key: &str) -> Result<Option<String>> {
+    impl KeyValueStore for TestStorage {
+        fn get(&self, key: &str) -> std::result::Result<Option<String>, StorageError> {
             let data = self.data.read().unwrap();
             Ok(data.get(key).cloned())
         }
 
-        fn store_str(&self, key: &str, value: &str) -> Result<()> {
+        fn set(&self, key: &str, value: &str) -> std::result::Result<(), StorageError> {
             let mut data = self.data.write().unwrap();
             data.insert(key.to_string(), value.to_string());
             Ok(())
         }
 
-        fn can_store(&self) -> bool {
-            *self.locked.read().unwrap()
+        fn delete(&self, key: &str) -> std::result::Result<(), StorageError> {
+            self.data.write().unwrap().remove(key);
+            Ok(())
         }
 
-        fn try_lock(&self) -> Result<LockStatus> {
+        fn keys(&self, prefix: &str) -> std::result::Result<Vec<String>, StorageError> {
+            Ok(self
+                .data
+                .read()
+                .unwrap()
+                .keys()
+                .filter(|k| k.starts_with(prefix))
+                .cloned()
+                .collect())
+        }
+
+        fn can_store(&self) -> std::result::Result<bool, StorageError> {
+            Ok(*self.locked.read().unwrap())
+        }
+
+        fn try_lock(&self) -> std::result::Result<bool, StorageError> {
             let mut locked = self.locked.write().unwrap();
             if *locked {
-                Ok(LockStatus::AlreadyHeld)
+                Ok(false)
             } else {
                 *locked = true;
-                Ok(LockStatus::NewlyAcquired)
+                Ok(true)
             }
         }
 
-        fn unlock(&self) -> Result<()> {
+        fn unlock(&self) -> std::result::Result<(), StorageError> {
             *self.locked.write().unwrap() = false;
             Ok(())
         }
@@ -300,7 +329,7 @@ mod tests {
     #[test]
     fn test_any_state_mgr() {
         let storage = TestStorage::new();
-        let mgr = AnyStateMgr::from_custom(storage);
+        let mgr = AnyStateMgr::from_custom(Arc::new(storage));
 
         // Lock the manager
         let status = mgr.try_lock().unwrap();

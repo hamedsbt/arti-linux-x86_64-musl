@@ -8,9 +8,9 @@
 //! 2. Sync reads hit the in-memory cache
 //! 3. Writes update the cache and schedule async persistence via spawn_local()
 //!
-//! [`KeyValueStore`]: arti_client::storage::KeyValueStore
+//! [`KeyValueStore`]: tor_persist::KeyValueStore
 
-use arti_client::storage::{KeyValueStore, StorageError};
+use tor_persist::{KeyValueStore, StorageError};
 use futures::FutureExt as _;
 use js_sys::Promise;
 use std::collections::HashMap;

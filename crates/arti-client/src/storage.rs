@@ -1,16 +1,15 @@
 //! Unified key-value storage trait for custom backends.
 //!
-//! This module provides [`KeyValueStore`], a single trait that users implement
-//! to provide custom storage for both state persistence and directory cache.
-//! The [`split_storage`] function creates two adapters from a single store,
-//! using key prefixes to separate state and directory data.
+//! This module re-exports [`KeyValueStore`] and [`StorageError`] from
+//! [`tor_persist`], and provides [`split_storage`] to create both a state
+//! manager and a directory store from a single [`KeyValueStore`].
 //!
 //! # Key Conventions
 //!
-//! - **State keys** are prefixed with `"state:"` by the state adapter.
+//! - **State keys** are prefixed with `"state:"` by the state manager.
 //!   For example, the key `"guards"` becomes `"state:guards"` in the store.
 //! - **Directory keys** already include a `"dir:"` prefix (e.g.,
-//!   `"dir:consensus:microdesc:abc123"`). The directory adapter passes these
+//!   `"dir:consensus:microdesc:abc123"`). The directory store passes these
 //!   through unchanged.
 //!
 //! # Example
@@ -27,62 +26,13 @@
 //!     .await?;
 //! ```
 
-use std::pin::Pin;
 use std::sync::Arc;
-use tor_dirmgr::CustomDirStore;
-use tor_persist::{LockStatus, StringStore};
 
-/// Error type for [`KeyValueStore`] operations.
-pub type StorageError = Box<dyn std::error::Error + Send + Sync>;
-
-/// A simple key-value storage backend.
-///
-/// Implement this trait once to provide both state persistence and directory
-/// cache storage. Use [`TorClientBuilder::storage()`](crate::TorClientBuilder::storage)
-/// to wire it in, or call [`split_storage`] directly.
-///
-/// Locking is shared between state and directory storage — when the store
-/// is locked, both sides can write.
-pub trait KeyValueStore: Send + Sync {
-    /// Load a value by key. Returns `Ok(None)` if the key does not exist.
-    fn get(&self, key: &str) -> Result<Option<String>, StorageError>;
-
-    /// Store a value by key, replacing any previous value.
-    fn set(&self, key: &str, value: &str) -> Result<(), StorageError>;
-
-    /// Delete a key. Not an error if the key does not exist.
-    fn delete(&self, key: &str) -> Result<(), StorageError>;
-
-    /// List all keys whose names begin with `prefix`.
-    fn keys(&self, prefix: &str) -> Result<Vec<String>, StorageError>;
-
-    /// Try to acquire exclusive write access.
-    ///
-    /// Returns `Ok(true)` if the lock was newly acquired, `Ok(false)` if
-    /// already held. Implementations may use file locks, Web Locks API,
-    /// or any other advisory locking mechanism.
-    fn try_lock(&self) -> Result<bool, StorageError>;
-
-    /// Return true if this store currently holds the write lock.
-    ///
-    /// Returns `false` if the lock is not held by this instance, regardless
-    /// of whether another instance holds it.
-    fn can_store(&self) -> Result<bool, StorageError>;
-
-    /// Release the write lock.
-    fn unlock(&self) -> Result<(), StorageError>;
-
-    /// Return a future that resolves when this store is dropped/unlocked.
-    ///
-    /// Callers use this to wait until exclusive access becomes available.
-    fn wait_for_unlock(
-        &self,
-    ) -> Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>>;
-}
+pub use tor_persist::{KeyValueStore, StorageError};
 
 /// Split a single [`KeyValueStore`] into both a state manager and a directory store.
 ///
-/// This creates two adapters that share the same underlying store:
+/// This creates two views of the same underlying store:
 /// - A state manager that prefixes all keys with `"state:"`
 /// - A directory store that passes keys through as-is (they already have `"dir:"` prefix)
 pub fn split_storage<S: KeyValueStore + 'static>(
@@ -90,141 +40,10 @@ pub fn split_storage<S: KeyValueStore + 'static>(
 ) -> (tor_persist::AnyStateMgr, tor_dirmgr::BoxedDirStore) {
     let shared: Arc<dyn KeyValueStore> = Arc::new(store);
 
-    let state_adapter = KvStateAdapter {
-        store: Arc::clone(&shared),
-    };
-    let dir_adapter = KvDirAdapter {
-        store: shared,
-    };
-
-    let statemgr = tor_persist::AnyStateMgr::from_custom(state_adapter);
-    let dirstore = tor_dirmgr::BoxedDirStore::new(dir_adapter);
+    let statemgr = tor_persist::AnyStateMgr::from_custom(Arc::clone(&shared));
+    let dirstore = tor_dirmgr::BoxedDirStore::new(shared);
 
     (statemgr, dirstore)
-}
-
-// ============================================================================
-// KvStateAdapter — implements StringStore
-// ============================================================================
-
-/// Adapter that implements [`StringStore`] on top of a [`KeyValueStore`].
-///
-/// Adds a `"state:"` prefix to all keys.
-struct KvStateAdapter {
-    /// The underlying key-value store.
-    store: Arc<dyn KeyValueStore>,
-}
-
-impl KvStateAdapter {
-    /// Add the `"state:"` prefix to a key.
-    fn prefixed(key: &str) -> String {
-        format!("state:{}", key)
-    }
-}
-
-impl StringStore for KvStateAdapter {
-    fn load_str(&self, key: &str) -> tor_persist::Result<Option<String>> {
-        self.store
-            .get(&Self::prefixed(key))
-            .map_err(|e| tor_persist::Error::load_error(key, std::io::Error::other(e)))
-    }
-
-    fn store_str(&self, key: &str, value: &str) -> tor_persist::Result<()> {
-        self.store
-            .set(&Self::prefixed(key), value)
-            .map_err(|e| tor_persist::Error::store_error(key, std::io::Error::other(e)))
-    }
-
-    fn can_store(&self) -> bool {
-        self.store.can_store().unwrap_or(false)
-    }
-
-    fn try_lock(&self) -> tor_persist::Result<LockStatus> {
-        match self.store.try_lock() {
-            Ok(true) => Ok(LockStatus::NewlyAcquired),
-            Ok(false) => Ok(LockStatus::AlreadyHeld),
-            Err(e) => Err(tor_persist::Error::lock_error(std::io::Error::other(e))),
-        }
-    }
-
-    fn unlock(&self) -> tor_persist::Result<()> {
-        self.store
-            .unlock()
-            .map_err(|e| tor_persist::Error::unlock_error(std::io::Error::other(e)))
-    }
-
-    fn wait_for_unlock(
-        &self,
-    ) -> Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>> {
-        self.store.wait_for_unlock()
-    }
-}
-
-// ============================================================================
-// KvDirAdapter — implements CustomDirStore
-// ============================================================================
-
-/// Adapter that implements [`CustomDirStore`] on top of a [`KeyValueStore`].
-///
-/// Directory keys already include the `"dir:"` prefix, so no prefix is added.
-struct KvDirAdapter {
-    /// The underlying key-value store.
-    store: Arc<dyn KeyValueStore>,
-}
-
-impl CustomDirStore for KvDirAdapter {
-    fn load(&self, key: &str) -> tor_dirmgr::Result<Option<String>> {
-        self.store
-            .get(key)
-            .map_err(|e| {
-                tracing::warn!("custom dir store load error: {}", e);
-                tor_dirmgr::Error::CacheCorruption("custom storage read failed")
-            })
-    }
-
-    fn store(&self, key: &str, value: &str) -> tor_dirmgr::Result<()> {
-        if !self.store.can_store().unwrap_or(false) {
-            return Err(tor_dirmgr::Error::CacheCorruption("store is read-only"));
-        }
-        self.store.set(key, value).map_err(|e| {
-            tracing::warn!("custom dir store write error: {}", e);
-            tor_dirmgr::Error::CacheCorruption("custom storage write failed")
-        })
-    }
-
-    fn delete(&self, key: &str) -> tor_dirmgr::Result<()> {
-        if !self.store.can_store().unwrap_or(false) {
-            return Err(tor_dirmgr::Error::CacheCorruption("store is read-only"));
-        }
-        self.store.delete(key).map_err(|e| {
-            tracing::warn!("custom dir store delete error: {}", e);
-            tor_dirmgr::Error::CacheCorruption("custom storage delete failed")
-        })
-    }
-
-    fn keys(&self, prefix: &str) -> tor_dirmgr::Result<Vec<String>> {
-        self.store.keys(prefix).map_err(|e| {
-            tracing::warn!("custom dir store keys error: {}", e);
-            tor_dirmgr::Error::CacheCorruption("custom storage keys failed")
-        })
-    }
-
-    fn is_readonly(&self) -> bool {
-        !self.store.can_store().unwrap_or(false)
-    }
-
-    fn upgrade_to_readwrite(&mut self) -> tor_dirmgr::Result<bool> {
-        self.store.try_lock().map_err(|e| {
-            tracing::warn!("custom dir store lock error: {}", e);
-            tor_dirmgr::Error::CacheCorruption("custom storage lock failed")
-        }).map(|newly| {
-            // try_lock returns true if newly acquired, false if already held.
-            // upgrade_to_readwrite returns true if we now have write access.
-            // Either way, we have write access.
-            let _ = newly;
-            true
-        })
-    }
 }
 
 #[cfg(test)]
@@ -233,7 +52,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::RwLock;
-    use tor_persist::StateMgr;
+    use tor_persist::{LockStatus, StateMgr};
 
     /// Simple in-memory KeyValueStore for testing.
     struct MemStore {
@@ -300,7 +119,7 @@ mod tests {
 
         fn wait_for_unlock(
             &self,
-        ) -> Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>> {
+        ) -> std::pin::Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'static>> {
             Box::pin(futures::future::ready(()))
         }
     }
@@ -323,37 +142,6 @@ mod tests {
         // Missing key
         let missing: Option<String> = statemgr.load("missing").unwrap();
         assert!(missing.is_none());
-    }
-
-    #[test]
-    fn dir_adapter_passes_keys_through() {
-        // Test the KvDirAdapter directly
-        let store: Arc<dyn KeyValueStore> = Arc::new(MemStore::new());
-        let mut adapter = KvDirAdapter {
-            store: Arc::clone(&store),
-        };
-
-        // Initially readonly
-        assert!(adapter.is_readonly());
-
-        // Upgrade to readwrite (acquires lock on underlying store)
-        assert!(adapter.upgrade_to_readwrite().unwrap());
-        assert!(!adapter.is_readonly());
-
-        // Store a dir key (keys already include "dir:" prefix from BoxedDirStore)
-        adapter.store("dir:consensus:test", "consensus data").unwrap();
-
-        // Load it back
-        let loaded = adapter.load("dir:consensus:test").unwrap();
-        assert_eq!(loaded.as_deref(), Some("consensus data"));
-
-        // Keys
-        let keys = adapter.keys("dir:consensus:").unwrap();
-        assert_eq!(keys, vec!["dir:consensus:test"]);
-
-        // Delete
-        adapter.delete("dir:consensus:test").unwrap();
-        assert!(adapter.load("dir:consensus:test").unwrap().is_none());
     }
 
     #[test]

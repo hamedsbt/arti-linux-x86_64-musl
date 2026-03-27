@@ -2153,9 +2153,9 @@ impl<R: Runtime> TorClient<R> {
     /// Return a [`Future`] which resolves
     /// once this TorClient has stopped.
     ///
-    /// Defers to the custom storage backend's [`StringStore::wait_for_unlock`].
+    /// Defers to the custom storage backend's [`KeyValueStore::wait_for_unlock`].
     ///
-    /// [`StringStore::wait_for_unlock`]: tor_persist::StringStore::wait_for_unlock
+    /// [`KeyValueStore::wait_for_unlock`]: tor_persist::KeyValueStore::wait_for_unlock
     #[cfg(feature = "experimental-api")]
     #[cfg(target_arch = "wasm32")]
     pub fn wait_for_stop(

@@ -35,7 +35,7 @@ pub(crate) mod custom;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use sqlite::SqliteStore;
 
-pub use custom::{BoxedDirStore, CustomDirStore};
+pub use custom::BoxedDirStore;
 
 /// Convenient Sized & dynamic [`Store`]
 pub(crate) type DynStore = Box<dyn Store>;

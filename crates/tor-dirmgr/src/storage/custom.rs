@@ -1,11 +1,7 @@
-//! Object-safe custom storage trait for WASM environments.
-//!
-//! This module provides an object-safe trait [`CustomDirStore`] that can be
-//! implemented by external crates (like tor-js) to provide custom directory
-//! storage backends.
+//! Custom storage backend for directory cache using [`KeyValueStore`].
 //!
 //! The [`BoxedDirStore`] wrapper implements the full [`Store`] trait while
-//! delegating to a boxed [`CustomDirStore`], handling serialization internally.
+//! delegating to a [`KeyValueStore`], handling serialization internally.
 
 use crate::docmeta::{AuthCertMeta, ConsensusMeta};
 #[cfg(feature = "bridge-client")]
@@ -15,10 +11,11 @@ use crate::{Error, Result};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tor_netdoc::doc::authcert::AuthCertKeyIds;
 use tor_netdoc::doc::microdesc::MdDigest;
 use tor_netdoc::doc::netstatus::{ConsensusFlavor, Lifetime, ProtoStatuses};
+use tor_persist::KeyValueStore;
 use tor_time::{time_duration_to_std, SystemTime};
 
 #[cfg(feature = "routerdesc")]
@@ -26,50 +23,6 @@ use tor_netdoc::doc::routerdesc::RdDigest;
 
 #[cfg(feature = "bridge-client")]
 use tor_guardmgr::bridge::BridgeConfig;
-
-// ============================================================================
-// CustomDirStore trait
-// ============================================================================
-
-/// An object-safe trait for custom directory storage backends.
-///
-/// This trait provides a simplified key-value interface for external storage
-/// implementations. The [`BoxedDirStore`] wrapper handles conversion to/from
-/// the full [`Store`] trait with JSON serialization.
-///
-/// # Key Prefixes
-///
-/// Keys are prefixed to distinguish different data types:
-/// - `dir:consensus:{flavor}:{sha3_hex}` - Consensus documents
-/// - `dir:authcert:{id_hex}:{sk_hex}` - Authority certificates
-/// - `dir:microdesc:{digest_hex}` - Microdescriptors
-/// - `dir:bridge:{hash}` - Bridge descriptors
-/// - `dir:protocols` - Protocol recommendations
-///
-/// # Thread Safety
-///
-/// Implementations must be `Send + Sync` because arti requires these bounds
-/// even on WASM (which is single-threaded).
-pub trait CustomDirStore: Send + Sync {
-    /// Load a JSON value by key. Returns `Ok(None)` if not found.
-    fn load(&self, key: &str) -> Result<Option<String>>;
-
-    /// Store a JSON value by key.
-    fn store(&self, key: &str, value: &str) -> Result<()>;
-
-    /// Delete a key. Not an error if the key doesn't exist.
-    fn delete(&self, key: &str) -> Result<()>;
-
-    /// List all keys with the given prefix.
-    fn keys(&self, prefix: &str) -> Result<Vec<String>>;
-
-    /// Return true if this store is read-only.
-    fn is_readonly(&self) -> bool;
-
-    /// Try to upgrade from read-only to read-write mode.
-    /// Returns `Ok(true)` on success, `Ok(false)` if another process has the lock.
-    fn upgrade_to_readwrite(&mut self) -> Result<bool>;
-}
 
 // ============================================================================
 // JSON-serializable types for storage
@@ -250,38 +203,34 @@ fn flavor_to_str(flavor: ConsensusFlavor) -> &'static str {
 }
 
 // ============================================================================
-// BoxedDirStore - wrapper implementing Store for any CustomDirStore
+// BoxedDirStore - wrapper implementing Store for any KeyValueStore
 // ============================================================================
 
-/// A wrapper that implements [`Store`] for any [`CustomDirStore`].
+/// A wrapper that implements [`Store`] for any [`KeyValueStore`].
 ///
 /// This allows custom storage implementations to be used anywhere a `Store`
 /// is expected. JSON serialization/deserialization is handled automatically.
+///
+/// Directory keys already include the `"dir:"` prefix, so no additional
+/// prefix is added.
 #[derive(Clone)]
 pub struct BoxedDirStore {
-    /// The underlying custom store.
-    inner: Arc<RwLock<Box<dyn CustomDirStore>>>,
+    /// The underlying key-value store.
+    inner: Arc<dyn KeyValueStore>,
 }
 
 impl BoxedDirStore {
-    /// Create a new `BoxedDirStore` from a custom storage implementation.
-    pub fn new<S: CustomDirStore + 'static>(storage: S) -> Self {
-        Self {
-            inner: Arc::new(RwLock::new(Box::new(storage))),
-        }
-    }
-
-    /// Create a new `BoxedDirStore` from a boxed custom storage.
-    pub fn from_box(storage: Box<dyn CustomDirStore>) -> Self {
-        Self {
-            inner: Arc::new(RwLock::new(storage)),
-        }
+    /// Create a new `BoxedDirStore` from a shared [`KeyValueStore`].
+    pub fn new(storage: Arc<dyn KeyValueStore>) -> Self {
+        Self { inner: storage }
     }
 
     /// Load and deserialize a JSON value from the underlying store.
     fn load_json<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
-        let inner = self.inner.read().map_err(|_| Error::CacheCorruption("lock poisoned"))?;
-        match inner.load(key)? {
+        match self.inner.get(key).map_err(|e| {
+            tracing::warn!("custom dir store load error: {}", e);
+            Error::CacheCorruption("custom storage read failed")
+        })? {
             Some(json) => {
                 let value: T = serde_json::from_str(&json)
                     .map_err(|_| Error::CacheCorruption("invalid JSON in cache"))?;
@@ -293,82 +242,108 @@ impl BoxedDirStore {
 
     /// Serialize and store a value as JSON in the underlying store.
     fn store_json<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
-        let inner = self.inner.read().map_err(|_| Error::CacheCorruption("lock poisoned"))?;
+        if !self.inner.can_store().unwrap_or(false) {
+            return Err(Error::CacheCorruption("store is read-only"));
+        }
         let json = serde_json::to_string(value)
             .map_err(|_| Error::CacheCorruption("failed to serialize"))?;
-        inner.store(key, &json)
+        self.inner.set(key, &json).map_err(|e| {
+            tracing::warn!("custom dir store write error: {}", e);
+            Error::CacheCorruption("custom storage write failed")
+        })
+    }
+
+    /// Delete a key from the underlying store.
+    fn delete_key(&self, key: &str) -> Result<()> {
+        if !self.inner.can_store().unwrap_or(false) {
+            return Err(Error::CacheCorruption("store is read-only"));
+        }
+        self.inner.delete(key).map_err(|e| {
+            tracing::warn!("custom dir store delete error: {}", e);
+            Error::CacheCorruption("custom storage delete failed")
+        })
+    }
+
+    /// List all keys with the given prefix.
+    fn list_keys(&self, prefix: &str) -> Result<Vec<String>> {
+        self.inner.keys(prefix).map_err(|e| {
+            tracing::warn!("custom dir store keys error: {}", e);
+            Error::CacheCorruption("custom storage keys failed")
+        })
     }
 }
 
 impl Store for BoxedDirStore {
     fn is_readonly(&self) -> bool {
-        self.inner
-            .read()
-            .map(|inner| inner.is_readonly())
-            .unwrap_or(true)
+        !self.inner.can_store().unwrap_or(false)
     }
 
     fn upgrade_to_readwrite(&mut self) -> Result<bool> {
-        let mut inner = self.inner.write().map_err(|_| Error::CacheCorruption("lock poisoned"))?;
-        inner.upgrade_to_readwrite()
+        self.inner.try_lock().map_err(|e| {
+            tracing::warn!("custom dir store lock error: {}", e);
+            Error::CacheCorruption("custom storage lock failed")
+        }).map(|_newly| {
+            // try_lock returns true if newly acquired, false if already held.
+            // Either way, we now have write access.
+            true
+        })
     }
 
     fn expire_all(&mut self, expiration: &ExpirationConfig) -> Result<()> {
         let now = SystemTime::now();
-        let inner = self.inner.read().map_err(|_| Error::CacheCorruption("lock poisoned"))?;
 
         // Expire consensuses
-        for key in inner.keys("dir:consensus:")? {
+        for key in self.list_keys("dir:consensus:")? {
             if let Some(stored) = self.load_json::<StoredConsensus>(&key)? {
                 let valid_until = secs_to_system_time(stored.valid_until_secs);
                 let expiry = valid_until + time_duration_to_std(expiration.consensuses);
                 if now >= expiry {
-                    inner.delete(&key)?;
+                    self.delete_key(&key)?;
                 }
             }
         }
 
         // Expire authcerts
-        for key in inner.keys("dir:authcert:")? {
+        for key in self.list_keys("dir:authcert:")? {
             if let Some(stored) = self.load_json::<StoredAuthcert>(&key)? {
                 let expires = secs_to_system_time(stored.expires_secs);
                 let expiry = expires + time_duration_to_std(expiration.authcerts);
                 if now >= expiry {
-                    inner.delete(&key)?;
+                    self.delete_key(&key)?;
                 }
             }
         }
 
         // Expire microdescs
-        for key in inner.keys("dir:microdesc:")? {
+        for key in self.list_keys("dir:microdesc:")? {
             if let Some(stored) = self.load_json::<StoredMicrodesc>(&key)? {
                 let listed = secs_to_system_time(stored.listed_at_secs);
                 let expiry = listed + time_duration_to_std(expiration.microdescs);
                 if now >= expiry {
-                    inner.delete(&key)?;
+                    self.delete_key(&key)?;
                 }
             }
         }
 
         // Expire router descriptors
         #[cfg(feature = "routerdesc")]
-        for key in inner.keys("dir:routerdesc:")? {
+        for key in self.list_keys("dir:routerdesc:")? {
             if let Some(stored) = self.load_json::<StoredRouterdesc>(&key)? {
                 let published = secs_to_system_time(stored.published_secs);
                 let expiry = published + time_duration_to_std(expiration.router_descs);
                 if now >= expiry {
-                    inner.delete(&key)?;
+                    self.delete_key(&key)?;
                 }
             }
         }
 
         // Expire bridge descriptors
         #[cfg(feature = "bridge-client")]
-        for key in inner.keys("dir:bridge:")? {
+        for key in self.list_keys("dir:bridge:")? {
             if let Some(stored) = self.load_json::<StoredBridgedesc>(&key)? {
                 let until = secs_to_system_time(stored.until_secs);
                 if now >= until {
-                    inner.delete(&key)?;
+                    self.delete_key(&key)?;
                 }
             }
         }
@@ -381,11 +356,10 @@ impl Store for BoxedDirStore {
         flavor: ConsensusFlavor,
         pending: Option<bool>,
     ) -> Result<Option<InputString>> {
-        let inner = self.inner.read().map_err(|_| Error::CacheCorruption("lock poisoned"))?;
         let prefix = format!("dir:consensus:{}:", flavor_to_str(flavor));
 
         let mut latest: Option<StoredConsensus> = None;
-        for key in inner.keys(&prefix)? {
+        for key in self.list_keys(&prefix)? {
             if let Some(stored) = self.load_json::<StoredConsensus>(&key)? {
                 // Filter by pending status if specified
                 if let Some(want_pending) = pending {
@@ -408,11 +382,10 @@ impl Store for BoxedDirStore {
     }
 
     fn latest_consensus_meta(&self, flavor: ConsensusFlavor) -> Result<Option<ConsensusMeta>> {
-        let inner = self.inner.read().map_err(|_| Error::CacheCorruption("lock poisoned"))?;
         let prefix = format!("dir:consensus:{}:", flavor_to_str(flavor));
 
         let mut latest: Option<StoredConsensus> = None;
-        for key in inner.keys(&prefix)? {
+        for key in self.list_keys(&prefix)? {
             if let Some(stored) = self.load_json::<StoredConsensus>(&key)? {
                 // Only non-pending consensuses
                 if stored.pending {
@@ -446,10 +419,9 @@ impl Store for BoxedDirStore {
         &self,
         d: &[u8; 32],
     ) -> Result<Option<(InputString, ConsensusMeta)>> {
-        let inner = self.inner.read().map_err(|_| Error::CacheCorruption("lock poisoned"))?;
         let target_hex = hex::encode(d);
 
-        for key in inner.keys("dir:consensus:")? {
+        for key in self.list_keys("dir:consensus:")? {
             if let Some(stored) = self.load_json::<StoredConsensus>(&key)? {
                 if stored.sha3_of_signed_hex == target_hex {
                     let meta = stored.to_meta()?;
@@ -474,15 +446,12 @@ impl Store for BoxedDirStore {
     }
 
     fn mark_consensus_usable(&mut self, cmeta: &ConsensusMeta) -> Result<()> {
-        let inner = self.inner.read().map_err(|_| Error::CacheCorruption("lock poisoned"))?;
-
         // Find the consensus with matching sha3_of_whole
         let target_hex = hex::encode(cmeta.sha3_256_of_whole());
-        for key in inner.keys("dir:consensus:")? {
+        for key in self.list_keys("dir:consensus:")? {
             if let Some(mut stored) = self.load_json::<StoredConsensus>(&key)? {
                 if stored.sha3_of_whole_hex == target_hex {
                     stored.pending = false;
-                    drop(inner);
                     return self.store_json(&key, &stored);
                 }
             }
@@ -492,12 +461,11 @@ impl Store for BoxedDirStore {
     }
 
     fn delete_consensus(&mut self, cmeta: &ConsensusMeta) -> Result<()> {
-        let inner = self.inner.read().map_err(|_| Error::CacheCorruption("lock poisoned"))?;
         let target_hex = hex::encode(cmeta.sha3_256_of_whole());
 
-        for key in inner.keys("dir:consensus:")? {
+        for key in self.list_keys("dir:consensus:")? {
             if key.ends_with(&target_hex) {
-                inner.delete(&key)?;
+                self.delete_key(&key)?;
             }
         }
 
@@ -623,9 +591,8 @@ impl Store for BoxedDirStore {
 
     #[cfg(feature = "bridge-client")]
     fn delete_bridgedesc(&mut self, bridge: &BridgeConfig) -> Result<()> {
-        let inner = self.inner.read().map_err(|_| Error::CacheCorruption("lock poisoned"))?;
         let key = bridge_key(bridge);
-        inner.delete(&key)
+        self.delete_key(&key)
     }
 
     fn update_protocol_recommendations(
