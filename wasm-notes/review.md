@@ -153,15 +153,7 @@ If EOF occurs during chunked body reading and some data was already read, the
 decoder returns `Ok(None)` rather than an error. This silently accepts truncated
 responses instead of surfacing the incomplete transfer.
 
-### M10. Chunk size integer overflow in fetch
-
-`crates/tor-js/src/fetch.rs`
-
-`usize::from_str_radix()` parses hex chunk sizes without bounds. Extremely
-large chunk sizes could cause allocation failures. Should bound to a reasonable
-maximum.
-
-### M11. `rustls-rustcrypto` is alpha
+### M10. `rustls-rustcrypto` is alpha
 
 `crates/tor-rtcompat/Cargo.toml`
 
