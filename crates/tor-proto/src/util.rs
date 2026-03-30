@@ -1,6 +1,7 @@
 //! Utilities used for the tor protocol.
 
 pub(crate) mod ct;
+pub(crate) mod ts;
 pub(crate) mod err;
 pub(crate) mod keyed_futures_unordered;
 pub(crate) mod notify;

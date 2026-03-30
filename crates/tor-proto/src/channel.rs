@@ -87,7 +87,7 @@ use tor_error::internal;
 use tor_linkspec::{HasRelayIds, OwnedChanTarget};
 use tor_memquota::mq_queue::{self, ChannelSpec as _, MpscSpec};
 use tor_rtcompat::{DynTimeProvider, SleepProvider};
-use tor_time::AtomicOptTimestamp;
+use crate::util::ts::AtomicOptTimestamp;
 use tor_rtcompat::{CoarseInstant, CoarseTimeProvider};
 
 #[cfg(feature = "circ-padding")]

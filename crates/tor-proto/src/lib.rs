@@ -99,7 +99,7 @@ use tor_memquota::{
     mq_queue::{self, ChannelSpec as _},
 };
 use tor_rtcompat::DynTimeProvider;
-use tor_time::AtomicOptTimestamp;
+use crate::util::ts::AtomicOptTimestamp;
 
 #[doc(hidden)]
 pub use {derive_deftly, tor_memquota};

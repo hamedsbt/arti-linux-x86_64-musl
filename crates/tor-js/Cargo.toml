@@ -21,7 +21,6 @@ tor-dirmgr = { path = "../tor-dirmgr", default-features = false, features = ["zs
 tor-llcrypto = { path = "../tor-llcrypto" }
 tor-netdoc = { path = "../tor-netdoc" }
 tor-checkable = { path = "../tor-checkable" }
-tor-time = { path = "../tor-time" }
 tor-async-utils = { path = "../tor-async-utils", version = "0.40.0" }
 digest = "0.10"
 

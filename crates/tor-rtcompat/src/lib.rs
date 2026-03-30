@@ -80,7 +80,8 @@ pub use traits::{
 
 pub use dyn_time::DynTimeProvider;
 pub use timer::{SleepProviderExt, Timeout, TimeoutError};
-pub use tor_time::{CoarseDuration, CoarseInstant, CoarseTimeProvider, RealCoarseTimeProvider};
+mod coarse_time;
+pub use coarse_time::{CoarseDuration, CoarseInstant, CoarseTimeProvider, RealCoarseTimeProvider};
 
 /// Traits used to describe TLS connections and objects that can
 /// create them.

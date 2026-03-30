@@ -78,11 +78,11 @@ tor-error = { version = "0.40.0", path = "../tor-error", features = ["tracing"] 
 tor-general-addr = { version = "0.40.0", path = "../tor-general-addr" }
 tracing = "0.1.36"
 void = "1"
-tor-time = { version = "0.40.0", path = "../tor-time" }
 tor-cert-x509 = { version = "0.40.0", path = "../tor-cert-x509", optional = true }
 
 # Native-only dependencies (not available on WASM)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+coarsetime = "0.1.20"
 async-io = { version = "2.2.1", optional = true }
 async-native-tls = { version = "0.6.0", optional = true }
 async-std-crate = { package = "async-std", version = "1.7.0", optional = true }

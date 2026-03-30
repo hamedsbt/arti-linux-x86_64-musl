@@ -81,10 +81,10 @@ pub struct CoarseDuration(
 #[cfg(not(target_arch = "wasm32"))]
 pub struct CoarseInstant(coarsetime::Instant);
 
-/// On WASM, use crate's Instant since coarsetime doesn't support WASM
+/// On WASM, use web_time_compat's Instant since coarsetime doesn't support WASM
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
 #[cfg(target_arch = "wasm32")]
-pub struct CoarseInstant(crate::Instant);
+pub struct CoarseInstant(web_time_compat::Instant);
 
 // ==================== CoarseDuration conversions ====================
 
@@ -186,7 +186,7 @@ impl std::ops::Sub<CoarseInstant> for CoarseInstant {
 impl std::ops::Sub<CoarseInstant> for CoarseInstant {
     type Output = CoarseDuration;
     fn sub(self, rhs: CoarseInstant) -> CoarseDuration {
-        // crate::Instant subtraction returns std::time::Duration
+        // web_time_compat::Instant subtraction returns std::time::Duration
         CoarseDuration(self.0 - rhs.0)
     }
 }
@@ -212,7 +212,7 @@ impl CoarseInstant {
     #[cfg(target_arch = "wasm32")]
     #[inline]
     pub fn now() -> Self {
-        CoarseInstant(crate::Instant::now())
+        CoarseInstant(web_time_compat::Instant::now())
     }
 
     /// Returns the time elapsed since this instant was created.
