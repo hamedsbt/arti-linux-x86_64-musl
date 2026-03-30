@@ -153,39 +153,11 @@ If EOF occurs during chunked body reading and some data was already read, the
 decoder returns `Ok(None)` rather than an error. This silently accepts truncated
 responses instead of surfacing the incomplete transfer.
 
-### M10. `rustls-rustcrypto` is alpha
-
-`crates/tor-rtcompat/Cargo.toml`
-
-Uses `rustls-rustcrypto = "0.0.2-alpha"` for pure-Rust crypto on WASM. Should
-monitor for stability and potential security issues in the alpha release.
-
 ---
 
 ## Low
 
-### L1. HTTP method matching is case-sensitive
-
-`crates/tor-js/src/lib.rs`
-
-The Fetch spec normalizes methods to uppercase. `"get"` or `"post"` here
-returns `INVALID_METHOD`.
-
-### L2. `Blocking` trait panics on WASM
-
-`crates/tor-rtcompat/src/wasm.rs`
-
-`spawn_blocking` and `reenter_block_on` panic. Correct for WASM but any library
-code reaching these without a cfg guard causes a runtime crash.
-
-### L3. Fire-and-forget `spawn_local` writes in CachedJsStorage
-
-`crates/tor-js/src/storage.rs`
-
-If JS storage persistence fails (e.g., quota exceeded), the in-memory cache
-diverges from persistent storage. Errors are only logged.
-
-### L4. README out of sync with code
+### L1. README out of sync with code
 
 `crates/tor-js/README.md`
 
@@ -211,7 +183,7 @@ Still references `tor-snowflake` and `subtle-tls` which no longer exist.
 
 - Well-structured WASM/native separation using `cfg(target_arch = "wasm32")`
 - Clean storage abstraction: single `KeyValueStore` trait, no intermediate layers
-- `tor_async_compat::async_trait` elegantly removes `Send` bounds on WASM
+- `SendWrapper` + `SendFut` eliminate `unsafe impl Send` without a proc-macro crate
 - `tor-time` creates solid foundation for cross-platform time handling
 - Good error types in tor-js with retryability info and structured error codes
 - `unsafe impl Send/Sync` for WASM types are correctly justified (single-threaded)
@@ -256,3 +228,12 @@ These items were identified in earlier reviews and have been resolved:
     (see `potential-improvements.md`)
 16. **wasm.ts double-init** -- Idempotent pattern; rejected promise cached
     permanently, which is correct behavior (no silent retry of broken init)
+17. **Blocking panics on WASM** -- By design. `spawn_blocking` and
+    `reenter_block_on` are unreachable on WASM (only called from native-only
+    code paths: arti CLI, PoW solver, Tokio runtime)
+18. **Fire-and-forget writes in CachedJsStorage** -- By design. Async
+    write-back with error logging is the intended pattern for bridging sync
+    Rust reads with async JS storage. Errors don't affect correctness of
+    the in-memory cache for the current session
+19. **rustls-rustcrypto is alpha** -- External dependency, nothing to fix.
+    Monitor for updates
