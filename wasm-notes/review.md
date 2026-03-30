@@ -27,89 +27,11 @@ For per-crate change details, see `changes-explained.md`.
 
 ---
 
-## Medium
-
-### M1. `User-Agent: tor-js/0.1.0` enables fingerprinting
-
-`crates/tor-js/src/fetch.rs`
-
-The default User-Agent makes it trivial for exit nodes or destinations to
-identify traffic from this library. The Tor Browser uses a specific Firefox
-User-Agent for anonymity. Also, the header check is case-sensitive
-(`contains_key("User-Agent")` and `contains_key("user-agent")` checked
-separately) -- other casings like `"User-agent"` with mixed case would bypass.
-
-### M3. JS errors are plain objects, not `Error` instances
-
-`crates/tor-js/src/error.rs`
-
-`serde_wasm_bindgen::to_value()` produces `{code: "...", kind: "..."}` rather
-than a `new Error(...)`. `instanceof Error` checks fail, `.stack` is missing,
-and console output shows `[object Object]`.
-
-### M4. `unsafe impl Send/Sync` across WASM types
-
-`crates/tor-js/src/storage.rs`
-
-Multiple types use `unsafe impl Send` (and/or `Sync`) with the rationale "WASM
-is single-threaded." Justified today but will become unsound if WASM threads
-(`SharedArrayBuffer` + atomics) are enabled. Consider gating behind
-`#[cfg(not(target_feature = "atomics"))]`.
-
-### M5. `reconfigure` computes `state_cfg` unconditionally on WASM
-
-`crates/arti-client/src/client.rs`
-
-`expand_state_dir()` runs on WASM for no reason (the result is only used in a
-`#[cfg(not(target_arch = "wasm32"))]` block). May fail unnecessarily.
-
-### M6. Abort signal not raced into connect/TLS/header-read awaits
-
-`crates/tor-js/src/fetch.rs`
-
-`AbortSignal` is checked before connect, before sending the request, and between
-response-body chunks, but is not raced into the connect / TLS handshake /
-header-read awaits themselves. An abort remains "stuck" until the next explicit
-checkpoint rather than cancelling promptly.
-
-### M7. Duplicate and collapsed HTTP headers in fetch
-
-`crates/tor-js/src/fetch.rs`
-
-The request builder always writes `Host`, then caller-supplied headers verbatim,
-then appends `Content-Length` -- so duplicate `Host` / `Content-Length` headers
-are possible if the caller also sets them. On the response side, headers are
-collected into a `HashMap<String, String>`, which collapses repeated headers
-(e.g. `Set-Cookie`) instead of preserving them as the HTTP spec requires.
-
-### M8. 1xx interim responses not handled
-
-`crates/tor-js/src/fetch.rs`
-
-The parser classifies `1xx`, `204`, `304` as bodyless, but does not continue
-past an interim `1xx` to read the final response. A server sending `100
-Continue` before the real response would cause the fetch to return early with
-a 1xx status.
-
-### M9. Chunked decoder silently accepts truncated bodies
-
-`crates/tor-js/src/fetch.rs`
-
-If EOF occurs during chunked body reading and some data was already read, the
-decoder returns `Ok(None)` rather than an error. This silently accepts truncated
-responses instead of surfacing the incomplete transfer.
+*All medium items have been resolved. See Already Fixed section below.*
 
 ---
 
-## Low
-
-### L1. README out of sync with code
-
-`crates/tor-js/README.md`
-
-Documents a `JsHttpResponse` API and shows `response.text()` used
-synchronously, while the implementation now builds a real `web_sys::Response`.
-Still references `tor-snowflake` and `subtle-tls` which no longer exist.
+*All low items have been resolved. See Already Fixed section below.*
 
 ---
 
@@ -199,7 +121,27 @@ These items were identified in earlier reviews and have been resolved:
     to release the JS lock asynchronously. If the event loop stops (page
     unload), the Web Locks API releases automatically. Node.js file locks
     are cleaned up on process exit or detected stale via heartbeat.
-24. **Fast bootstrap skips verification** -- By design. The
+24. **User-Agent fingerprinting** -- Default User-Agent now forwards
+    `navigator.userAgent` from the browser. No UA in Node.js. Header checks
+    are case-insensitive via `has_header()`.
+25. **JS errors are plain objects** -- `into_js_value()` now returns proper
+    `js_sys::Error` with `code`/`kind`/`retryable` properties.
+26. **unsafe impl Send/Sync** -- Replaced with `send_wrapper::SendWrapper`
+    on struct fields and `SendFut` for async futures. No more unsafe.
+27. **reconfigure state_cfg on WASM** -- `expand_state_dir()` moved inside
+    `cfg(not(wasm32))` block.
+28. **Abort signal not raced into awaits** -- Known limitation, matches
+    browser fetch() behavior. Checkpoints cover before connect, before send,
+    and between body chunks. Gap during connect/TLS is typically seconds.
+29. **Duplicate/collapsed HTTP headers** -- Request: caller's Host/
+    Content-Length skipped with warning. Response: `Vec<(String, String)>`
+    preserves duplicates for `Headers::append()`.
+30. **1xx interim responses** -- Parser now loops past 1xx, rejects 101.
+31. **Chunked truncation** -- EOF mid-chunk now returns error.
+32. **HTTP method case** -- Normalized to uppercase per Fetch spec.
+33. **README out of sync** -- Crate README rewritten as developer doc,
+    points to ts-wrapper/README.md for usage.
+34. **Fast bootstrap skips verification** -- By design. The
     `dangerously_assume_wellsigned()`/`dangerously_assume_timely()` calls
     are only for metadata extraction (key IDs, timestamps for storage keys).
     Arti re-verifies all cached data cryptographically in `add_from_cache`:
