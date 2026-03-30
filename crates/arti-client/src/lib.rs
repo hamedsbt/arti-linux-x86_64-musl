@@ -144,8 +144,7 @@ pub(crate) fn software_release_date() -> std::time::SystemTime {
     let format = time::macros::format_description!("[year]-[month]-[day]");
     let date = time::Date::parse(release_date::ARTI_CLIENT_RELEASE_DATE, &format)
         .expect("Invalid hard-coded release date!?");
-    let odt = OffsetDateTime::new_utc(date, time::Time::MIDNIGHT);
-    std::time::SystemTime::from(odt)
+    OffsetDateTime::new_utc(date, time::Time::MIDNIGHT).into()
 }
 
 #[cfg(test)]
