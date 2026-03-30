@@ -72,11 +72,16 @@ impl JsTorError {
         Self::new("ABORT", "abort", "The operation was aborted", false)
     }
 
-    /// Convert to JsValue for returning to JavaScript
+    /// Convert to JsValue for returning to JavaScript.
+    ///
+    /// Returns a proper `Error` instance with `code`, `kind`, and `retryable`
+    /// properties, so `instanceof Error` works and `.stack` is available.
     pub fn into_js_value(self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self).unwrap_or_else(|_| {
-            JsValue::from_str(&format!("Error: {} - {}", self.code, self.message))
-        })
+        let err = js_sys::Error::new(&self.message);
+        js_sys::Reflect::set(&err, &"code".into(), &self.code.into()).ok();
+        js_sys::Reflect::set(&err, &"kind".into(), &self.kind.into()).ok();
+        js_sys::Reflect::set(&err, &"retryable".into(), &self.retryable.into()).ok();
+        err.into()
     }
 }
 
