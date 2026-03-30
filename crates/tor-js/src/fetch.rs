@@ -13,6 +13,22 @@ use std::collections::HashMap;
 use tracing::{debug, info};
 use url::Url;
 
+/// Get navigator.userAgent if available (returns None in Node.js/Deno).
+fn get_navigator_user_agent() -> Option<String> {
+    let navigator = js_sys::Reflect::get(&js_sys::global(), &"navigator".into()).ok()?;
+    if navigator.is_undefined() || navigator.is_null() {
+        return None;
+    }
+    let ua = js_sys::Reflect::get(&navigator, &"userAgent".into()).ok()?;
+    ua.as_string()
+}
+
+/// Check if a header key exists in the map (case-insensitive).
+fn has_header(headers: &HashMap<String, String>, name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    headers.keys().any(|k| k.to_ascii_lowercase() == lower)
+}
+
 /// Maximum response header size (64KB)
 const MAX_HEADER_SIZE: usize = 64 * 1024;
 
@@ -306,14 +322,18 @@ pub fn build_http_request(
         host
     );
 
-    // Add default headers if not present
-    if !headers.contains_key("User-Agent") && !headers.contains_key("user-agent") {
-        request.push_str("User-Agent: tor-js/0.1.0\r\n");
+    // Add default headers if not present (case-insensitive checks)
+    if !has_header(headers, "User-Agent") {
+        // Forward the browser's User-Agent to blend in with normal traffic.
+        // In Node.js/Deno, navigator.userAgent is undefined — send no UA.
+        if let Some(ua) = get_navigator_user_agent() {
+            request.push_str(&format!("User-Agent: {}\r\n", ua));
+        }
     }
-    if !headers.contains_key("Accept") && !headers.contains_key("accept") {
+    if !has_header(headers, "Accept") {
         request.push_str("Accept: */*\r\n");
     }
-    if !headers.contains_key("Connection") && !headers.contains_key("connection") {
+    if !has_header(headers, "Connection") {
         request.push_str("Connection: close\r\n");
     }
 
