@@ -29,16 +29,7 @@ For per-crate change details, see `changes-explained.md`.
 
 ## Medium
 
-### M1. JS storage lock never released on `close()`
-
-`crates/tor-js/src/lib.rs` and `storage.rs`
-
-`close()` sets `self.inner = None` but doesn't explicitly release the lock.
-The Drop impl on `CachedJsStorage` spawns an async `unlock()` via
-`spawn_local()` -- so lock release is fire-and-forget and may not complete if
-the event loop doesn't run after drop.
-
-### M2. `User-Agent: tor-js/0.1.0` enables fingerprinting
+### M1. `User-Agent: tor-js/0.1.0` enables fingerprinting
 
 `crates/tor-js/src/fetch.rs`
 
@@ -204,7 +195,11 @@ These items were identified in earlier reviews and have been resolved:
     directory download retries. `ready()` only runs after `create()`
     succeeds, meaning the network is reachable. Arti retries guards
     indefinitely, and the event stream accurately reflects status.
-23. **Fast bootstrap skips verification** -- By design. The
+23. **Lock release on close()** -- By design. Drop spawns `spawn_local`
+    to release the JS lock asynchronously. If the event loop stops (page
+    unload), the Web Locks API releases automatically. Node.js file locks
+    are cleaned up on process exit or detected stale via heartbeat.
+24. **Fast bootstrap skips verification** -- By design. The
     `dangerously_assume_wellsigned()`/`dangerously_assume_timely()` calls
     are only for metadata extraction (key IDs, timestamps for storage keys).
     Arti re-verifies all cached data cryptographically in `add_from_cache`:
