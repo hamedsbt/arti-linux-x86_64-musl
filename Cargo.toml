@@ -22,6 +22,7 @@ members = [
     "crates/safelog",
     "crates/tor-time",
     "crates/retry-error",
+    "crates/tor-time",
     "crates/tor-error",
     "crates/tor-general-addr",
     "crates/tor-events",

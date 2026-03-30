@@ -10,9 +10,8 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tor_dirmgr::{DirMgrConfig, DirMgrStore};
+use tor_dirmgr::{BoxedDirStore, DirMgrConfig, DirMgrStore};
 use tor_error::{ErrorKind, HasKind as _};
-use tor_dirmgr::BoxedDirStore;
 use tor_persist::AnyStateMgr;
 use tor_rtcompat::Runtime;
 use tor_time::Instant;
