@@ -191,10 +191,9 @@ pub(crate) mod impl_runtime_prelude {
     pub(crate) use std::io::Result as IoResult;
     pub(crate) use std::net::SocketAddr;
     pub(crate) use tor_rtcompat::{
-        Blocking, NetStreamProvider, Runtime, SleepProvider, TlsProvider, ToplevelBlockOn,
-        UdpProvider, unimpl::FakeListener, unimpl::FakeStream,
+        Blocking, CoarseInstant, CoarseTimeProvider, NetStreamProvider, Runtime, SleepProvider,
+        TlsProvider, ToplevelBlockOn, UdpProvider, unimpl::FakeListener, unimpl::FakeStream,
     };
-    pub(crate) use tor_rtcompat::{CoarseInstant, CoarseTimeProvider};
     pub(crate) use web_time_compat::{Duration, Instant, SystemTime, SystemTimeExt};
 }
 

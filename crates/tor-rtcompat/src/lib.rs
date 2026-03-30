@@ -73,15 +73,15 @@ pub mod wasm;
 #[cfg(all(any(feature = "async-std", feature = "tokio", feature = "smol"), not(target_arch = "wasm32")))]
 use std::io;
 pub use traits::{
-    Blocking, CertifiedConn, NetStreamListener, NetStreamProvider, NoOpStreamOpsHandle, Runtime,
-    SleepProvider, SpawnExt, StreamOps, TlsProvider, ToplevelBlockOn, ToplevelRuntime, UdpProvider,
-    UdpSocket, UnsupportedStreamOp,
+    Blocking, CertifiedConn, CoarseTimeProvider, NetStreamListener, NetStreamProvider,
+    NoOpStreamOpsHandle, Runtime, SleepProvider, SpawnExt, StreamOps, TlsProvider, ToplevelBlockOn,
+    ToplevelRuntime, UdpProvider, UdpSocket, UnsupportedStreamOp,
 };
 
+pub use coarse_time::{CoarseDuration, CoarseInstant, RealCoarseTimeProvider};
 pub use dyn_time::DynTimeProvider;
 pub use timer::{SleepProviderExt, Timeout, TimeoutError};
 mod coarse_time;
-pub use coarse_time::{CoarseDuration, CoarseInstant, CoarseTimeProvider, RealCoarseTimeProvider};
 
 /// Traits used to describe TLS connections and objects that can
 /// create them.

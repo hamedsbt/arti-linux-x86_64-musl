@@ -9,8 +9,7 @@ use dyn_clone::DynClone;
 use educe::Educe;
 use paste::paste;
 
-use crate::SleepProvider;
-use crate::{CoarseInstant, CoarseTimeProvider};
+use crate::{CoarseInstant, CoarseTimeProvider, SleepProvider};
 
 //-------------------- handle PreferredRuntime maybe not existing ----------
 

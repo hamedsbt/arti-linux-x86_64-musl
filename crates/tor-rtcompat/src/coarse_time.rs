@@ -225,18 +225,7 @@ impl CoarseInstant {
     }
 }
 
-// ==================== CoarseTimeProvider trait ====================
-
-/// Trait for providing reduced-precision timestamps
-///
-/// This trait allows for mockable coarse time in tests while using
-/// cheap OS calls in production.
-pub trait CoarseTimeProvider: Clone + Send + Sync + 'static {
-    /// Return the `CoarseTimeProvider`'s view of the current instant.
-    ///
-    /// This is supposed to be cheaper than `std::time::Instant::now`.
-    fn now_coarse(&self) -> CoarseInstant;
-}
+use crate::traits::CoarseTimeProvider;
 
 // ==================== RealCoarseTimeProvider ====================
 

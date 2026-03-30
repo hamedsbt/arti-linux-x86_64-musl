@@ -5,8 +5,7 @@
 /// Re-export the Smol runtime constructor implemented in `impls/smol.rs`.
 pub use crate::impls::smol::create_runtime as create_runtime_impl;
 
-use crate::{ToplevelBlockOn, compound::CompoundRuntime};
-use crate::RealCoarseTimeProvider;
+use crate::{RealCoarseTimeProvider, ToplevelBlockOn, compound::CompoundRuntime};
 use std::io::Result as IoResult;
 
 #[cfg(feature = "native-tls")]
