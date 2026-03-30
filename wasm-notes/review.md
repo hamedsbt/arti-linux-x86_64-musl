@@ -29,18 +29,7 @@ For per-crate change details, see `changes-explained.md`.
 
 ## High
 
-### H1. No locking for concurrent browser tabs
-
-`crates/tor-js/src/storage.rs`
-
-`try_lock()` / `unlock()` only track local boolean state -- no cross-tab
-coordination. The JS-side lock is acquired once in `CachedJsStorage::new()` and
-held for the client's lifetime. Multiple tabs sharing IndexedDB can corrupt each
-other's directory cache and guard state. The Web Locks API could solve this
-(the TS wrapper's `locking.ts` uses it when available, but the Rust layer
-doesn't participate in the protocol).
-
-### H2. No bootstrap timeout
+### H1. No bootstrap timeout
 
 `crates/tor-js/src/lib.rs`
 
@@ -48,16 +37,7 @@ doesn't participate in the protocol).
 errors, but there is no hard overall timeout. If the gateway is unresponsive but
 the connection stays open, `ready()` loops indefinitely.
 
-### H3. `state_dir()` called unconditionally in `create_inner`
-
-`crates/arti-client/src/client.rs`
-
-`config.state_dir()?` is called without a `#[cfg(not(target_arch = "wasm32"))]`
-guard. On WASM, filesystem path resolution may fail, preventing client creation
-even when custom storage is provided. The result is only used by the
-`onion-service-service` feature gate, but the call itself is unconditional.
-
-### H4. Fast bootstrap skips signature and timeliness verification
+### H2. Fast bootstrap skips signature and timeliness verification
 
 `crates/tor-js/src/fast_bootstrap.rs`
 
@@ -237,3 +217,9 @@ These items were identified in earlier reviews and have been resolved:
     the in-memory cache for the current session
 19. **rustls-rustcrypto is alpha** -- External dependency, nothing to fix.
     Monitor for updates
+20. **Cross-tab storage locking** -- Already handled by TS wrapper's
+    `locking.ts`: first tab acquires real lock (Web Locks API), writes to
+    IndexedDB. Other tabs fall back to in-memory overlay — reads from
+    IndexedDB, writes to memory. No cross-tab corruption.
+21. **`state_dir()` unconditional** -- Gated behind `#[cfg(not(wasm32))]`.
+    Only used by native-only features (pt-client, onion-service-service)
