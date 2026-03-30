@@ -92,7 +92,7 @@ impl WasmRuntime {
 pub struct WasmSleepFuture {
     /// The underlying timeout future from gloo-timers
     #[cfg(target_arch = "wasm32")]
-    inner: gloo_timers::future::TimeoutFuture,
+    inner: send_wrapper::SendWrapper<gloo_timers::future::TimeoutFuture>,
     /// Fallback for non-WASM (for testing)
     #[cfg(not(target_arch = "wasm32"))]
     rx: futures::channel::oneshot::Receiver<()>,
@@ -105,7 +105,7 @@ impl WasmSleepFuture {
         {
             let millis = duration.as_millis().min(u128::from(u32::MAX)) as u32;
             Self {
-                inner: gloo_timers::future::TimeoutFuture::new(millis),
+                inner: send_wrapper::SendWrapper::new(gloo_timers::future::TimeoutFuture::new(millis)),
             }
         }
 
@@ -127,8 +127,9 @@ impl Future for WasmSleepFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         #[cfg(target_arch = "wasm32")]
         {
-            // SAFETY: We never move the inner future after pinning
-            let inner = unsafe { self.map_unchecked_mut(|s| &mut s.inner) };
+            // SAFETY: We never move the inner future after pinning.
+            // Deref through SendWrapper to get the TimeoutFuture.
+            let inner = unsafe { self.map_unchecked_mut(|s| &mut *s.inner) };
             inner.poll(cx)
         }
 
@@ -144,8 +145,7 @@ impl Future for WasmSleepFuture {
     }
 }
 
-// SAFETY: The future only contains thread-safe types
-unsafe impl Send for WasmSleepFuture {}
+// WasmSleepFuture is Send because the inner future is wrapped in SendWrapper.
 
 impl SleepProvider for WasmRuntime {
     type SleepFuture = WasmSleepFuture;
@@ -257,6 +257,10 @@ impl<T: Send + 'static> Future for StubThreadHandle<T> {
 
 /// A stream backed by a JS socket object (WebSocket, WebRTC data channel, etc.).
 ///
+/// Owned JS closures kept alive for the socket's lifetime.
+#[cfg(target_arch = "wasm32")]
+type JsClosures = send_wrapper::SendWrapper<Vec<wasm_bindgen::closure::Closure<dyn FnMut(wasm_bindgen::JsValue)>>>;
+
 /// When a [`WasmRuntime`] has a connect function configured via
 /// [`WasmRuntime::set_connect_fn`], calls to `connect(addr)` invoke the JS
 /// callback and wrap the returned socket object as this stream.
@@ -267,7 +271,7 @@ impl<T: Send + 'static> Future for StubThreadHandle<T> {
 pub struct JsProxyStream {
     /// The underlying JS socket object (e.g. ArtiSocket from the TS wrapper).
     #[cfg(target_arch = "wasm32")]
-    socket: wasm_bindgen::JsValue,
+    socket: send_wrapper::SendWrapper<wasm_bindgen::JsValue>,
     /// Channel receiving incoming data chunks from the JS onmessage callback.
     #[cfg(target_arch = "wasm32")]
     rx: futures_channel::mpsc::UnboundedReceiver<IoResult<Vec<u8>>>,
@@ -276,7 +280,7 @@ pub struct JsProxyStream {
     buffer: Vec<u8>,
     /// Prevent the JS closures (onmessage, onclose) from being garbage collected.
     #[cfg(target_arch = "wasm32")]
-    _closures: Vec<wasm_bindgen::closure::Closure<dyn FnMut(wasm_bindgen::JsValue)>>,
+    _closures: JsClosures,
 
     // Non-WASM stub for compilation
     #[cfg(not(target_arch = "wasm32"))]
@@ -317,10 +321,10 @@ impl JsProxyStream {
             .map_err(|e| io::Error::other(format!("failed to set onclose: {:?}", e)))?;
 
         Ok(Self {
-            socket,
+            socket: send_wrapper::SendWrapper::new(socket),
             rx,
             buffer: Vec::new(),
-            _closures: vec![on_message, on_close],
+            _closures: send_wrapper::SendWrapper::new(vec![on_message, on_close]),
         })
     }
 
@@ -358,9 +362,7 @@ impl Drop for JsProxyStream {
     }
 }
 
-// SAFETY: WASM is single-threaded
-unsafe impl Send for JsProxyStream {}
-unsafe impl Sync for JsProxyStream {}
+// JsProxyStream is Send/Sync because JS types are wrapped in SendWrapper.
 
 impl AsyncRead for JsProxyStream {
     fn poll_read(

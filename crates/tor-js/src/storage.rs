@@ -75,28 +75,20 @@ extern "C" {
 ///
 /// Provides async methods that convert JS Promises to Rust Futures.
 pub struct JsStorage {
-    inner: JsStorageInterface,
+    inner: send_wrapper::SendWrapper<JsStorageInterface>,
 }
 
-// JsStorageInterface is a JsValue wrapper, we can clone it via JsValue::clone()
 impl Clone for JsStorage {
     fn clone(&self) -> Self {
-        // Clone the underlying JsValue
-        let inner_clone: JsStorageInterface = self.inner.clone().unchecked_into();
-        Self { inner: inner_clone }
+        let inner_clone: JsStorageInterface = (*self.inner).clone().unchecked_into();
+        Self { inner: send_wrapper::SendWrapper::new(inner_clone) }
     }
 }
-
-// SAFETY: WASM is single-threaded, so it's safe to send JsValue between "threads"
-// (there's only one thread). These impls are required because other parts of arti
-// have Send bounds even on WASM.
-unsafe impl Send for JsStorage {}
-unsafe impl Sync for JsStorage {}
 
 impl JsStorage {
     /// Create a new JsStorage from a JavaScript storage interface.
     pub fn new(interface: JsStorageInterface) -> Self {
-        Self { inner: interface }
+        Self { inner: send_wrapper::SendWrapper::new(interface) }
     }
 
     /// Get a value by key.
@@ -209,11 +201,7 @@ pub struct CachedJsStorage {
     drop_rx: futures::future::Shared<tor_async_utils::oneshot::Receiver<()>>,
 }
 
-// SAFETY: WASM is single-threaded, so it's safe to send CachedJsStorage between "threads"
-// (there's only one thread). The JsStorage inside contains JsValue which is not Send/Sync,
-// but since WASM has no threads, this is safe.
-unsafe impl Send for CachedJsStorage {}
-unsafe impl Sync for CachedJsStorage {}
+// CachedJsStorage is Send/Sync because JsStorage uses SendWrapper internally.
 
 impl CachedJsStorage {
     /// Create a new CachedJsStorage, preloading all data from JS storage.
