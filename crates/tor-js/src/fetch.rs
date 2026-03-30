@@ -372,78 +372,101 @@ where
         .await
         .map_err(|e| JsTorError::http_request(format!("Failed to flush request: {}", e)))?;
 
-    // Read until we find \r\n\r\n (header/body separator)
+    // Read response headers, skipping 1xx interim responses (except 101).
     let mut header_buf = Vec::new();
-    let mut buf = [0u8; 8192];
-    let header_end;
+    let status: u16;
+    let mut headers = HashMap::new();
+    let overflow: Vec<u8>;
 
     loop {
-        match stream.read(&mut buf).await {
-            Ok(0) => {
-                return Err(JsTorError::http_request(
-                    "Connection closed before headers received",
-                ));
-            }
-            Ok(n) => {
-                header_buf.extend_from_slice(&buf[..n]);
+        // Read until we find \r\n\r\n (header/body separator)
+        let mut buf = [0u8; 8192];
+        let header_end;
 
-                if let Some(pos) = find_subsequence(&header_buf, b"\r\n\r\n") {
-                    header_end = pos;
-                    break;
+        loop {
+            match stream.read(&mut buf).await {
+                Ok(0) => {
+                    return Err(JsTorError::http_request(
+                        "Connection closed before headers received",
+                    ));
                 }
+                Ok(n) => {
+                    header_buf.extend_from_slice(&buf[..n]);
 
-                if header_buf.len() > MAX_HEADER_SIZE {
+                    if let Some(pos) = find_subsequence(&header_buf, b"\r\n\r\n") {
+                        header_end = pos;
+                        break;
+                    }
+
+                    if header_buf.len() > MAX_HEADER_SIZE {
+                        return Err(JsTorError::http_request(format!(
+                            "Response headers exceed {}KB limit",
+                            MAX_HEADER_SIZE / 1024
+                        )));
+                    }
+                }
+                Err(e) => {
                     return Err(JsTorError::http_request(format!(
-                        "Response headers exceed {}KB limit",
-                        MAX_HEADER_SIZE / 1024
+                        "Failed to read response headers: {}",
+                        e
                     )));
                 }
             }
-            Err(e) => {
-                return Err(JsTorError::http_request(format!(
-                    "Failed to read response headers: {}",
-                    e
-                )));
+        }
+
+        // Split headers from overflow body bytes
+        let header_bytes = &header_buf[..header_end];
+        let remaining = header_buf[header_end + 4..].to_vec();
+
+        // Parse headers
+        let header_str = std::str::from_utf8(header_bytes)
+            .map_err(|e| JsTorError::http_request(format!("Invalid HTTP headers: {}", e)))?;
+
+        let mut lines = header_str.lines();
+
+        // Parse status line: "HTTP/1.1 200 OK"
+        let status_line = lines
+            .next()
+            .ok_or_else(|| JsTorError::http_request("Invalid HTTP response: no status line"))?;
+
+        let parts: Vec<&str> = status_line.splitn(3, ' ').collect();
+        if parts.len() < 2 {
+            return Err(JsTorError::http_request("Invalid HTTP status line"));
+        }
+
+        let parsed_status: u16 = parts[1]
+            .parse()
+            .map_err(|e| JsTorError::http_request(format!("Invalid status code: {}", e)))?;
+
+        // Handle 1xx interim responses
+        if (100..200).contains(&parsed_status) {
+            if parsed_status == 101 {
+                return Err(JsTorError::http_request(
+                    "101 Switching Protocols not supported",
+                ));
+            }
+            // Discard 1xx headers and re-read the next response.
+            // Any overflow bytes are the start of the next response.
+            header_buf = remaining;
+            continue;
+        }
+
+        // Final response
+        status = parsed_status;
+        headers.clear();
+        for line in lines {
+            if let Some((key, value)) = line.split_once(':') {
+                headers.insert(key.trim().to_lowercase(), value.trim().to_string());
             }
         }
-    }
-
-    // Split headers from overflow body bytes
-    let header_bytes = &header_buf[..header_end];
-    let overflow = header_buf[header_end + 4..].to_vec();
-
-    // Parse headers
-    let header_str = std::str::from_utf8(header_bytes)
-        .map_err(|e| JsTorError::http_request(format!("Invalid HTTP headers: {}", e)))?;
-
-    let mut lines = header_str.lines();
-
-    // Parse status line: "HTTP/1.1 200 OK"
-    let status_line = lines
-        .next()
-        .ok_or_else(|| JsTorError::http_request("Invalid HTTP response: no status line"))?;
-
-    let parts: Vec<&str> = status_line.splitn(3, ' ').collect();
-    if parts.len() < 2 {
-        return Err(JsTorError::http_request("Invalid HTTP status line"));
-    }
-
-    let status: u16 = parts[1]
-        .parse()
-        .map_err(|e| JsTorError::http_request(format!("Invalid status code: {}", e)))?;
-
-    let mut headers = HashMap::new();
-    for line in lines {
-        if let Some((key, value)) = line.split_once(':') {
-            headers.insert(key.trim().to_lowercase(), value.trim().to_string());
-        }
+        overflow = remaining;
+        break;
     }
 
     // Determine body framing
     let framing = if *method == Method::HEAD
         || status == 204
         || status == 304
-        || (100..200).contains(&status)
     {
         BodyFraming::None
     } else if headers
