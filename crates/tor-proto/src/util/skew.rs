@@ -1,7 +1,6 @@
 //! Tools and types for reporting declared clock skew.
 
-use std::time::Duration;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 /// A reported amount of clock skew from a relay or other source.
 ///

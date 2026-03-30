@@ -6,8 +6,7 @@ use futures::stream::{Stream, StreamExt};
 use rand::Rng;
 use safelog::Sensitive;
 use std::net::IpAddr;
-use std::sync::Arc;
-use std::time::SystemTime;
+use std::{sync::Arc, time::SystemTime};
 use tracing::trace;
 
 use tor_cell::chancell::msg::AnyChanMsg;

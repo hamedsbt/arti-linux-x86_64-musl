@@ -10,8 +10,7 @@ use tracing::{debug, instrument, trace};
 use safelog::{MaybeSensitive, Sensitive};
 use tor_cell::chancell::msg;
 use tor_linkspec::{ChannelMethod, OwnedChanTarget};
-use tor_rtcompat::{SleepProvider, StreamOps};
-use tor_rtcompat::CoarseTimeProvider;
+use tor_rtcompat::{CoarseTimeProvider, SleepProvider, StreamOps};
 
 use crate::ClockSkew;
 use crate::Result;

@@ -21,8 +21,7 @@ use tor_llcrypto::{d, pk, pk::rsa::RsaIdentity};
 use std::sync::LazyLock;
 
 use std::result::Result as StdResult;
-use std::{net, time::Duration};
-use std::time::SystemTime;
+use std::{net, time::Duration, time::SystemTime};
 
 use derive_deftly::Deftly;
 use digest::Digest;

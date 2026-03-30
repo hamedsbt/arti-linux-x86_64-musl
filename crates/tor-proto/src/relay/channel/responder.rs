@@ -15,8 +15,7 @@ use tracing::instrument;
 use tor_cell::chancell::msg;
 use tor_linkspec::{OwnedChanTarget, RelayIds};
 use tor_llcrypto as ll;
-use tor_rtcompat::{CertifiedConn, SleepProvider, StreamOps};
-use tor_rtcompat::CoarseTimeProvider;
+use tor_rtcompat::{CertifiedConn, CoarseTimeProvider, SleepProvider, StreamOps};
 use web_time_compat::{SystemTime, SystemTimeExt};
 
 use crate::{

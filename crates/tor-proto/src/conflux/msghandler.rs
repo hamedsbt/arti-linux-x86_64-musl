@@ -3,8 +3,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 use std::sync::atomic::{self, AtomicU64};
-use std::time::Duration;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use tor_cell::relaycell::{AnyRelayMsgOuter, RelayCmd, StreamId, UnparsedRelayMsg};
 use tor_error::{Bug, internal};

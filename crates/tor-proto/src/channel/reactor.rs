@@ -20,8 +20,7 @@ use tor_cell::chancell::ChanMsg;
 use tor_cell::chancell::msg::{Destroy, DestroyReason, Padding, PaddingNegotiate};
 use tor_cell::chancell::{AnyChanCell, CircId, msg::AnyChanMsg};
 use tor_error::debug_report;
-use tor_rtcompat::{DynTimeProvider, SleepProvider};
-use tor_rtcompat::CoarseTimeProvider;
+use tor_rtcompat::{CoarseTimeProvider, DynTimeProvider, SleepProvider};
 
 #[cfg_attr(not(target_os = "linux"), allow(unused))]
 use tor_error::error_report;

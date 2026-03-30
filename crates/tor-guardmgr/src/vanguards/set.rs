@@ -1,8 +1,7 @@
 //! Vanguard sets
 
 use std::cmp;
-use std::time::Duration;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use derive_deftly::Deftly;
 use rand::{RngCore, seq::IndexedRandom as _};

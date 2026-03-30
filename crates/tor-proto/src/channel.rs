@@ -86,9 +86,8 @@ use tor_cell::chancell::{AnyChanCell, CircId, msg::Netinfo, msg::PaddingNegotiat
 use tor_error::internal;
 use tor_linkspec::{HasRelayIds, OwnedChanTarget};
 use tor_memquota::mq_queue::{self, ChannelSpec as _, MpscSpec};
-use tor_rtcompat::{DynTimeProvider, SleepProvider};
 use crate::util::ts::AtomicOptTimestamp;
-use tor_rtcompat::{CoarseInstant, CoarseTimeProvider};
+use tor_rtcompat::{CoarseInstant, CoarseTimeProvider, DynTimeProvider, SleepProvider};
 
 #[cfg(feature = "circ-padding")]
 use tor_async_utils::counting_streams::{self, CountingSink, CountingStream};

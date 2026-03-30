@@ -20,8 +20,7 @@ use std::borrow::Cow;
 use std::future::Future;
 use std::iter::FromIterator;
 use std::pin::Pin;
-use std::time::Duration;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use itertools::Itertools;
 

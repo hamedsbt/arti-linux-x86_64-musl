@@ -1,7 +1,7 @@
 //! Convenience implementation of a TimeBound object.
 
 use std::ops::{Bound, Deref, RangeBounds};
-use web_time_compat::{Duration, SystemTime};
+use web_time_compat as time;
 
 /// A TimeBound object that is valid for a specified range of time.
 ///
@@ -33,9 +33,9 @@ pub struct TimerangeBound<T> {
     /// currently timely.
     obj: T,
     /// If present, when the object first became valid.
-    start: Option<SystemTime>,
+    start: Option<time::SystemTime>,
     /// If present, when the object will no longer be valid.
-    end: Option<SystemTime>,
+    end: Option<time::SystemTime>,
 }
 
 /// Helper: convert a Bound to its underlying value, if any.
@@ -44,7 +44,7 @@ pub struct TimerangeBound<T> {
 /// inclusive or exclusive.  However, since SystemTime has sub-second
 /// precision, we really don't care about what happens when the
 /// nanoseconds are equal to exactly 0.
-fn unwrap_bound(b: Bound<&'_ SystemTime>) -> Option<SystemTime> {
+fn unwrap_bound(b: Bound<&'_ time::SystemTime>) -> Option<time::SystemTime> {
     match b {
         Bound::Included(x) => Some(*x),
         Bound::Excluded(x) => Some(*x),
@@ -60,7 +60,7 @@ impl<T> TimerangeBound<T> {
     /// here.
     pub fn new<U>(obj: T, range: U) -> Self
     where
-        U: RangeBounds<SystemTime>,
+        U: RangeBounds<time::SystemTime>,
     {
         let start = unwrap_bound(range.start_bound());
         let end = unwrap_bound(range.end_bound());
@@ -70,8 +70,8 @@ impl<T> TimerangeBound<T> {
     /// Construct a new TimerangeBound object from a given object, start time, and end time.
     pub fn new_from_start_end(
         obj: T,
-        start: Option<SystemTime>,
-        end: Option<SystemTime>,
+        start: Option<time::SystemTime>,
+        end: Option<time::SystemTime>,
     ) -> Self {
         Self { obj, start, end }
     }
@@ -79,7 +79,7 @@ impl<T> TimerangeBound<T> {
     /// Adjust this time-range bound to tolerate an expiration time farther
     /// in the future.
     #[must_use]
-    pub fn extend_tolerance(self, d: Duration) -> Self {
+    pub fn extend_tolerance(self, d: time::Duration) -> Self {
         let end = match self.end {
             Some(t) => t.checked_add(d),
             _ => None,
@@ -89,7 +89,7 @@ impl<T> TimerangeBound<T> {
     /// Adjust this time-range bound to tolerate an initial validity
     /// time farther in the past.
     #[must_use]
-    pub fn extend_pre_tolerance(self, d: Duration) -> Self {
+    pub fn extend_pre_tolerance(self, d: time::Duration) -> Self {
         let start = match self.start {
             Some(t) => t.checked_sub(d),
             _ => None,
@@ -121,7 +121,7 @@ impl<T> TimerangeBound<T> {
     /// actually checked.
     pub fn dangerously_into_parts(
         self,
-    ) -> (T, (Option<SystemTime>, Option<SystemTime>)) {
+    ) -> (T, (Option<time::SystemTime>, Option<time::SystemTime>)) {
         let bounds = self.bounds();
 
         (self.obj, bounds)
@@ -158,20 +158,20 @@ impl<T> TimerangeBound<T> {
     }
 
     /// Return the underlying time bounds of this object.
-    pub fn bounds(&self) -> (Option<SystemTime>, Option<SystemTime>) {
+    pub fn bounds(&self) -> (Option<time::SystemTime>, Option<time::SystemTime>) {
         (self.start, self.end)
     }
 }
 
-impl<T> RangeBounds<SystemTime> for TimerangeBound<T> {
-    fn start_bound(&self) -> Bound<&SystemTime> {
+impl<T> RangeBounds<time::SystemTime> for TimerangeBound<T> {
+    fn start_bound(&self) -> Bound<&time::SystemTime> {
         self.start
             .as_ref()
             .map(Bound::Included)
             .unwrap_or(Bound::Unbounded)
     }
 
-    fn end_bound(&self) -> Bound<&SystemTime> {
+    fn end_bound(&self) -> Bound<&time::SystemTime> {
         self.end
             .as_ref()
             .map(Bound::Included)
@@ -182,7 +182,7 @@ impl<T> RangeBounds<SystemTime> for TimerangeBound<T> {
 impl<T> crate::Timebound<T> for TimerangeBound<T> {
     type Error = crate::TimeValidityError;
 
-    fn is_valid_at(&self, t: &SystemTime) -> Result<(), Self::Error> {
+    fn is_valid_at(&self, t: &time::SystemTime) -> Result<(), Self::Error> {
         use crate::TimeValidityError;
         if let Some(start) = self.start {
             if let Ok(d) = start.duration_since(*t) {

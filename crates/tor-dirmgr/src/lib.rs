@@ -99,8 +99,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{collections::HashMap, sync::Weak};
-use std::fmt::Debug;
-use std::time::SystemTime;
+use std::{fmt::Debug, time::SystemTime};
 
 use crate::state::{DirState, NetDirChange};
 pub use config::DirMgrConfig;

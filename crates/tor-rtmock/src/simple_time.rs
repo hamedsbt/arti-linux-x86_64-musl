@@ -13,8 +13,9 @@ use derive_more::AsMut;
 use priority_queue::priority_queue::PriorityQueue;
 use slotmap_careful::DenseSlotMap;
 
+use tor_rtcompat::CoarseInstant;
+use tor_rtcompat::CoarseTimeProvider;
 use tor_rtcompat::SleepProvider;
-use tor_rtcompat::{CoarseInstant, CoarseTimeProvider};
 
 use crate::time_core::MockTimeCore;
 

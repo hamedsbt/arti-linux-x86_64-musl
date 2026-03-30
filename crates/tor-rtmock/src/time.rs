@@ -28,8 +28,7 @@ use tracing::trace;
 
 use std::collections::HashSet;
 use std::fmt::Formatter;
-use tor_rtcompat::SleepProvider;
-use tor_rtcompat::{CoarseInstant, CoarseTimeProvider};
+use tor_rtcompat::{CoarseInstant, CoarseTimeProvider, SleepProvider};
 
 use crate::time_core::MockTimeCore;
 

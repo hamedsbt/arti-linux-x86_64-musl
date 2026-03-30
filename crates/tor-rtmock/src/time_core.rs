@@ -1,7 +1,8 @@
 //! [`MockTimeCore`] and [`MockCoarseTimeProvider`]
 
 use derive_deftly::{Deftly, define_derive_deftly};
-use tor_rtcompat::{CoarseDuration, CoarseInstant, CoarseTimeProvider, RealCoarseTimeProvider};
+use tor_rtcompat::{CoarseDuration, CoarseInstant};
+use tor_rtcompat::{CoarseTimeProvider, RealCoarseTimeProvider};
 use web_time_compat::{Duration, Instant, SystemTime};
 
 define_derive_deftly! {

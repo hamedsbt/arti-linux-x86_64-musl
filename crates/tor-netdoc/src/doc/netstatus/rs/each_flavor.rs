@@ -10,7 +10,6 @@
 //!
 //! See [`crate::doc::ns_variety_definition_macros`].
 
-use std::time::SystemTime;
 use super::*;
 
 impl RouterStatus {
@@ -110,7 +109,7 @@ impl RouterStatus {
         };
         // We check that the published time is well-formed, but we never use it
         // for anything in a consensus document.
-        let _ignore_published: SystemTime = {
+        let _ignore_published: time::SystemTime = {
             // TODO: It's annoying to have to do this allocation, since we
             // already have a slice that contains both of these arguments.
             // Instead, we could get a slice of arguments: we'd have to add

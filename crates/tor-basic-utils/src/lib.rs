@@ -46,9 +46,7 @@
 #![deny(clippy::unused_async)]
 //! <!-- @@ end lint list maintained by maint/add_warning @@ -->
 
-use std::collections::BinaryHeap;
 use std::fmt;
-use std::mem;
 use std::ops::{RangeInclusive, RangeToInclusive};
 use std::path::Path;
 use std::time::Duration;
@@ -273,59 +271,6 @@ impl GenRangeInfallible for Duration {
 }
 
 // ----------------------------------------------------------------------
-
-/// Implementation of `ErrorKind::NotADirectory` that doesn't require Nightly
-pub trait IoErrorExt: Sealed {
-    /// Is this `io::ErrorKind::NotADirectory` ?
-    fn is_not_a_directory(&self) -> bool;
-}
-impl Sealed for std::io::Error {}
-impl IoErrorExt for std::io::Error {
-    #[cfg(target_family = "unix")]
-    fn is_not_a_directory(&self) -> bool {
-        self.raw_os_error() == Some(libc::ENOTDIR)
-    }
-
-    #[cfg(target_family = "windows")]
-    fn is_not_a_directory(&self) -> bool {
-        /// Obtained from Rust stdlib source code
-        /// See also:
-        ///   <https://docs.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499->
-        /// (although the documentation is anaemic) and
-        /// <https://github.com/rust-lang/rust/pull/79965>
-        const ERROR_DIRECTORY: i32 = 267;
-        self.raw_os_error() == Some(ERROR_DIRECTORY)
-    }
-
-    #[cfg(not(any(target_family = "unix", target_family = "windows")))]
-    fn is_not_a_directory(&self) -> bool {
-        // WASM and other platforms don't have filesystem errors
-        false
-    }
-}
-
-// ----------------------------------------------------------------------
-
-/// Implementation of `BinaryHeap::retain` that doesn't require Nightly
-pub trait BinaryHeapExt<T> {
-    /// Remove all elements for which `f` returns `false`
-    ///
-    /// Performance is not great right now - the algorithm is `O(n*log(n))`
-    /// where `n` is the number of elements in the heap (not the number removed).
-    ///
-    /// The name is `retain_ext` to avoid a name collision with the unstable function,
-    /// which would require the use of UFCS and make this unergonomic.
-    fn retain_ext<F: FnMut(&T) -> bool>(&mut self, f: F);
-}
-impl<T: Ord> BinaryHeapExt<T> for BinaryHeap<T> {
-    fn retain_ext<F: FnMut(&T) -> bool>(&mut self, f: F) {
-        let items = mem::take(self).into_iter();
-        *self = items.filter(f).collect();
-    }
-}
-
-// ----------------------------------------------------------------------
-
 
 /// Renaming of `Path::display` as `display_lossy`
 pub trait PathExt: Sealed {

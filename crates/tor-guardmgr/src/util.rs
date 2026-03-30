@@ -1,8 +1,7 @@
 //! Helper functionality used by the rest of `tor-guardmgr`.
 
 use rand::Rng;
-use std::time::Duration;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use tor_basic_utils::RngExt as _;
 
 /// Return a random time within the range `when-max ..= when`.

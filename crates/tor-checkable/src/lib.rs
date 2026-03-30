@@ -46,7 +46,7 @@
 #![deny(clippy::unused_async)]
 //! <!-- @@ end lint list maintained by maint/add_warning @@ -->
 
-use std::time::Duration;
+use std::time;
 use thiserror::Error;
 use web_time_compat::{SystemTime, SystemTimeExt};
 
@@ -60,10 +60,10 @@ pub mod timed;
 pub enum TimeValidityError {
     /// The object is not yet valid
     #[error("Object will not be valid for {}", humantime::format_duration(*.0))]
-    NotYetValid(Duration),
+    NotYetValid(time::Duration),
     /// The object is expired
     #[error("Object has been expired for {}", humantime::format_duration(*.0))]
-    Expired(Duration),
+    Expired(time::Duration),
     /// The object isn't timely, and we don't know why, or won't say.
     #[error("Object is not currently valid")]
     Unspecified,
@@ -81,13 +81,13 @@ pub trait Timebound<T>: Sized {
     /// Check whether this object is valid at a given time.
     ///
     /// Return Ok if the object is valid, and an error if the object is not.
-    fn is_valid_at(&self, t: &SystemTime) -> Result<(), Self::Error>;
+    fn is_valid_at(&self, t: &time::SystemTime) -> Result<(), Self::Error>;
 
     /// Return the underlying object without checking whether it's valid.
     fn dangerously_assume_timely(self) -> T;
 
     /// Unwrap this Timebound object if it is valid at a given time.
-    fn check_valid_at(self, t: &SystemTime) -> Result<T, Self::Error> {
+    fn check_valid_at(self, t: &time::SystemTime) -> Result<T, Self::Error> {
         self.is_valid_at(t)?;
         Ok(self.dangerously_assume_timely())
     }
@@ -99,7 +99,7 @@ pub trait Timebound<T>: Sized {
 
     /// Unwrap this object if it is valid at the provided time t.
     /// If no time is provided, check the object at the current time.
-    fn check_valid_at_opt(self, t: Option<SystemTime>) -> Result<T, Self::Error> {
+    fn check_valid_at_opt(self, t: Option<time::SystemTime>) -> Result<T, Self::Error> {
         match t {
             Some(when) => self.check_valid_at(&when),
             None => self.check_valid_now(),
