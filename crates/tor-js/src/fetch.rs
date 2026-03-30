@@ -195,7 +195,10 @@ impl BodyReader {
                     let n = self.fill_buf(&mut buf).await?;
                     if n == 0 {
                         self.done = true;
-                        return Ok(None);
+                        return Err(JsTorError::http_request(format!(
+                            "Connection closed with {} bytes remaining in chunk",
+                            self.chunk_remaining
+                        )));
                     }
                     buf.truncate(n);
                     self.chunk_remaining -= n;
