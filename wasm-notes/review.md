@@ -27,18 +27,6 @@ For per-crate change details, see `changes-explained.md`.
 
 ---
 
-## High
-
-### H1. No bootstrap timeout
-
-`crates/tor-js/src/lib.rs`
-
-`ready()` polls bootstrap events with a 500ms periodic timeout to check for
-errors, but there is no hard overall timeout. If the gateway is unresponsive but
-the connection stays open, `ready()` loops indefinitely.
-
----
-
 ## Medium
 
 ### M1. JS storage lock never released on `close()`
@@ -210,7 +198,13 @@ These items were identified in earlier reviews and have been resolved:
     IndexedDB, writes to memory. No cross-tab corruption.
 21. **`state_dir()` unconditional** -- Gated behind `#[cfg(not(wasm32))]`.
     Only used by native-only features (pt-client, onion-service-service)
-22. **Fast bootstrap skips verification** -- By design. The
+22. **No bootstrap timeout** -- By design. `ready()` stays pending while
+    Arti keeps trying to connect (no terminal "give up" state). If the
+    gateway is unreachable, `create()` itself fails after exhausting
+    directory download retries. `ready()` only runs after `create()`
+    succeeds, meaning the network is reachable. Arti retries guards
+    indefinitely, and the event stream accurately reflects status.
+23. **Fast bootstrap skips verification** -- By design. The
     `dangerously_assume_wellsigned()`/`dangerously_assume_timely()` calls
     are only for metadata extraction (key IDs, timestamps for storage keys).
     Arti re-verifies all cached data cryptographically in `add_from_cache`:
