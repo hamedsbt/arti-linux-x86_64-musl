@@ -4,7 +4,7 @@
 //! - `#[async_trait::async_trait]` on native (requires Send futures)
 //! - `#[async_trait::async_trait(?Send)]` on WASM (allows non-Send futures)
 //!
-//! Use `use tor_async_compat::async_trait;` instead of `use async_trait::async_trait;`
+//! Use `use async_trait::async_trait;` instead of `use async_trait::async_trait;`
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -17,7 +17,7 @@ use syn::{parse_macro_input, Item};
 ///
 /// # Example
 /// ```ignore
-/// use tor_async_compat::async_trait;
+/// use async_trait::async_trait;
 ///
 /// #[async_trait]
 /// pub trait MyTrait {

@@ -12,7 +12,7 @@ mod net {
     use async_std_crate::net::{TcpListener, TcpStream, UdpSocket as StdUdpSocket};
     #[cfg(unix)]
     use async_std_crate::os::unix::net::{UnixListener, UnixStream};
-    use tor_async_compat::async_trait;
+    use async_trait::async_trait;
     use futures::stream::{self, Stream};
     use paste::paste;
     use std::io::Result as IoResult;

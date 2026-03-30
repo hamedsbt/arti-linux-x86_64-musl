@@ -60,7 +60,7 @@ pub mod testnet;
 #[cfg(feature = "testing")]
 pub mod testprovider;
 
-use tor_async_compat::async_trait;
+use async_trait::async_trait;
 #[cfg(feature = "hs-service")]
 use itertools::chain;
 use tor_error::warn_report;

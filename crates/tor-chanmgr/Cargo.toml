@@ -45,7 +45,6 @@ __is_experimental = []
 [dependencies]
 async-trait = "0.1.54"
 base64ct = "1.8"
-tor-async-compat = { path = "../tor-async-compat", version = "0.40.0" }
 caret = { path = "../caret", version = "0.9.0" }
 cfg-if = "1.0.0"
 derive-deftly = { version = "~1.6.0", features = ["full", "beta"] }

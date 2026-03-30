@@ -33,7 +33,7 @@ use tracing::trace;
 #[cfg(feature = "pt-client")]
 use super::TransportImplHelper;
 #[cfg(feature = "pt-client")]
-use tor_async_compat::async_trait;
+use async_trait::async_trait;
 #[cfg(feature = "pt-client")]
 use tor_error::bad_api_usage;
 #[cfg(feature = "pt-client")]

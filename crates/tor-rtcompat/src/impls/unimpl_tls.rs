@@ -2,7 +2,7 @@
 
 use std::{borrow::Cow, io::Result as IoResult, pin::Pin, task::Context};
 
-use tor_async_compat::async_trait;
+use async_trait::async_trait;
 use futures::{AsyncRead, AsyncWrite};
 
 use crate::{CertifiedConn, StreamOps, tls::TlsConnector};

@@ -84,7 +84,7 @@ use tor_error::{info_report, into_internal, warn_report};
 use tor_netdir::params::NetParameters;
 use tor_netdir::{DirEvent, MdReceiver, NetDir, NetDirProvider};
 
-use tor_async_compat::async_trait;
+use async_trait::async_trait;
 pub use storage::BoxedDirStore;
 use futures::stream::BoxStream;
 use oneshot_fused_workaround as oneshot;

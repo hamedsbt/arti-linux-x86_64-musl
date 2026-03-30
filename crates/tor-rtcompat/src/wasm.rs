@@ -7,6 +7,21 @@
 //! - **Networking**: Requires external transport (WebSocket/WebRTC)
 //! - **TLS**: Uses rustls with rustls-rustcrypto (pure-Rust crypto for WASM)
 
+/// A `Send` wrapper around a `!Send` future. Delegates polling through `SendWrapper`.
+///
+/// WASM is single-threaded, so `Send` is trivially satisfied.
+/// Panics if polled from a different thread (impossible on WASM).
+struct SendFut<F>(send_wrapper::SendWrapper<F>);
+
+impl<F: Future> Future for SendFut<F> {
+    type Output = F::Output;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: We don't move F after pinning. SendWrapper::deref_mut gives &mut F.
+        let inner = unsafe { self.map_unchecked_mut(|s| &mut *s.0) };
+        inner.poll(cx)
+    }
+}
+
 use crate::traits::{
     Blocking, CertifiedConn, NetStreamListener, NetStreamProvider, NoOpStreamOpsHandle,
     SleepProvider, StreamOps, TlsAcceptorSettings, TlsConnector, TlsProvider, TlsServerUnsupported,
@@ -14,7 +29,7 @@ use crate::traits::{
 };
 use std::borrow::Cow;
 use tor_time::{CoarseInstant, CoarseTimeProvider, RealCoarseTimeProvider};
-use tor_async_compat::async_trait;
+use async_trait::async_trait;
 use futures::task::{Spawn, SpawnError};
 use futures::{stream, AsyncRead, AsyncWrite, Future, StreamExt};
 #[cfg(target_arch = "wasm32")]
@@ -512,9 +527,11 @@ impl NetStreamProvider<SocketAddr> for WasmRuntime {
                 .map_err(|e| io::Error::other(format!("connect_fn call failed: {:?}", e)))?;
 
             let promise = js_sys::Promise::from(promise);
-            let socket = wasm_bindgen_futures::JsFuture::from(promise)
-                .await
-                .map_err(|e| io::Error::other(format!("connect failed: {:?}", e)))?;
+            let socket = SendFut(send_wrapper::SendWrapper::new(
+                wasm_bindgen_futures::JsFuture::from(promise),
+            ))
+            .await
+            .map_err(|e| io::Error::other(format!("connect failed: {:?}", e)))?;
 
             JsProxyStream::wrap(socket)
         }

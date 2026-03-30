@@ -524,7 +524,6 @@ dependencies = [
  "pin-project",
  "rand 0.9.2",
  "tokio",
- "tor-async-compat",
  "tor-basic-utils",
  "tor-config",
  "tor-dirmgr",
@@ -5644,6 +5643,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 
 [[package]]
+name = "send_wrapper"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
+
+[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6767,15 +6772,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tor-async-compat"
-version = "0.40.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "tor-async-utils"
 version = "0.40.0"
 dependencies = [
@@ -6931,7 +6927,6 @@ dependencies = [
  "serde",
  "serde_with",
  "thiserror 2.0.18",
- "tor-async-compat",
  "tor-async-utils",
  "tor-basic-utils",
  "tor-cell",
@@ -6990,7 +6985,6 @@ dependencies = [
  "safelog",
  "serde",
  "thiserror 2.0.18",
- "tor-async-compat",
  "tor-async-utils",
  "tor-basic-utils",
  "tor-cell",
@@ -7181,7 +7175,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "time",
- "tor-async-compat",
  "tor-async-utils",
  "tor-basic-utils",
  "tor-checkable",
@@ -7369,7 +7362,6 @@ dependencies = [
  "strum 0.28.0",
  "thiserror 2.0.18",
  "tokio",
- "tor-async-compat",
  "tor-async-utils",
  "tor-basic-utils",
  "tor-bytes",
@@ -7504,7 +7496,6 @@ dependencies = [
  "tempfile",
  "test-temp-dir",
  "thiserror 2.0.18",
- "tor-async-compat",
  "tor-async-utils",
  "tor-basic-utils",
  "tor-bytes",
@@ -7554,6 +7545,7 @@ dependencies = [
  "js-sys",
  "rustls-pki-types",
  "rustls-rustcrypto",
+ "send_wrapper",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
@@ -7798,7 +7790,6 @@ dependencies = [
  "strum 0.28.0",
  "thiserror 2.0.18",
  "time",
- "tor-async-compat",
  "tor-basic-utils",
  "tor-error",
  "tor-geoip",
@@ -7949,7 +7940,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
- "tor-async-compat",
  "tor-async-utils",
  "tor-basic-utils",
  "tor-bytes",
@@ -8005,7 +7995,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tokio",
- "tor-async-compat",
  "tor-async-utils",
  "tor-basic-utils",
  "tor-chanmgr",
@@ -8135,12 +8124,12 @@ dependencies = [
  "rustls-pki-types",
  "rustls-rustcrypto",
  "rustls-webpki 0.103.10",
+ "send_wrapper",
  "smol",
  "socket2 0.6.2",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
- "tor-async-compat",
  "tor-basic-utils",
  "tor-cert-x509",
  "tor-error",
@@ -8174,7 +8163,6 @@ dependencies = [
  "slotmap-careful",
  "strum 0.28.0",
  "thiserror 2.0.18",
- "tor-async-compat",
  "tor-basic-utils",
  "tor-error",
  "tor-general-addr",

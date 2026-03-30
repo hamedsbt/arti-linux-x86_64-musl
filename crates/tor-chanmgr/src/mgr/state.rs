@@ -925,7 +925,7 @@ mod test {
 
     use super::*;
     use crate::factory::BootstrapReporter;
-    use tor_async_compat::async_trait;
+    use async_trait::async_trait;
     #[cfg(feature = "relay")]
     use safelog::Sensitive;
     use std::sync::{Arc, Mutex};
