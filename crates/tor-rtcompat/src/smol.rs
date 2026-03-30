@@ -6,7 +6,7 @@
 pub use crate::impls::smol::create_runtime as create_runtime_impl;
 
 use crate::{ToplevelBlockOn, compound::CompoundRuntime};
-use tor_time::RealCoarseTimeProvider;
+use crate::RealCoarseTimeProvider;
 use std::io::Result as IoResult;
 
 #[cfg(feature = "native-tls")]

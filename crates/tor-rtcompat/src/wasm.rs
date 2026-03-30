@@ -28,7 +28,7 @@ use crate::traits::{
     UdpProvider, UdpSocket,
 };
 use std::borrow::Cow;
-use tor_time::{CoarseInstant, CoarseTimeProvider, RealCoarseTimeProvider};
+use crate::{CoarseInstant, CoarseTimeProvider, RealCoarseTimeProvider};
 use async_trait::async_trait;
 use futures::task::{Spawn, SpawnError};
 use futures::{stream, AsyncRead, AsyncWrite, Future, StreamExt};
@@ -41,7 +41,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use tor_time::{Instant, SystemTime, UNIX_EPOCH};
+use web_time_compat::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tor_general_addr::unix;
 
 /// A runtime for WASM environments.

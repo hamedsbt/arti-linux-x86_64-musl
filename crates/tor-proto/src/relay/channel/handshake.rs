@@ -7,7 +7,7 @@ use rand::Rng;
 use safelog::Sensitive;
 use std::net::IpAddr;
 use std::sync::Arc;
-use tor_time::SystemTime;
+use std::time::SystemTime;
 use tracing::trace;
 
 use tor_cell::chancell::msg::AnyChanMsg;
@@ -15,8 +15,7 @@ use tor_cell::chancell::{AnyChanCell, ChanMsg, msg};
 use tor_cell::restrict::{RestrictedMsg, restricted_msg};
 use tor_error::internal;
 use tor_linkspec::{ChannelMethod, HasChanMethod, OwnedChanTarget};
-use tor_rtcompat::{CertifiedConn, SleepProvider, StreamOps};
-use tor_time::{CoarseInstant, CoarseTimeProvider};
+use tor_rtcompat::{CertifiedConn, CoarseInstant, CoarseTimeProvider, SleepProvider, StreamOps};
 
 use crate::channel::handshake::{
     ChannelBaseHandshake, ChannelInitiatorHandshake, UnverifiedChannel, UnverifiedInitiatorChannel,
@@ -110,7 +109,7 @@ impl<
     /// Connect to another relay as the relay Initiator.
     ///
     /// Takes a function that reports the current time.  In theory, this can just be
-    /// `SystemTime::now()`.
+    /// `SystemTime::get()`.
     pub async fn connect<F>(mut self, now_fn: F) -> Result<UnverifiedInitiatorRelayChannel<T, S>>
     where
         F: FnOnce() -> SystemTime,
@@ -239,7 +238,7 @@ impl<
     /// Begin the handshake process.
     ///
     /// Takes a function that reports the current time.  In theory, this can just be
-    /// `SystemTime::now()`.
+    /// `SystemTime::get()`.
     pub async fn handshake<F>(
         mut self,
         now_fn: F,

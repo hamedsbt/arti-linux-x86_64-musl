@@ -92,6 +92,7 @@ use tor_netdoc::doc::netstatus::ProtoStatuses;
 use tor_rtcompat::scheduler::{TaskHandle, TaskSchedule};
 use tor_rtcompat::{Runtime, SpawnExt};
 use tracing::{debug, info, instrument, trace, warn};
+use web_time_compat::SystemTimeExt;
 
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -99,7 +100,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{collections::HashMap, sync::Weak};
 use std::fmt::Debug;
-use tor_time::SystemTime;
+use std::time::SystemTime;
 
 use crate::state::{DirState, NetDirChange};
 pub use config::DirMgrConfig;
@@ -198,7 +199,8 @@ impl<R: Runtime> NetDirProvider for DirMgr<R> {
                 .extend_lifetime(netdir.lifetime()),
             Timeliness::Unchecked => return Ok(netdir),
         };
-        let now = SystemTime::now();
+        // TODO #2384 -- we have a runtime here; we should use it.
+        let now = SystemTime::get();
         if lifetime.valid_after() > now {
             Err(NetDirError::DirNotYetValid)
         } else if lifetime.valid_until() < now {
@@ -771,7 +773,7 @@ impl<R: Runtime> DirMgr<R> {
             let reset_at = state.reset_time();
             match reset_at {
                 Some(t) => {
-                    trace!("Sleeping until {}", tor_time::format_rfc3339(t));
+                    trace!("Sleeping until {}", humantime::format_rfc3339(t));
                     schedule.sleep_until_wallclock(t).await?;
                 }
                 None => return Ok(()),
@@ -1171,7 +1173,7 @@ pub(crate) fn default_consensus_cutoff(
     /// for the fact that consensuses have some lifetime.
     const MIN_AGE_TO_ALLOW: Duration = Duration::from_secs(3 * 3600);
     let allow_skew = std::cmp::max(MIN_AGE_TO_ALLOW, tolerance.post_valid_tolerance());
-    let cutoff = tor_time::offset_datetime_from_systemtime(now - allow_skew);
+    let cutoff = time::OffsetDateTime::from(now - allow_skew);
     // We now round cutoff to the next hour, so that we aren't leaking our exact
     // time to the directory cache.
     //
@@ -1185,7 +1187,7 @@ pub(crate) fn default_consensus_cutoff(
     );
     let cutoff = cutoff + Duration::from_secs(3600);
 
-    Ok(tor_time::systemtime_from_offset_datetime(cutoff))
+    Ok(SystemTime::from(cutoff))
 }
 
 /// Return a list of the protocols [supported](tor_protover::doc_supported) by this crate

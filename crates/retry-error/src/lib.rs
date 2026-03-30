@@ -49,8 +49,13 @@
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Error as FmtError, Formatter};
 use std::iter;
-use std::time::Duration;
-use tor_time::{format_rfc3339, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use web_time::Instant;
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use std::time::Instant;
 
 /// An error type for use when we're going to do something a few times,
 /// and they might all fail.
@@ -136,6 +141,7 @@ impl<E> RetryError<E> {
     ///
     /// # Example
     /// ```
+    /// # #![allow(clippy::disallowed_methods)]
     /// # use retry_error::RetryError;
     /// # use std::time::{Instant, SystemTime};
     /// let mut retry_err: RetryError<&str> = RetryError::in_attempt_to("connect");
@@ -170,7 +176,7 @@ impl<E> RetryError<E> {
     where
         T: Into<E>,
     {
-        self.push_timed(err, Instant::now(), Some(SystemTime::now()));
+        self.push_timed(err, current_instant(), Some(current_system_time()));
     }
 
     /// Return an iterator over all of the reasons that the attempt
@@ -330,7 +336,7 @@ impl<E: AsRef<dyn Error>> Display for RetryError<E> {
                         write!(
                             f,
                             " at {} ({})",
-                            format_rfc3339(first_at),
+                            humantime::format_rfc3339(first_at),
                             FormatTimeAgo(timestamp.elapsed())
                         )?;
                     }
@@ -352,10 +358,10 @@ impl<E: AsRef<dyn Error>> Display for RetryError<E> {
                     {
                         let duration = last_ts.saturating_duration_since(*first_ts);
 
-                        write!(f, " (from {} ", format_rfc3339(first_at))?;
+                        write!(f, " (from {} ", humantime::format_rfc3339(first_at))?;
 
                         if duration.as_secs() > 0 {
-                            write!(f, "to {}", format_rfc3339(first_at + duration))?;
+                            write!(f, "to {}", humantime::format_rfc3339(first_at + duration))?;
                         }
 
                         write!(f, ", {})", FormatTimeAgo(last_ts.elapsed()))?;
@@ -514,6 +520,32 @@ pub fn fmt_error_with_sources(mut e: &dyn Error, f: &mut fmt::Formatter) -> fmt:
         }
     }
     Ok(())
+}
+
+/// Return the current system time.
+///
+/// (This is a separate method for compatibility with wasm32.)
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+fn current_system_time() -> SystemTime {
+    use web_time::web::SystemTimeExt as _;
+    web_time::SystemTime::now().to_std()
+}
+
+/// Return the current system time.
+///
+/// (This is a separate method for compatibility with wasm32.)
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+fn current_system_time() -> SystemTime {
+    #![allow(clippy::disallowed_methods)]
+    SystemTime::now()
+}
+
+/// Return the current Instant.
+///
+/// (This is a separate method for compatibility with wasm32.)
+fn current_instant() -> Instant {
+    #![allow(clippy::disallowed_methods)]
+    Instant::now()
 }
 
 #[cfg(test)]

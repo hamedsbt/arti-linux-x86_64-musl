@@ -33,7 +33,6 @@ tor-error = { path = "../tor-error", version = "0.40.0", features = ["tracing"] 
 tor-log-ratelim = { path = "../tor-log-ratelim", version = "0.40.0" }
 tor-memquota-cost = { path = "../tor-memquota-cost", version = "0.40.0" }
 tor-rtcompat = { version = "0.40.0", path = "../tor-rtcompat" }
-tor-time = { path = "../tor-time", version = "0.40.0" }
 tracing = "0.1.36"
 visibility = { version = "0.1.0", optional = true }
 void = "1"

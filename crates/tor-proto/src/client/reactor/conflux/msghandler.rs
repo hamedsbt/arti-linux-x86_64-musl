@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{self, AtomicU64};
 use std::time::Duration;
-use tor_time::SystemTime;
+use std::time::SystemTime;
 
 use tor_cell::relaycell::conflux::V1Nonce;
 use tor_cell::relaycell::msg::{ConfluxLinked, ConfluxLinkedAck, ConfluxSwitch};

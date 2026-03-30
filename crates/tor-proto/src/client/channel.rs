@@ -10,7 +10,7 @@ pub use handshake::ClientInitiatorHandshake;
 use futures::{AsyncRead, AsyncWrite};
 
 use tor_rtcompat::{SleepProvider, StreamOps};
-use tor_time::CoarseTimeProvider;
+use tor_rtcompat::CoarseTimeProvider;
 
 use crate::memquota::ChannelAccount;
 

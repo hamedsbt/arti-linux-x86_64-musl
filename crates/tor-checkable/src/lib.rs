@@ -47,8 +47,8 @@
 //! <!-- @@ end lint list maintained by maint/add_warning @@ -->
 
 use std::time::Duration;
-use tor_time::SystemTime;
 use thiserror::Error;
+use web_time_compat::{SystemTime, SystemTimeExt};
 
 pub mod signed;
 pub mod timed;
@@ -94,7 +94,7 @@ pub trait Timebound<T>: Sized {
 
     /// Unwrap this Timebound object if it is valid now.
     fn check_valid_now(self) -> Result<T, Self::Error> {
-        self.check_valid_at(&SystemTime::now())
+        self.check_valid_at(&SystemTime::get())
     }
 
     /// Unwrap this object if it is valid at the provided time t.

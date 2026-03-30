@@ -42,6 +42,7 @@ full = [
     "tor-memquota/full",
     "tor-units/full",
     "tor-dircommon/full",
+    "web-time-compat/full",
 ]
 specific-relay = []
 vanguards = ["tor-guardmgr/vanguards"]
@@ -109,12 +110,12 @@ tor-proto = { path = "../tor-proto", version = "0.40.0" }
 tor-protover = { path = "../tor-protover", version = "0.40.0" }
 tor-relay-selection = { path = "../tor-relay-selection", version = "0.40.0" }
 tor-rtcompat = { path = "../tor-rtcompat", version = "0.40.0" }
-tor-time = { path = "../tor-time", version = "0.40.0" }
 tor-units = { path = "../tor-units", version = "0.40.0" }
 tracing = "0.1.36"
 visibility = { version = "0.1.0", optional = true }
 void = "1.0"
 weak-table = "0.3.0"
+web-time-compat = { path = "../web-time-compat", version = "0.1.0" }
 
 [dev-dependencies]
 futures-await-test = "0.3.0"

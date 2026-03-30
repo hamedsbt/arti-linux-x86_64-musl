@@ -1,8 +1,7 @@
 //! Convenience implementation of a TimeBound object.
 
 use std::ops::{Bound, Deref, RangeBounds};
-use std::time::Duration;
-use tor_time::SystemTime;
+use web_time_compat::{Duration, SystemTime};
 
 /// A TimeBound object that is valid for a specified range of time.
 ///
@@ -10,11 +9,10 @@ use tor_time::SystemTime;
 ///
 ///
 /// ```
-/// use std::time::Duration;
-/// use tor_time::SystemTime;
+/// use web_time_compat::{SystemTime, SystemTimeExt, Duration};
 /// use tor_checkable::{Timebound, TimeValidityError, timed::TimerangeBound};
 ///
-/// let now = SystemTime::now();
+/// let now = SystemTime::get();
 /// let one_hour = Duration::new(3600, 0);
 ///
 /// // This seven is only valid for another hour!
@@ -224,8 +222,7 @@ mod test {
     use super::*;
     use crate::{TimeValidityError, Timebound};
     use humantime::parse_rfc3339;
-    use std::time::Duration;
-    use tor_time::SystemTime;
+    use web_time_compat::{Duration, SystemTime, SystemTimeExt};
 
     #[test]
     fn test_bounds() {
@@ -312,7 +309,7 @@ mod test {
         assert_eq!(tr.check_valid_at_opt(None), Ok("hello world"));
         let tr = TimerangeBound::new("hello world", de..);
         assert_eq!(
-            tr.check_valid_at_opt(Some(SystemTime::now())),
+            tr.check_valid_at_opt(Some(SystemTime::get())),
             Ok("hello world")
         );
         let tr = TimerangeBound::new("hello world", ..za);
@@ -321,7 +318,7 @@ mod test {
 
     #[test]
     fn test_dangerous() {
-        let t1 = SystemTime::now();
+        let t1 = SystemTime::get();
         let t2 = t1 + Duration::from_secs(60 * 525600);
         let tr = TimerangeBound::new("cups of coffee", t1..=t2);
 
@@ -335,7 +332,7 @@ mod test {
 
     #[test]
     fn test_map() {
-        let t1 = SystemTime::now();
+        let t1 = SystemTime::get();
         let min = Duration::from_secs(60);
 
         let tb = TimerangeBound::new(17_u32, t1..t1 + 5 * min);
@@ -349,7 +346,7 @@ mod test {
 
     #[test]
     fn test_as_ref() {
-        let t1 = SystemTime::now();
+        let t1 = SystemTime::get();
         let min = Duration::from_secs(60);
 
         let tb1: TimerangeBound<String> = TimerangeBound::new("hi".into(), t1..t1 + 5 * min);

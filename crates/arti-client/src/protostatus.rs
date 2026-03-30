@@ -26,7 +26,7 @@ use std::{
     future::Future,
     sync::{Arc, Weak},
 };
-use tor_time::{format_rfc3339, SystemTime};
+use std::time::SystemTime;
 use tor_config::MutCfg;
 use tor_dirmgr::DirProvider;
 use tor_error::{into_internal, warn_report};
@@ -184,7 +184,7 @@ pub(crate) fn evaluate_protocol_status(
 ) -> Result<(), ErrorDetail> {
     let result = recommendation.client().check_protocols(software_protocols);
 
-    let rectime = || format_rfc3339(recommendation_timestamp);
+    let rectime = || humantime::format_rfc3339(recommendation_timestamp).to_string();
 
     match &result {
         Ok(()) => Ok(()),

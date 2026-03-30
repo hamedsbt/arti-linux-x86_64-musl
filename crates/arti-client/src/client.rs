@@ -28,10 +28,12 @@ use tor_guardmgr::{GuardMgr, RetireCircuits};
 use tor_keymgr::Keystore;
 use tor_memquota::MemoryQuotaTracker;
 use tor_netdir::{NetDirProvider, params::NetParameters};
+use tor_persist::StateMgr;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use tor_persist::TestingStateMgr;
 #[cfg(feature = "onion-service-service")]
 use tor_persist::state_dir::StateDirectory;
 use tor_persist::AnyStateMgr;
-use tor_persist::StateMgr;
 use tor_proto::client::stream::{DataStream, IpVersionPreference, StreamParameters};
 #[cfg(all(
     any(feature = "native-tls", feature = "rustls"),
@@ -73,6 +75,13 @@ use crate::{TorClientBuilder, status, util};
 use tor_geoip::CountryCode;
 use tor_rtcompat::scheduler::TaskHandle;
 use tracing::{debug, info, instrument};
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use tor_persist::FsStateMgr as UsingStateMgr;
+
+// TODO wasm: This is not the right choice, but at least it compiles.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use tor_persist::TestingStateMgr as UsingStateMgr;
 
 /// An active client session on the Tor network.
 ///
@@ -1112,6 +1121,25 @@ impl<R: Runtime> TorClient<R> {
             path_resolver,
             software_status_cfg,
         })
+    }
+
+    /// Construct a state manager from the client configuration.
+    // TODO: integrate into our storage path (currently unused because
+    // TorClientBuilder handles state manager creation via AnyStateMgr)
+    #[allow(dead_code)]
+    fn statemgr_from_config(config: &TorClientConfig) -> Result<UsingStateMgr, ErrorDetail> {
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            use tor_persist::FsStateMgr;
+
+            let (state_dir, mistrust) = config.state_dir()?;
+            FsStateMgr::from_path_and_mistrust(state_dir, mistrust)
+                .map_err(ErrorDetail::StateMgrSetup)
+        }
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        {
+            unimplemented!()
+        }
     }
 
     /// Bootstrap a connection to the Tor network, with a client created by `create_unbootstrapped`.

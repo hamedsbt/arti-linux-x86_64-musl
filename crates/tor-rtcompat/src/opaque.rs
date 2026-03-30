@@ -62,9 +62,9 @@ macro_rules! implement_opaque_runtime {
         }
     }
 
-    impl tor_time::CoarseTimeProvider for $t {
+    impl crate::CoarseTimeProvider for $t {
         #[inline]
-        fn now_coarse(&self) -> tor_time::CoarseInstant {
+        fn now_coarse(&self) -> crate::CoarseInstant {
             self.$member.now_coarse()
         }
     }

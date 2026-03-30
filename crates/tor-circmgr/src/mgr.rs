@@ -47,10 +47,9 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::panic::AssertUnwindSafe;
 use std::sync::{self, Arc, Weak};
-use std::time::Duration;
 use tor_rtcompat::SpawnExt;
-use tor_time::Instant;
 use tracing::{debug, instrument, trace, warn};
+use web_time_compat::{Duration, Instant};
 mod streams;
 
 /// Alias to force use of RandomState, regardless of features enabled in `weak_tables`.
@@ -1880,6 +1879,7 @@ mod test {
     use tor_persist::TestingStateMgr;
     use tor_rtcompat::SleepProvider;
     use tor_rtmock::MockRuntime;
+    use web_time_compat::InstantExt;
 
     #[allow(deprecated)] // TODO #1885
     use tor_rtmock::MockSleepRuntime;
@@ -2433,7 +2433,7 @@ mod test {
         let (ep_none, ep_web, ep_full) = get_exit_policies();
         let fake_circ = FakeCirc { id: FakeId::next() };
         let expiration = ExpirationInfo::Unused {
-            created: Instant::now(),
+            created: Instant::get(),
         };
 
         let mut entry_none = OpenEntry::new(

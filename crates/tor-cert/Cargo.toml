@@ -26,6 +26,7 @@ full = [
     "x509",
     "tor-error/full",
     "tor-cert-x509?/full",
+    "web-time-compat/full",
 ]
 x509 = ["tor-cert-x509"]
 # Enable experimental APIs that are not yet officially supported.
@@ -49,7 +50,7 @@ tor-cert-x509 = { path = "../tor-cert-x509", version = "0.40.0", optional = true
 tor-checkable = { path = "../tor-checkable", version = "0.40.0" }
 tor-error = { path = "../tor-error", version = "0.40.0" }
 tor-llcrypto = { path = "../tor-llcrypto", version = "0.40.0" }
-tor-time = { path = "../tor-time", version = "0.40.0" }
+web-time-compat = { path = "../web-time-compat", version = "0.1.0" }
 
 [dev-dependencies]
 base64ct = "1.5.1"

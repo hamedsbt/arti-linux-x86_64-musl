@@ -67,10 +67,9 @@ use tor_linkspec::IntoOwnedChanTarget;
 
 use futures::StreamExt;
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
 use tor_rtcompat::SpawnExt;
-use tor_time::Instant;
 use tracing::{debug, info, instrument, trace, warn};
+use web_time_compat::{Duration, Instant, InstantExt};
 
 #[cfg(feature = "testing")]
 pub use config::test_config::TestConfig;
@@ -575,7 +574,8 @@ impl<B: AbstractTunnelBuilder<R> + 'static, R: Runtime> CircMgrInner<B, R> {
         #[cfg(feature = "geoip")] country_code: Option<CountryCode>,
     ) -> Result<Arc<B::Tunnel>> {
         self.expire_circuits().await;
-        let time = Instant::now();
+        // TODO #2428: Shouldn't we look at runtime.now() instead?
+        let time = Instant::get();
         {
             let mut predictive = self.predictor.lock().expect("preemptive lock poisoned");
             if ports.is_empty() {

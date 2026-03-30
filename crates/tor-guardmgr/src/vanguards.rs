@@ -10,7 +10,7 @@ mod set;
 
 use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
-use tor_time::SystemTime;
+use std::time::SystemTime;
 
 use futures::stream::BoxStream;
 use futures::{FutureExt as _, future};

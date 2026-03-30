@@ -20,9 +20,8 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex, Weak},
     task::{Context, Poll, Waker},
-    time::Duration,
 };
-use tor_time::{Instant, SystemTime};
+use web_time_compat::{Duration, Instant, InstantExt, SystemTime};
 
 use futures::Future;
 use tracing::trace;
@@ -30,7 +29,7 @@ use tracing::trace;
 use std::collections::HashSet;
 use std::fmt::Formatter;
 use tor_rtcompat::SleepProvider;
-use tor_time::{CoarseInstant, CoarseTimeProvider};
+use tor_rtcompat::{CoarseInstant, CoarseTimeProvider};
 
 use crate::time_core::MockTimeCore;
 
@@ -205,7 +204,7 @@ pub struct Sleeping {
 
 impl Default for MockSleepProvider {
     fn default() -> Self {
-        let wallclock = tor_time::parse_rfc3339("2023-07-05T11:25:56Z").expect("parse");
+        let wallclock = humantime::parse_rfc3339("2023-07-05T11:25:56Z").expect("parse");
         MockSleepProvider::new(wallclock)
     }
 }
@@ -213,7 +212,7 @@ impl Default for MockSleepProvider {
 impl MockSleepProvider {
     /// Create a new MockSleepProvider, starting at a given wall-clock time.
     pub fn new(wallclock: SystemTime) -> Self {
-        let instant = Instant::now();
+        let instant = Instant::get();
         let sleepers = BinaryHeap::new();
         let core = MockTimeCore::new(instant, wallclock);
         let state = SleepSchedule {
@@ -592,10 +591,11 @@ mod test {
     //! <!-- @@ end test lint list maintained by maint/add_warning @@ -->
     use super::*;
     use tor_rtcompat::test_with_all_runtimes;
+    use web_time_compat::SystemTimeExt;
 
     #[test]
     fn basics_of_time_travel() {
-        let w1 = SystemTime::now();
+        let w1 = SystemTime::get();
         let sp = MockSleepProvider::new(w1);
         let i1 = sp.now();
         assert_eq!(sp.wallclock(), w1);
@@ -617,7 +617,7 @@ mod test {
             use std::sync::atomic::AtomicBool;
             use std::sync::atomic::Ordering;
 
-            let sp = MockSleepProvider::new(SystemTime::now());
+            let sp = MockSleepProvider::new(SystemTime::get());
             let one_hour = Duration::new(3600, 0);
 
             let (s1, r1) = oneshot::channel();
@@ -628,7 +628,7 @@ mod test {
             let b2 = AtomicBool::new(false);
             let b3 = AtomicBool::new(false);
 
-            let real_start = Instant::now();
+            let real_start = Instant::get();
 
             futures::join!(
                 async {
@@ -664,7 +664,7 @@ mod test {
                     assert!(b1.load(Ordering::SeqCst));
                     assert!(b2.load(Ordering::SeqCst));
                     assert!(b3.load(Ordering::SeqCst));
-                    let real_end = Instant::now();
+                    let real_end = Instant::get();
 
                     assert!(real_end - real_start < one_hour);
                 }

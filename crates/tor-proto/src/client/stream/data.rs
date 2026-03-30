@@ -45,7 +45,7 @@ use tor_basic_utils::skip_fmt;
 use tor_cell::relaycell::msg::Data;
 use tor_error::internal;
 use tor_rtcompat::{DynTimeProvider, SleepProvider};
-use tor_time::CoarseTimeProvider;
+use tor_rtcompat::CoarseTimeProvider;
 
 /// A stream of [`RateLimitedWriterConfig`] used to update a [`DynamicRateLimitedWriter`].
 ///

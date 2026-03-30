@@ -16,7 +16,11 @@ use tor_netdoc::doc::authcert::AuthCertKeyIds;
 use tor_netdoc::doc::microdesc::MdDigest;
 use tor_netdoc::doc::netstatus::{ConsensusFlavor, Lifetime, ProtoStatuses};
 use tor_persist::KeyValueStore;
-use tor_time::{time_duration_to_std, SystemTime};
+use std::time::SystemTime;
+/// Convert a `time::Duration` to `std::time::Duration`, clamping negatives to zero.
+fn time_duration_to_std(d: time::Duration) -> std::time::Duration {
+    d.try_into().unwrap_or(std::time::Duration::ZERO)
+}
 
 #[cfg(feature = "routerdesc")]
 use tor_netdoc::doc::routerdesc::RdDigest;
@@ -290,7 +294,8 @@ impl Store for BoxedDirStore {
     }
 
     fn expire_all(&mut self, expiration: &ExpirationConfig) -> Result<()> {
-        let now = SystemTime::now();
+        use web_time_compat::SystemTimeExt as _;
+        let now = SystemTime::get();
 
         // Expire consensuses
         for key in self.list_keys("dir:consensus:")? {

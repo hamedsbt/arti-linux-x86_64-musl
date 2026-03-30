@@ -35,13 +35,13 @@ full = [
     "equix?/full",
     "tor-memquota?/full",
     "tor-key-forge/full",
+    "web-time-compat/full",
 ]
 
 experimental = ["hs-pow-full"]
 __is_experimental = []
 
 [dependencies]
-tor-time = { path = "../tor-time", version = "0.40.0" }
 arrayvec = { version = "0.7.4", optional = true }
 blake2 = { version = "0.10.6", optional = true }
 cipher = { version = "0.4.1", features = ["zeroize"], optional = true }
@@ -68,6 +68,7 @@ tor-llcrypto = { version = "0.40.0", path = "../tor-llcrypto", features = ["hsv3
 tor-memquota = { version = "0.40.0", path = "../tor-memquota", default-features = false, optional = true }
 tor-units = { path = "../tor-units", version = "0.40.0" }
 void = "1"
+web-time-compat = { path = "../web-time-compat", version = "0.1.0" }
 zeroize = { version = "1", optional = true }
 
 [dev-dependencies]

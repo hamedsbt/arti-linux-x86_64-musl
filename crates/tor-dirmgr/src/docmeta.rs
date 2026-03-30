@@ -12,7 +12,7 @@ use tor_netdoc::doc::{
     netstatus::{Lifetime, MdConsensus, UnvalidatedMdConsensus},
 };
 
-use tor_time::SystemTime;
+use std::time::SystemTime;
 
 /// Information about a consensus that we have in storage.
 ///

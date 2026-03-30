@@ -567,7 +567,7 @@ impl<T: PartialOrd> PartialOrd for Unknown<T> {
 /// Types for decoding times and dates
 mod timeimpl {
     use crate::{Error, NetdocErrorKind as EK, Pos, Result};
-    use tor_time::SystemTime;
+    use std::time::SystemTime;
     use time::{
         PrimitiveDateTime, format_description::FormatItem,
         macros::format_description,
@@ -594,7 +594,7 @@ mod timeimpl {
                     .at_pos(Pos::at(s))
                     .with_msg(format!("invalid time: {}", e))
             })?;
-            Ok(Iso8601TimeSp(tor_time::systemtime_from_offset_datetime(d.assume_utc())))
+            Ok(Iso8601TimeSp(SystemTime::from(d.assume_utc())))
         }
     }
 
@@ -606,7 +606,7 @@ mod timeimpl {
         t: SystemTime,
         format_desc: &[FormatItem],
     ) -> core::result::Result<String, std::fmt::Error> {
-        tor_time::offset_datetime_from_systemtime(t)
+        time::OffsetDateTime::from(t)
             .format(format_desc)
             .map_err(|_| std::fmt::Error)
     }
@@ -643,7 +643,7 @@ mod timeimpl {
                     .at_pos(Pos::at(s))
                     .with_msg(format!("invalid time: {}", e))
             })?;
-            Ok(Iso8601TimeNoSp(tor_time::systemtime_from_offset_datetime(d.assume_utc())))
+            Ok(Iso8601TimeNoSp(SystemTime::from(d.assume_utc())))
         }
     }
 
@@ -1284,7 +1284,7 @@ mod test {
     #[test]
     fn time() -> Result<()> {
         use humantime::parse_rfc3339;
-        use tor_time::SystemTime;
+        use std::time::SystemTime;
 
         let t = "2020-09-29 13:36:33".parse::<Iso8601TimeSp>()?;
         let t: SystemTime = t.into();

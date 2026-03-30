@@ -7,8 +7,6 @@ use std::fmt::{self, Debug, Display};
 use std::num::NonZeroU8;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
-use std::time::Duration;
-use tor_time::{format_rfc3339, Instant, SystemTime};
 
 use async_trait::async_trait;
 use derive_more::{Deref, DerefMut};
@@ -21,7 +19,6 @@ use futures::task::SpawnError;
 use tracing::{debug, info, trace};
 
 use safelog::sensitive;
-use tor_basic_utils::BinaryHeapExt as _;
 use tor_basic_utils::retry::RetryDelay;
 use tor_checkable::{SelfSigned, Timebound};
 use tor_circmgr::CircMgr;
@@ -31,6 +28,7 @@ use tor_guardmgr::bridge::{BridgeConfig, BridgeDesc};
 use tor_guardmgr::bridge::{BridgeDescError, BridgeDescEvent, BridgeDescList, BridgeDescProvider};
 use tor_netdoc::doc::routerdesc::RouterDesc;
 use tor_rtcompat::{Runtime, SpawnExt as _};
+use web_time_compat::{Duration, Instant, SystemTime};
 
 use crate::event::FlagPublisher;
 use crate::storage::CachedBridgeDescriptor;
@@ -635,7 +633,7 @@ impl<R: Runtime, M: Mockable<R>> BridgeDescProvider for BridgeDescMgr<R, M> {
             schedule: &mut BinaryHeap<RefetchEntry<TT, RD>>,
             was_state: &str,
         ) {
-            schedule.retain_ext(|b| note_found_keep_p(new_bridges, &b.bridge, was_state));
+            schedule.retain(|b| note_found_keep_p(new_bridges, &b.bridge, was_state));
         }
 
         let mut state = self.mgr.lock_then_process();
@@ -1073,7 +1071,7 @@ impl<R: Runtime, M: Mockable<R>> Manager<R, M> {
             match if_modified_since {
                 Some(ims) => format!(
                     " if-modified-since {}",
-                    format_rfc3339(ims),
+                    humantime::format_rfc3339_seconds(ims),
                 ),
                 None => "".into(),
             }

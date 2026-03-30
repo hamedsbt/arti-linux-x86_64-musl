@@ -6,7 +6,7 @@ use crate::{
     CertEncodeError, CertExt, CertType, Ed25519Cert, Ed25519CertConstructor, ExpiryHours, ExtType,
     SignedWithEd25519Ext, UnrecognizedExt,
 };
-use tor_time::SystemTime;
+use std::time::SystemTime;
 use tor_bytes::{EncodeResult, Writeable, Writer};
 use tor_llcrypto::pk::ed25519::{self, Ed25519PublicKey, Ed25519SigningKey};
 
@@ -220,14 +220,14 @@ mod test {
     //! <!-- @@ end test lint list maintained by maint/add_warning @@ -->
     use super::*;
     use crate::CertifiedKey;
-    use std::time::Duration;
     use tor_checkable::{SelfSigned, Timebound};
+    use web_time_compat::{Duration, SystemTimeExt};
 
     #[test]
     fn signed_cert_without_key() {
         let mut rng = rand::rng();
         let keypair = ed25519::Keypair::generate(&mut rng);
-        let now = SystemTime::now();
+        let now = SystemTime::get();
         let day = Duration::from_secs(86400);
         let encoded = Ed25519Cert::constructor()
             .expiration(now + day * 30)

@@ -1,7 +1,7 @@
 //! Tools and types for reporting declared clock skew.
 
 use std::time::Duration;
-use tor_time::SystemTime;
+use std::time::SystemTime;
 
 /// A reported amount of clock skew from a relay or other source.
 ///
@@ -162,10 +162,11 @@ mod test {
 
     use super::*;
     use tor_basic_utils::test_rng::testing_rng;
+    use web_time_compat::SystemTimeExt;
 
     #[test]
     fn make_skew() {
-        let now = SystemTime::now();
+        let now = SystemTime::get();
         let later = now + Duration::from_secs(777);
         let earlier = now - Duration::from_secs(333);
         let window = Duration::from_secs(30);

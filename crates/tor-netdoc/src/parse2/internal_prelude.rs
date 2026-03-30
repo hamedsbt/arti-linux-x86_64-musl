@@ -12,7 +12,7 @@ pub use std::slice;
 pub use std::str::FromStr;
 pub use std::sync::Arc;
 pub use std::time::Duration;
-pub use tor_time::SystemTime;
+pub use std::time::SystemTime;
 
 pub use derive_deftly::{Deftly, define_derive_deftly, define_derive_deftly_module};
 pub use digest::Digest;

@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, Weak},
     time::Duration,
 };
-use tor_time::SystemTime;
+use std::time::SystemTime;
 
 use crate::DirMgrConfig;
 use crate::DocSource;
@@ -749,10 +749,11 @@ mod test {
     use tor_dircommon::retry::DownloadSchedule;
     use tor_netdoc::doc::microdesc::MdDigest;
     use tor_rtcompat::SleepProvider;
+    use web_time_compat::SystemTimeExt;
 
     #[test]
     fn week() {
-        let now = SystemTime::now();
+        let now = SystemTime::get();
         let one_day = Duration::new(86400, 0);
 
         assert_eq!(no_more_than_a_week_from(now, None), now + one_day * 7);

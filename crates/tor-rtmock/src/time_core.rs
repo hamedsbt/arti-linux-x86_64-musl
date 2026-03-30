@@ -1,10 +1,8 @@
 //! [`MockTimeCore`] and [`MockCoarseTimeProvider`]
 
 use derive_deftly::{Deftly, define_derive_deftly};
-use std::time::Duration;
-use tor_time::{
-    CoarseDuration, CoarseInstant, CoarseTimeProvider, Instant, RealCoarseTimeProvider, SystemTime,
-};
+use tor_rtcompat::{CoarseDuration, CoarseInstant, CoarseTimeProvider, RealCoarseTimeProvider};
+use web_time_compat::{Duration, Instant, SystemTime};
 
 define_derive_deftly! {
     /// Derive getters for struct fields.

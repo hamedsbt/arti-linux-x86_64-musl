@@ -22,7 +22,7 @@ use std::sync::LazyLock;
 
 use std::result::Result as StdResult;
 use std::{net, time::Duration};
-use tor_time::SystemTime;
+use std::time::SystemTime;
 
 use derive_deftly::Deftly;
 use digest::Digest;

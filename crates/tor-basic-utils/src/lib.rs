@@ -326,6 +326,7 @@ impl<T: Ord> BinaryHeapExt<T> for BinaryHeap<T> {
 
 // ----------------------------------------------------------------------
 
+
 /// Renaming of `Path::display` as `display_lossy`
 pub trait PathExt: Sealed {
     /// Display this `Path` as an approximate string, for human consumption in messages

@@ -30,7 +30,7 @@ use tracing_test::traced_test;
 use tor_basic_utils::RngExt as _;
 use tor_rtcompat::Runtime;
 use tor_rtmock::MockRuntime;
-use tor_time::CoarseDuration;
+use tor_rtcompat::CoarseDuration;
 
 //---------- useful utilities ----------
 

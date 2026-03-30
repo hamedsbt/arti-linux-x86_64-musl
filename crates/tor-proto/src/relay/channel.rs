@@ -31,7 +31,7 @@ use tor_llcrypto::pk::{
 };
 use tor_relay_crypto::pk::RelayLinkSigningKeypair;
 use tor_rtcompat::{CertifiedConn, SleepProvider, StreamOps};
-use tor_time::CoarseTimeProvider;
+use tor_rtcompat::CoarseTimeProvider;
 
 use crate::channel::handshake::VerifiedChannel;
 use crate::peer::PeerAddr;

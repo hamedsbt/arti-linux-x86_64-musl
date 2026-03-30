@@ -4,7 +4,6 @@ use crate::slug::{BadSlug, Slug};
 
 use std::fmt;
 use std::str::FromStr;
-use tor_time::SystemTime;
 
 use derive_more::{From, Into};
 use thiserror::Error;
@@ -12,6 +11,7 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use time::PrimitiveDateTime;
 use tor_error::{Bug, into_internal};
+use web_time_compat::SystemTime;
 
 /// A UTC timestamp that can be encoded in ISO 8601 format,
 /// and that can be used as a `Slug`.
@@ -45,7 +45,7 @@ impl FromStr for Iso8601TimeSlug {
 
     fn from_str(s: &str) -> Result<Iso8601TimeSlug, Self::Err> {
         let d = PrimitiveDateTime::parse(s, &ISO_8601SP_FMT)?;
-        Ok(Iso8601TimeSlug(tor_time::systemtime_from_offset_datetime(d.assume_utc())))
+        Ok(Iso8601TimeSlug(d.assume_utc().into()))
     }
 }
 
@@ -72,7 +72,7 @@ pub enum BadIso8601TimeSlug {
 
 impl fmt::Display for Iso8601TimeSlug {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ts = tor_time::offset_datetime_from_systemtime(self.0)
+        let ts = time::OffsetDateTime::from(self.0)
             .format(ISO_8601SP_FMT)
             .map_err(|_| fmt::Error)?;
 

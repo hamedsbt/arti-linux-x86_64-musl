@@ -11,6 +11,9 @@ keywords = ["tor", "arti", "download", "async"]
 categories = ["network-programming", "cryptography"]
 repository = "https://gitlab.torproject.org/tpo/core/arti.git/"
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = ["mmap", "compression"]
 full = [
@@ -38,6 +41,7 @@ full = [
     "oneshot-fused-workaround/full",
     "tor-protover/full",
     "tor-dircommon/full",
+    "web-time-compat/full",
 ]
 experimental = ["experimental-api", "dirfilter", "geoip"]
 bridge-client = ["tor-circmgr/specific-relay", "tor-guardmgr/bridge-client", "routerdesc"]
@@ -105,8 +109,12 @@ tor-persist = { path = "../tor-persist", version = "0.40.0" }
 tor-proto = { path = "../tor-proto", version = "0.40.0" }
 tor-protover = { path = "../tor-protover", version = "0.40.0", features = ["serde"] }
 tor-rtcompat = { path = "../tor-rtcompat", version = "0.40.0" }
-tor-time = { path = "../tor-time", version = "0.40.0" }
 tracing = "0.1.36"
+void = "1"
+web-time-compat = { path = "../web-time-compat", version = "0.1.0" }
+
+[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
+fslock = "0.2.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 gloo-timers = { version = "0.3", features = ["futures"] }
@@ -129,5 +137,3 @@ tor-linkspec = { path = "../tor-linkspec", version = "0.40.0" }
 tor-rtcompat = { path = "../tor-rtcompat", version = "0.40.0", features = ["tokio", "native-tls"] }
 tor-rtmock = { path = "../tor-rtmock", version = "0.40.0" }
 tracing-test = "0.2.4"
-[package.metadata.docs.rs]
-all-features = true

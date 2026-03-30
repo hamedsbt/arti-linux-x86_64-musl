@@ -2,7 +2,7 @@
 use crate::impls::tokio::TokioRuntimeHandle as Handle;
 
 use crate::{CompoundRuntime, ToplevelBlockOn};
-use tor_time::RealCoarseTimeProvider;
+use crate::RealCoarseTimeProvider;
 use std::io::{Error as IoError, Result as IoResult};
 
 #[cfg(feature = "native-tls")]

@@ -160,6 +160,12 @@ pub(crate) fn tcp_listen(addr: &std::net::SocketAddr) -> std::io::Result<std::ne
     Ok(socket.into())
 }
 
+/// Stub replacement for tcp_listen on wasm32-unknown
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub(crate) fn tcp_listen(_addr: &std::net::SocketAddr) -> std::io::Result<std::net::TcpListener> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+}
+
 /// Helper: Implement an unreachable NetProvider<unix::SocketAddr> for a given runtime.
 #[cfg(all(not(unix), not(target_arch = "wasm32")))]
 macro_rules! impl_unix_non_provider {

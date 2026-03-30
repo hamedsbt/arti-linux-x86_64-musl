@@ -25,13 +25,13 @@ full = [
     "tor-basic-utils/full",
     "tor-async-utils/full",
     "oneshot-fused-workaround/full",
+    "web-time-compat/full",
 ]
 
 experimental = ["state-dir", "testing"]
 __is_experimental = []
 
 [dependencies]
-tor-time = { path = "../tor-time", version = "0.40.0" }
 amplify = { version = "4", default-features = false, features = ["derive"], optional = true }
 derive-deftly = { version = "~1.6.0", features = ["full", "beta"] }
 derive_more = { version = "2.0.1", features = ["full"] }
@@ -52,6 +52,7 @@ tor-basic-utils = { path = "../tor-basic-utils", version = "0.40.0" }
 tor-error = { path = "../tor-error", version = "0.40.0", features = ["tracing"] }
 tracing = "0.1.36"
 void = "1"
+web-time-compat = { path = "../web-time-compat", version = "0.1.0" }
 
 [dev-dependencies]
 anyhow = { version = "1.0.23" }

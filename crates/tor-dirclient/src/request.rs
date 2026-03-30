@@ -21,7 +21,7 @@ use std::future::Future;
 use std::iter::FromIterator;
 use std::pin::Pin;
 use std::time::Duration;
-use tor_time::{fmt_http_date, SystemTime};
+use std::time::SystemTime;
 
 use itertools::Itertools;
 
@@ -267,7 +267,7 @@ impl sealed::RequestableInner for ConsensusRequest {
         if let Some(when) = self.last_consensus_date() {
             req = req.header(
                 http::header::IF_MODIFIED_SINCE,
-                fmt_http_date(when),
+                httpdate::fmt_http_date(when),
             );
         }
 
@@ -832,6 +832,7 @@ mod test {
     //! <!-- @@ end test lint list maintained by maint/add_warning @@ -->
     use super::sealed::RequestableInner;
     use super::*;
+    use web_time_compat::SystemTimeExt;
 
     #[test]
     fn test_md_request() -> Result<()> {
@@ -916,10 +917,10 @@ mod test {
         .unwrap();
 
         let d2 = b"blah blah blah 12 blah blah blah";
-        let d3 = SystemTime::now();
+        let d3 = SystemTime::get();
         let mut req = ConsensusRequest::default();
 
-        let when = fmt_http_date(d3);
+        let when = httpdate::fmt_http_date(d3);
 
         req.push_authority_id(d1);
         req.push_old_consensus_digest(*d2);

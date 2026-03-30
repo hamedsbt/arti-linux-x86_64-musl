@@ -87,7 +87,8 @@ use tor_error::internal;
 use tor_linkspec::{HasRelayIds, OwnedChanTarget};
 use tor_memquota::mq_queue::{self, ChannelSpec as _, MpscSpec};
 use tor_rtcompat::{DynTimeProvider, SleepProvider};
-use tor_time::{AtomicOptTimestamp, CoarseInstant, CoarseTimeProvider};
+use tor_time::AtomicOptTimestamp;
+use tor_rtcompat::{CoarseInstant, CoarseTimeProvider};
 
 #[cfg(feature = "circ-padding")]
 use tor_async_utils::counting_streams::{self, CountingSink, CountingStream};
@@ -871,15 +872,21 @@ impl Channel {
     #[cfg(feature = "relay")]
     pub(crate) async fn new_outbound_circ(
         self: &Arc<Self>,
+        memquota: CircuitAccount,
     ) -> Result<(CircId, CircuitRxReceiver, oneshot::Receiver<CreateResponse>)> {
         if self.is_closing() {
             return Err(ChannelClosed.into());
         }
 
         let time_prov = self.time_provider().clone();
-        let memquota = CircuitAccount::new(&self.details.memquota)?;
 
         // TODO: blocking is risky, but so is unbounded.
+
+        // TODO(#2427): the ChannelAccount of the outbound
+        // channel should be set as the (additional) parent
+        // of the `memquota` CircuitAccount.
+        //
+        // This will require some tor-memquota API changes
         let (sender, receiver) =
             MpscSpec::new(128).new_mq(time_prov.clone(), memquota.as_raw_account())?;
         let (createdsender, createdreceiver) = oneshot::channel::<CreateResponse>();

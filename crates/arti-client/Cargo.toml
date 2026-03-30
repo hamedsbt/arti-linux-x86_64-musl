@@ -10,6 +10,9 @@ description = "Library for connecting to the Tor network as an anonymous client"
 keywords = ["tor", "arti", "privacy", "anonymity", "networking"]
 categories = ["network-programming", "cryptography"]
 repository = "https://gitlab.torproject.org/tpo/core/arti.git/"
+
+[package.metadata.docs.rs]
+all-features = true
 #
 # examples call TorClient::create_bootstrapped which needs PreferredRuntime
 # @@ test-all-crates conditional-option minimal --features=tokio,native-tls
@@ -59,6 +62,7 @@ full = [
     "tor-config-path/full",
     "tor-protover/full",
     "tor-dircommon/full",
+    "web-time-compat/full",
 ] # "full" is a top-level selector that turns on every feature, _EXCEPT FOR_:
 #   * Features that are experimental or unstable
 #   * Features that are testing-only
@@ -210,10 +214,14 @@ tor-protover = { path = "../tor-protover", version = "0.40.0" }
 tor-ptmgr = { path = "../tor-ptmgr", version = "0.40.0", optional = true }
 tor-rpcbase = { path = "../tor-rpcbase", version = "0.40.0", optional = true }
 tor-rtcompat = { path = "../tor-rtcompat", version = "0.40.0" }
-tor-time = { path = "../tor-time", version = "0.40.0" }
 tracing = "0.1.36"
 visibility = { version = "0.1.0", optional = true }
 void = "1"
+web-time-compat = { path = "../web-time-compat", version = "0.1.0" }
+
+# TODO wasm: Remove this once there is a supported wasm StateMgr.
+[target.'cfg(all(target_arch="wasm32", target_os="unknown"))'.dependencies]
+tor-persist = { path = "../tor-persist", version = "0.40.0", features = ["testing"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen = "0.2"
@@ -242,7 +250,6 @@ tokio-crate = { package = "tokio", version = "1.7", features = [
     "macros",
 ] }
 tor-rtcompat = { path = "../tor-rtcompat", version = "0.40.0", features = ["tokio", "native-tls"] }
-tor-time = { path = "../tor-time", version = "0.40.0" }
 
-[package.metadata.docs.rs]
-all-features = true
+[target.'cfg(not(all(target_arch="wasm32", target_os="unknown")))'.dependencies]
+tempfile = "3.3"

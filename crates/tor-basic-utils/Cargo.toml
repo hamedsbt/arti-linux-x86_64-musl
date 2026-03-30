@@ -13,7 +13,6 @@ categories = ["rust-patterns"]
 repository = "https://gitlab.torproject.org/tpo/core/arti.git/"
 
 [dependencies]
-tor-time = { path = "../tor-time", version = "0.40.0" }
 derive_more = { version = "2.0.1", features = ["full"] }
 hex = "0.4"
 itertools = "0.14.0"
@@ -25,6 +24,7 @@ slab = "0.4.7"
 smallvec = "1.10"
 thiserror = "2"
 weak-table = "0.3.0"
+web-time-compat = { version = "0.1.0", path = "../web-time-compat" }
 
 [dev-dependencies]
 derive_more = { version = "2.0.1", features = ["full"] }
@@ -34,13 +34,13 @@ serde-value = "0.7.0"
 serde_json = "1.0.50"
 
 [features]
-full = ["serde"]
+full = ["serde", "web-time-compat/full"]
 
 [package.metadata.docs.rs]
 all-features = true
 
-[target.'cfg(unix)'.dependencies]
-libc = { version = "0.2", default-features = false }
-
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", default-features = false }

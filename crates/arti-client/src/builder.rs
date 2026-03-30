@@ -5,17 +5,13 @@
 use crate::{
     BootstrapBehavior, InertTorClient, Result, TorClient, TorClientConfig, err::ErrorDetail,
 };
-use std::{
-    result::Result as StdResult,
-    sync::Arc,
-    time::Duration,
-};
+use std::{result::Result as StdResult, sync::Arc};
 use tor_dirmgr::{BoxedDirStore, DirMgrConfig, DirMgrStore};
 use tor_error::{ErrorKind, HasKind as _};
 use tor_persist::AnyStateMgr;
 use tor_rtcompat::Runtime;
-use tor_time::Instant;
 use tracing::instrument;
+use web_time_compat::{Duration, Instant, InstantExt};
 
 /// An object that knows how to construct some kind of DirProvider.
 ///
@@ -235,11 +231,11 @@ impl<R: Runtime> TorClientBuilder<R> {
     #[instrument(skip_all, level = "trace")]
     pub fn create_unbootstrapped(&self) -> Result<TorClient<R>> {
         let timeout = self.local_resource_timeout_or(Duration::from_millis(0))?;
-        let give_up_at = Instant::now() + timeout;
+        let give_up_at = Instant::get() + timeout;
         let mut first_attempt = true;
 
         loop {
-            match self.create_unbootstrapped_inner(Instant::now, give_up_at, first_attempt) {
+            match self.create_unbootstrapped_inner(Instant::get, give_up_at, first_attempt) {
                 Err(delay) => {
                     first_attempt = false;
                     std::thread::sleep(delay);

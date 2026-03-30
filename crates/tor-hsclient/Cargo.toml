@@ -49,6 +49,7 @@ full = [
     "slotmap-careful/full",
     "tor-memquota/full",
     "tor-protover/full",
+    "web-time-compat/full",
 ]
 __is_experimental = []
 experimental = ["keymgr", "hs-pow-full"]
@@ -89,8 +90,8 @@ tor-persist = { path = "../tor-persist", version = "0.40.0" }
 tor-proto = { version = "0.40.0", path = "../tor-proto", features = ["hs-client", "send-control-msg"] }
 tor-protover = { version = "0.40.0", path = "../tor-protover" }
 tor-rtcompat = { version = "0.40.0", path = "../tor-rtcompat" }
-tor-time = { version = "0.40.0", path = "../tor-time" }
 tracing = "0.1.36"
+web-time-compat = { version = "0.1.0", path = "../web-time-compat" }
 
 [dev-dependencies]
 humantime = "2"

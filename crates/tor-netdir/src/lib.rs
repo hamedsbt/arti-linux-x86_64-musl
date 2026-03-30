@@ -85,7 +85,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::ops::Deref;
 use std::sync::Arc;
-use tor_time::SystemTime;
+use std::time::SystemTime;
 use strum::{EnumCount, EnumIter};
 use tracing::warn;
 use typed_index_collections::{TiSlice, TiVec};

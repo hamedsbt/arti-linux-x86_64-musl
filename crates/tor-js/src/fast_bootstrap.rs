@@ -163,8 +163,8 @@ fn parse_stored_zip(data: &[u8]) -> Result<HashMap<String, String>, wasm_bindgen
 // Helpers
 // ============================================================================
 
-fn system_time_to_secs(t: tor_time::SystemTime) -> u64 {
-    t.duration_since(tor_time::UNIX_EPOCH)
+fn system_time_to_secs(t: std::time::SystemTime) -> u64 {
+    t.duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }

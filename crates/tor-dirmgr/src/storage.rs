@@ -25,7 +25,7 @@ use std::fs::File;
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Result as IoResult;
 use std::str::Utf8Error;
-use tor_time::SystemTime;
+use std::time::SystemTime;
 use time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -25,6 +25,7 @@ full = [
     "tor-error/full",
     "tor-general-addr/full",
     "tor-cert-x509?/full",
+    "web-time-compat/full",
 ]
 
 experimental = ["smol"]
@@ -72,6 +73,7 @@ hex = "0.4.3"
 paste = "1"
 pin-project = "1"
 thiserror = "2"
+web-time-compat = { version = "0.1.0", path = "../web-time-compat" }
 tor-error = { version = "0.40.0", path = "../tor-error", features = ["tracing"] }
 tor-general-addr = { version = "0.40.0", path = "../tor-general-addr" }
 tracing = "0.1.36"
@@ -101,7 +103,6 @@ rustls-dont-use = { package = "rustls", version = "0.23.21", default-features = 
 rustls-pki-types = { version = "1.8", optional = true }
 rustls-webpki = { version = "0.103.1", optional = true }
 smol = { version = "2.0.2", optional = true }
-socket2 = "0.6.1"
 tokio-crate = { package = "tokio", version = "1.7", optional = true, features = [
     "rt",
     "rt-multi-thread",
@@ -123,6 +124,11 @@ futures-rustls = { version = "0.26", default-features = false, features = ["tls1
 rustls-rustcrypto = "0.0.2-alpha"
 rustls-pki-types = { version = "1", features = ["web"] }
 zeroize = "1"
+# getrandom 0.2 with js feature needed for rustls-rustcrypto's transitive deps on WASM
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+
+[target.'cfg(not(all(target_arch="wasm32", target_os="unknown")))'.dependencies]
+socket2 = "0.6.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

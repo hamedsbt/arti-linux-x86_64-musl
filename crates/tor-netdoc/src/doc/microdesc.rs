@@ -12,7 +12,7 @@
 //! which relay they are for, which requires a valid consensus
 //! directory.
 
-use tor_time::SystemTime;
+use std::time::SystemTime;
 use crate::parse::keyword::Keyword;
 use crate::parse::parser::SectionRules;
 use crate::parse::tokenize::{ItemResult, NetDocReader};

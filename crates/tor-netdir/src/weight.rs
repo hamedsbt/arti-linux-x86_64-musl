@@ -424,10 +424,11 @@ mod test {
     use netstatus::RelayWeight as RW;
     use std::net::SocketAddr;
     use std::time::Duration;
-use tor_time::SystemTime;
+use std::time::SystemTime;
     use tor_basic_utils::test_rng::testing_rng;
     use tor_netdoc::doc::netstatus::{Lifetime, MdRouterStatusBuilder};
     use tor_netdoc::types::relay_flags::{RelayFlag, RelayFlags};
+    use web_time_compat::SystemTimeExt;
 
     #[test]
     fn t_clamp() {
@@ -643,7 +644,7 @@ use tor_time::SystemTime;
     #[test]
     fn weightset_from_consensus() {
         use rand::Rng;
-        let now = SystemTime::now();
+        let now = SystemTime::get();
         let one_hour = Duration::new(3600, 0);
         let mut rng = testing_rng();
         let mut bld = MdConsensus::builder();

@@ -6,8 +6,6 @@ use futures::stream::{Stream, StreamExt};
 use std::net::IpAddr;
 use std::sync::Arc;
 use tor_llcrypto::pk::ValidatableSignature;
-use tor_time::SystemTime;
-
 use crate::channel::{Canonicity, ChannelFrame, UniqId};
 use crate::memquota::ChannelAccount;
 use crate::peer::PeerInfo;
@@ -25,8 +23,8 @@ use tor_linkspec::{
 };
 use tor_llcrypto as ll;
 use tor_llcrypto::pk::ed25519::Ed25519Identity;
-use tor_rtcompat::{SleepProvider, StreamOps};
-use tor_time::{CoarseInstant, CoarseTimeProvider};
+use tor_rtcompat::{CoarseInstant, CoarseTimeProvider, SleepProvider, StreamOps};
+use web_time_compat::{SystemTime, SystemTimeExt};
 
 use digest::Digest;
 
@@ -657,7 +655,7 @@ impl<
         use tor_cert::CertType;
 
         // Replace 'now' with the real time to use.
-        let now = now.unwrap_or_else(SystemTime::now);
+        let now = now.unwrap_or_else(SystemTime::get);
 
         // We are a client initiating a channel to a relay or a bridge. We have received a CERTS
         // cell and we need to verify these certs:
@@ -733,7 +731,7 @@ pub(crate) fn verify_link_auth_cert(
     use tor_cert::CertType;
 
     // Replace 'now' with the real time to use.
-    let now = now.unwrap_or_else(SystemTime::now);
+    let now = now.unwrap_or_else(SystemTime::get);
 
     // Now look at the signing->TLS cert and check it against the
     // peer certificate.
@@ -860,7 +858,7 @@ pub(super) mod test {
     use regex::Regex;
     use std::time::Duration;
     use tor_llcrypto::pk::rsa::RsaIdentity;
-    use tor_time::SystemTime;
+    use std::time::SystemTime;
 
     use super::*;
     use crate::channel::handler::test::MsgBuf;
@@ -958,7 +956,7 @@ pub(super) mod test {
     {
         let mb = MsgBuf::new(input);
         let handshake = ClientInitiatorHandshake::new(mb, None, sleep_prov, fake_mq());
-        handshake.connect(SystemTime::now).await.err().unwrap()
+        handshake.connect(SystemTime::get).await.err().unwrap()
     }
 
     #[test]

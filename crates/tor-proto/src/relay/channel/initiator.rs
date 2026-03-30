@@ -20,7 +20,7 @@ use tracing::trace;
 use tor_cell::chancell::msg;
 use tor_linkspec::OwnedChanTarget;
 use tor_rtcompat::{CertifiedConn, SleepProvider, StreamOps};
-use tor_time::CoarseTimeProvider;
+use tor_rtcompat::CoarseTimeProvider;
 
 use crate::{
     ClockSkew, RelayIdentities, Result,
