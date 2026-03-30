@@ -50,7 +50,7 @@ pub enum BodyFraming {
 /// Result of the header phase of a fetch request.
 pub struct FetchHeadersResult {
     pub status: u16,
-    pub headers: HashMap<String, String>,
+    pub headers: Vec<(String, String)>,
     pub body_reader: BodyReader,
 }
 
@@ -337,7 +337,8 @@ pub fn build_http_request(
         request.push_str("Connection: close\r\n");
     }
 
-    // Add custom headers (reject any with CR/LF to prevent header injection)
+    // Add custom headers (reject any with CR/LF to prevent header injection).
+    // Skip Host and Content-Length — we set these ourselves.
     for (key, value) in headers {
         if key.contains('\r') || key.contains('\n') || value.contains('\r') || value.contains('\n')
         {
@@ -347,6 +348,20 @@ pub fn build_http_request(
                 format!("Header contains invalid CR/LF characters: {}", key),
                 false,
             ));
+        }
+        let lower = key.to_ascii_lowercase();
+        if lower == "host" {
+            if value != host {
+                tracing::warn!("Ignoring caller's Host header '{}' (using '{}')", value, host);
+            }
+            continue;
+        }
+        if lower == "content-length" {
+            let expected = body.map(|b| b.len().to_string()).unwrap_or_default();
+            if *value != expected {
+                tracing::warn!("Ignoring caller's Content-Length '{}' (using '{}')", value, expected);
+            }
+            continue;
         }
         request.push_str(&format!("{}: {}\r\n", key, value));
     }
@@ -378,7 +393,7 @@ async fn send_request_and_read_headers<S>(
     stream: &mut S,
     request_bytes: &[u8],
     method: &Method,
-) -> Result<(u16, HashMap<String, String>, BodyFraming, Vec<u8>), JsTorError>
+) -> Result<(u16, Vec<(String, String)>, BodyFraming, Vec<u8>), JsTorError>
 where
     S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin,
 {
@@ -395,7 +410,7 @@ where
     // Read response headers, skipping 1xx interim responses (except 101).
     let mut header_buf = Vec::new();
     let status: u16;
-    let mut headers = HashMap::new();
+    let mut headers: Vec<(String, String)> = Vec::new();
     let overflow: Vec<u8>;
 
     loop {
@@ -476,7 +491,7 @@ where
         headers.clear();
         for line in lines {
             if let Some((key, value)) = line.split_once(':') {
-                headers.insert(key.trim().to_lowercase(), value.trim().to_string());
+                headers.push((key.trim().to_lowercase(), value.trim().to_string()));
             }
         }
         overflow = remaining;
@@ -490,13 +505,12 @@ where
     {
         BodyFraming::None
     } else if headers
-        .get("transfer-encoding")
-        .map(|te| te.to_ascii_lowercase().contains("chunked"))
-        .unwrap_or(false)
+        .iter()
+        .any(|(k, v)| k == "transfer-encoding" && v.to_ascii_lowercase().contains("chunked"))
     {
         debug!("Body framing: chunked");
         BodyFraming::Chunked
-    } else if let Some(cl) = headers.get("content-length") {
+    } else if let Some((_, cl)) = headers.iter().find(|(k, _)| k == "content-length") {
         let len: usize = cl
             .parse()
             .map_err(|e| JsTorError::http_request(format!("Invalid content-length: {}", e)))?;
