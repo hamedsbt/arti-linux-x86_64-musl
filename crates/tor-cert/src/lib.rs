@@ -57,7 +57,7 @@ use tor_bytes::{Error as BytesError, Result as BytesResult};
 use tor_bytes::{Readable, Reader};
 use tor_llcrypto::pk::*;
 
-use std::time;
+use tor_time::SystemTime;
 
 pub use err::CertError;
 
@@ -400,12 +400,12 @@ impl Ed25519Cert {
     }
 
     /// Return the time at which this certificate becomes expired
-    pub fn expiry(&self) -> std::time::SystemTime {
+    pub fn expiry(&self) -> SystemTime {
         self.exp_hours.into()
     }
 
     /// Return true iff this certificate will be expired at the time `when`.
-    pub fn is_expired_at(&self, when: std::time::SystemTime) -> bool {
+    pub fn is_expired_at(&self, when: SystemTime) -> bool {
         when >= self.expiry()
     }
 
@@ -590,7 +590,7 @@ impl tor_checkable::SelfSigned<SigCheckedCert> for UncheckedCert {
 impl tor_checkable::Timebound<Ed25519Cert> for Ed25519Cert {
     type Error = tor_checkable::TimeValidityError;
 
-    fn is_valid_at(&self, t: &time::SystemTime) -> Result<(), Self::Error> {
+    fn is_valid_at(&self, t: &SystemTime) -> Result<(), Self::Error> {
         if self.is_expired_at(*t) {
             let expiry = self.expiry();
             Err(Self::Error::Expired(
@@ -609,7 +609,7 @@ impl tor_checkable::Timebound<Ed25519Cert> for Ed25519Cert {
 
 impl tor_checkable::Timebound<Ed25519Cert> for SigCheckedCert {
     type Error = tor_checkable::TimeValidityError;
-    fn is_valid_at(&self, t: &time::SystemTime) -> std::result::Result<(), Self::Error> {
+    fn is_valid_at(&self, t: &SystemTime) -> std::result::Result<(), Self::Error> {
         self.cert.is_valid_at(t)
     }
 
@@ -625,20 +625,20 @@ struct ExpiryHours(u32);
 /// The number of seconds in an hour.
 const SEC_PER_HOUR: u64 = 3600;
 
-impl From<ExpiryHours> for std::time::SystemTime {
+impl From<ExpiryHours> for SystemTime {
     fn from(value: ExpiryHours) -> Self {
         // TODO MSRV 1.91; use from_hours.
         let d = std::time::Duration::from_secs(u64::from(value.0) * SEC_PER_HOUR);
-        std::time::SystemTime::UNIX_EPOCH + d
+        SystemTime::UNIX_EPOCH + d
     }
 }
 
 #[cfg(feature = "encode")]
 impl ExpiryHours {
     /// Return the earliest possible `ExpiryHours` that is no earlier than `expiry`.
-    fn try_from_systemtime_ceil(expiry: std::time::SystemTime) -> Result<Self, CertEncodeError> {
+    fn try_from_systemtime_ceil(expiry: SystemTime) -> Result<Self, CertEncodeError> {
         let d = expiry
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .duration_since(SystemTime::UNIX_EPOCH)
             .map_err(|_| CertEncodeError::InvalidExpiration)?;
         let sec_ceil = d.as_secs() + if d.subsec_nanos() > 0 { 1 } else { 0 };
         let hours = sec_ceil

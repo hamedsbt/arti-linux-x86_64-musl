@@ -5,7 +5,7 @@ use futures::sink::SinkExt;
 use futures::stream::{Stream, StreamExt};
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::SystemTime;
+use tor_time::SystemTime;
 use tor_llcrypto::pk::ValidatableSignature;
 
 use crate::channel::{Canonicity, ChannelFrame, UniqId};
@@ -25,7 +25,8 @@ use tor_linkspec::{
 };
 use tor_llcrypto as ll;
 use tor_llcrypto::pk::ed25519::Ed25519Identity;
-use tor_rtcompat::{CoarseTimeProvider, SleepProvider, StreamOps};
+use tor_rtcompat::{SleepProvider, StreamOps};
+use tor_time::{CoarseInstant, CoarseTimeProvider};
 
 use digest::Digest;
 
@@ -56,7 +57,7 @@ where
     async fn send_versions_cell<F>(
         &mut self,
         now_fn: F,
-    ) -> Result<(coarsetime::Instant, SystemTime)>
+    ) -> Result<(CoarseInstant, SystemTime)>
     where
         F: FnOnce() -> SystemTime,
     {
@@ -70,7 +71,7 @@ where
         );
         self.framed_tls().send(version_cell).await?;
         Ok((
-            coarsetime::Instant::now(), // Flushed at instant
+            CoarseInstant::now(), // Flushed at instant
             now_fn(),                   // Flushed at wallclock
         ))
     }
@@ -146,7 +147,7 @@ where
     ) -> Result<(
         msg::AuthChallenge,
         msg::Certs,
-        (msg::Netinfo, coarsetime::Instant),
+        (msg::Netinfo, CoarseInstant),
         // TODO: We should typedef this somewhere.
         /* the SLOG digest */
         Option<[u8; 32]>,
@@ -245,7 +246,7 @@ where
 
             break match read_msg(*self.unique_id(), self.framed_tls()).await? {
                 NetinfoMsg::Vpadding(_) => continue,
-                NetinfoMsg::Netinfo(msg) => (msg, coarsetime::Instant::now()),
+                NetinfoMsg::Netinfo(msg) => (msg, CoarseInstant::now()),
             };
         };
 
@@ -651,7 +652,7 @@ impl<
         self,
         peer: &U,
         peer_cert_digest: [u8; 32],
-        now: Option<std::time::SystemTime>,
+        now: Option<SystemTime>,
     ) -> Result<VerifiedChannel<T, S>> {
         use tor_cert::CertType;
 
@@ -726,7 +727,7 @@ impl<
 pub(crate) fn verify_link_auth_cert(
     certs: &msg::Certs,
     kp_relaysign_ed: &Ed25519Identity,
-    now: Option<std::time::SystemTime>,
+    now: Option<SystemTime>,
     clock_skew: ClockSkew,
 ) -> Result<Ed25519Identity> {
     use tor_cert::CertType;
@@ -813,8 +814,8 @@ pub(crate) fn get_cert(certs: &msg::Certs, tp: CertType) -> Result<tor_cert::Key
 /// that you have authenticated the other party.
 pub(crate) fn unauthenticated_clock_skew(
     netinfo_cell: &msg::Netinfo,
-    netinfo_rcvd_at: coarsetime::Instant,
-    versions_flushed_at: coarsetime::Instant,
+    netinfo_rcvd_at: CoarseInstant,
+    versions_flushed_at: CoarseInstant,
     versions_flushed_wallclock: SystemTime,
 ) -> ClockSkew {
     // Try to compute our clock skew.  It won't be authenticated yet, since we haven't checked
@@ -857,7 +858,8 @@ pub(super) mod test {
     #![allow(clippy::unwrap_used)]
     use hex_literal::hex;
     use regex::Regex;
-    use std::time::{Duration, SystemTime};
+    use std::time::Duration;
+    use tor_time::SystemTime;
     use tor_llcrypto::pk::rsa::RsaIdentity;
 
     use super::*;

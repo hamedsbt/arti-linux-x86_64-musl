@@ -8,8 +8,9 @@ use crate::{
 use std::{
     result::Result as StdResult,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
+use tor_time::Instant;
 use tor_dirmgr::{DirMgrConfig, DirMgrStore};
 use tor_error::{ErrorKind, HasKind as _};
 use tor_rtcompat::Runtime;

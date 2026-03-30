@@ -6,7 +6,8 @@ use futures::stream::{Stream, StreamExt};
 use rand::Rng;
 use safelog::Sensitive;
 use std::net::IpAddr;
-use std::{sync::Arc, time::SystemTime};
+use std::sync::Arc;
+use tor_time::SystemTime;
 use tracing::trace;
 
 use tor_cell::chancell::msg::AnyChanMsg;
@@ -14,7 +15,8 @@ use tor_cell::chancell::{AnyChanCell, ChanMsg, msg};
 use tor_cell::restrict::{RestrictedMsg, restricted_msg};
 use tor_error::internal;
 use tor_linkspec::{ChannelMethod, HasChanMethod, OwnedChanTarget};
-use tor_rtcompat::{CertifiedConn, CoarseTimeProvider, SleepProvider, StreamOps};
+use tor_rtcompat::{CertifiedConn, SleepProvider, StreamOps};
+use tor_time::{CoarseInstant, CoarseTimeProvider};
 
 use crate::channel::handshake::{
     ChannelBaseHandshake, ChannelInitiatorHandshake, UnverifiedChannel, UnverifiedInitiatorChannel,
@@ -324,7 +326,7 @@ impl<
             msg::Authenticate,
             /* the CLOG digest */ [u8; 32],
         )>,
-        (msg::Netinfo, coarsetime::Instant),
+        (msg::Netinfo, CoarseInstant),
     )> {
         // IMPORTANT: Protocol wise, we MUST only allow one single cell of each type for a valid
         // handshake. Any duplicates lead to a failure.
@@ -388,7 +390,7 @@ impl<
                     CertsNetinfoMsg::Vpadding(_) => continue,
                     // If a NETINFO cell, the initiator did not authenticate and we can stop early.
                     CertsNetinfoMsg::Netinfo(msg) => {
-                        break 'outer (None, msg, coarsetime::Instant::now());
+                        break 'outer (None, msg, CoarseInstant::now());
                     }
                     // If a CERTS cell, the initiator is authenticating.
                     CertsNetinfoMsg::Certs(msg) => msg,
@@ -426,7 +428,7 @@ impl<
 
                 break match read_msg(*self.unique_id(), self.framed_tls()).await? {
                     NetinfoMsg::Vpadding(_) => continue,
-                    NetinfoMsg::Netinfo(msg) => (msg, coarsetime::Instant::now()),
+                    NetinfoMsg::Netinfo(msg) => (msg, CoarseInstant::now()),
                 };
             };
 

@@ -71,7 +71,7 @@ use crate::peer::PeerInfo;
 use crate::util::err::ChannelClosed;
 use crate::util::oneshot_broadcast;
 use crate::util::timeout::TimeoutEstimator;
-use crate::util::ts::AtomicOptTimestamp;
+use tor_time::{AtomicOptTimestamp, CoarseInstant, CoarseTimeProvider};
 use crate::{ClockSkew, client};
 use crate::{Error, Result};
 use cfg_if::cfg_if;
@@ -87,7 +87,7 @@ use tor_cell::chancell::{AnyChanCell, CircId, msg::Netinfo, msg::PaddingNegotiat
 use tor_error::internal;
 use tor_linkspec::{HasRelayIds, OwnedChanTarget};
 use tor_memquota::mq_queue::{self, ChannelSpec as _, MpscSpec};
-use tor_rtcompat::{CoarseTimeProvider, DynTimeProvider, SleepProvider};
+use tor_rtcompat::{DynTimeProvider, SleepProvider};
 
 #[cfg(feature = "circ-padding")]
 use tor_async_utils::counting_streams::{self, CountingSink, CountingStream};
@@ -301,7 +301,7 @@ pub struct Channel {
     /// created.
     clock_skew: ClockSkew,
     /// The time when this channel was successfully completed
-    opened_at: coarsetime::Instant,
+    opened_at: CoarseInstant,
     /// Mutable state used by the `Channel.
     mutable: Mutex<MutableDetails>,
     /// Information shared with the reactor
@@ -596,7 +596,7 @@ impl Channel {
             peer_id,
             peer,
             clock_skew,
-            opened_at: coarsetime::Instant::now(),
+            opened_at: CoarseInstant::now(),
             mutable: Mutex::new(mutable),
             details: Arc::clone(&details),
             canonicity,
@@ -1012,7 +1012,7 @@ impl Channel {
             peer_id,
             peer: MaybeSensitive::not_sensitive(PeerInfo::EMPTY),
             clock_skew: ClockSkew::None,
-            opened_at: coarsetime::Instant::now(),
+            opened_at: CoarseInstant::now(),
             mutable: Default::default(),
             details,
             canonicity: Canonicity::new_canonical(),
@@ -1139,7 +1139,7 @@ pub(crate) mod test {
             peer_id,
             peer: MaybeSensitive::not_sensitive(PeerInfo::EMPTY),
             clock_skew: ClockSkew::None,
-            opened_at: coarsetime::Instant::now(),
+            opened_at: CoarseInstant::now(),
             mutable: Default::default(),
             details: fake_channel_details(),
             canonicity: Canonicity::new_canonical(),

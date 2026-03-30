@@ -5,7 +5,7 @@
 // But the tor_checkable API might need some updates and this seems nontrivial.
 // Each verification function seems to take different inputs.
 
-use saturating_time::SaturatingTime;
+use tor_time::SystemTimeExt as _;
 
 use super::*;
 

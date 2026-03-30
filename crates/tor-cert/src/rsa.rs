@@ -49,7 +49,7 @@ fn compute_digest(c: &[u8]) -> [u8; 32] {
 
 impl RsaCrosscert {
     /// Return the time at which this certificate becomes expired
-    pub fn expiry(&self) -> std::time::SystemTime {
+    pub fn expiry(&self) -> tor_time::SystemTime {
         self.exp_hours.into()
     }
 

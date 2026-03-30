@@ -30,6 +30,7 @@ thiserror = "2"
 tor-error = { version = "0.40.0", path = "../tor-error", features = ["tracing"] }
 tor-general-addr = { version = "0.40.0", path = "../tor-general-addr" }
 tor-rtcompat = { version = "0.40.0", path = "../tor-rtcompat" }
+tor-time = { version = "0.40.0", path = "../tor-time" }
 tracing = "0.1.36"
 tracing-test = "0.2.4"
 void = "1"

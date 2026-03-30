@@ -111,6 +111,7 @@ tor-persist = { path = "../tor-persist", version = "0.40.0" }
 tor-proto = { path = "../tor-proto", version = "0.40.0" }
 tor-protover = { path = "../tor-protover", version = "0.40.0", features = ["serde"] }
 tor-rtcompat = { path = "../tor-rtcompat", version = "0.40.0" }
+tor-time = { path = "../tor-time", version = "0.40.0" }
 tracing = "0.1.36"
 
 [dev-dependencies]

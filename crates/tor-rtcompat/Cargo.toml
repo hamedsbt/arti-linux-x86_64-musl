@@ -106,6 +106,7 @@ tokio-util = { version = "0.7.0", features = ["compat"], optional = true }
 tor-cert-x509 = { version = "0.40.0", path = "../tor-cert-x509", optional = true }
 tor-error = { version = "0.40.0", path = "../tor-error", features = ["tracing"] }
 tor-general-addr = { version = "0.40.0", path = "../tor-general-addr" }
+tor-time = { version = "0.40.0", path = "../tor-time" }
 tracing = "0.1.36"
 void = "1"
 zeroize = "1"
