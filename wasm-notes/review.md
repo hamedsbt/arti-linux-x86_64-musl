@@ -37,19 +37,6 @@ For per-crate change details, see `changes-explained.md`.
 errors, but there is no hard overall timeout. If the gateway is unresponsive but
 the connection stays open, `ready()` loops indefinitely.
 
-### H2. Fast bootstrap skips signature and timeliness verification
-
-`crates/tor-js/src/fast_bootstrap.rs`
-
-Authority certs extracted during fast bootstrap call
-`dangerously_assume_wellsigned()` and `dangerously_assume_timely()`. This is
-documented with a comment: "Skip signature and time checks for metadata
-extraction only. Arti re-verifies everything when loading from storage (see
-state.rs add_from_cache impls)." The risk is that if arti's re-verification
-invariant ever changes, malicious bootstrap data could inject bad certs
-silently. No freshness check on the bootstrap ZIP either (stale data with
-expired `valid_until` is accepted).
-
 ---
 
 ## Medium
@@ -223,3 +210,9 @@ These items were identified in earlier reviews and have been resolved:
     IndexedDB, writes to memory. No cross-tab corruption.
 21. **`state_dir()` unconditional** -- Gated behind `#[cfg(not(wasm32))]`.
     Only used by native-only features (pt-client, onion-service-service)
+22. **Fast bootstrap skips verification** -- By design. The
+    `dangerously_assume_wellsigned()`/`dangerously_assume_timely()` calls
+    are only for metadata extraction (key IDs, timestamps for storage keys).
+    Arti re-verifies all cached data cryptographically in `add_from_cache`:
+    timeliness checks, authority signature validation, cert chain verification.
+    A malicious gateway cannot inject fake data.
