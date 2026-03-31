@@ -34,7 +34,7 @@ use tor_rtcompat::StreamOps;
 // TODO: Maybe move this to a separate crate so that tor-ptmgr can be
 // used without having to depend on chanmgr.
 #[async_trait]
-pub trait TransportImplHelper: Send + Sync {
+pub trait TransportImplHelper {
     /// The type of the resulting stream.
     type Stream: AsyncRead + AsyncWrite + StreamOps + Send + Sync + 'static;
 

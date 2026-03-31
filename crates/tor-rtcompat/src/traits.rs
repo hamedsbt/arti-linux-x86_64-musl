@@ -654,9 +654,6 @@ pub trait CertifiedConn {
 /// "innocuous-looking TLS handshakes" less important than they once were.  Once
 /// TLS 1.3 is completely ubiquitous, we might be able to specify a simpler link
 /// handshake than Tor uses now.
-///
-/// Note: We use `unsafe impl Send` on some WASM types
-/// to allow using standard async_trait everywhere.
 #[async_trait]
 pub trait TlsConnector<S> {
     /// The type of connection returned by this connector

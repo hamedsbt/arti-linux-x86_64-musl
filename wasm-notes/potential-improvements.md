@@ -76,3 +76,15 @@ still get the filter to avoid holding descriptors for abandoned bridges.
 support. Since Snowflake transport has been removed, the immediate need is gone.
 The fix is correct in principle and may be needed if bridge support is revisited,
 but it changes guard selection logic and deserves its own review.
+
+## 5. Move Send+Sync bounds into TransportImplHelper trait definition
+
+**File:** `crates/tor-chanmgr/src/transport.rs`, `builder.rs`, `proxied.rs`
+
+**Proposed improvement:** Add `Send + Sync` as supertraits of
+`TransportImplHelper`, then remove the redundant `+ Send + Sync` bounds from
+every `impl` block that uses it (builder.rs, proxied.rs). This is a minor
+cleanup that reduces boilerplate.
+
+**Why not included:** Not related to WASM — purely a code quality improvement
+that should go through upstream review on its own.

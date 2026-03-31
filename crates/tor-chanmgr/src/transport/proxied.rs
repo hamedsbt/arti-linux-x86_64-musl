@@ -437,7 +437,7 @@ impl<R: NetStreamProvider + Send + Sync> ExternalProxyPlugin<R> {
 
 #[cfg(feature = "pt-client")]
 #[async_trait]
-impl<R: NetStreamProvider> TransportImplHelper for ExternalProxyPlugin<R> {
+impl<R: NetStreamProvider + Send + Sync> TransportImplHelper for ExternalProxyPlugin<R> {
     type Stream = R::Stream;
 
     async fn connect(&self, target: &OwnedChanTarget) -> crate::Result<(PeerAddr, R::Stream)> {

@@ -145,7 +145,8 @@ where
 #[async_trait]
 impl<R: Runtime, H: TransportImplHelper> ChannelFactory for ChanBuilder<R, H>
 where
-    R: tor_rtcompat::TlsProvider<H::Stream>,
+    R: tor_rtcompat::TlsProvider<H::Stream> + Send + Sync,
+    H: Send + Sync,
 {
     #[instrument(skip_all, level = "trace")]
     async fn connect_via_transport(
@@ -175,7 +176,8 @@ where
 #[async_trait]
 impl<R: Runtime, H: TransportImplHelper> IncomingChannelFactory for ChanBuilder<R, H>
 where
-    R: tor_rtcompat::TlsProvider<H::Stream>,
+    R: tor_rtcompat::TlsProvider<H::Stream> + Send + Sync,
+    H: Send + Sync,
 {
     type Stream = H::Stream;
 
