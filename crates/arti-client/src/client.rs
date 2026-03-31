@@ -152,8 +152,7 @@ pub struct TorClient<R: Runtime> {
     #[cfg(feature = "bridge-client")]
     bridge_desc_mgr: Arc<Mutex<Option<Arc<BridgeDescMgr<R>>>>>,
     /// Pluggable transport manager.
-    /// Note: Not used on WASM - users inject their own PT manager via chanmgr.set_pt_mgr()
-    #[cfg(all(feature = "pt-client", not(target_arch = "wasm32")))]
+    #[cfg(feature = "pt-client")]
     pt_mgr: Arc<tor_ptmgr::PtMgr<R>>,
     /// HS client connector
     #[cfg(feature = "onion-service-client")]
@@ -939,8 +938,7 @@ impl<R: Runtime> TorClient<R> {
         let guardmgr = tor_guardmgr::GuardMgr::new(runtime.clone(), statemgr.clone(), config)
             .map_err(ErrorDetail::GuardMgrSetup)?;
 
-        // On WASM, users inject their own PT manager via chanmgr.set_pt_mgr()
-        #[cfg(all(feature = "pt-client", not(target_arch = "wasm32")))]
+        #[cfg(feature = "pt-client")]
         let pt_mgr = {
             let pt_state_dir = state_dir.as_path().join("pt_state");
             config.storage.permissions().make_directory(&pt_state_dir)?;
@@ -1100,7 +1098,7 @@ impl<R: Runtime> TorClient<R> {
             dirmgr,
             #[cfg(feature = "bridge-client")]
             bridge_desc_mgr,
-            #[cfg(all(feature = "pt-client", not(target_arch = "wasm32")))]
+            #[cfg(feature = "pt-client")]
             pt_mgr,
             #[cfg(feature = "onion-service-client")]
             hsclient,
@@ -1124,9 +1122,7 @@ impl<R: Runtime> TorClient<R> {
     }
 
     /// Construct a state manager from the client configuration.
-    // TODO: integrate into our storage path (currently unused because
-    // TorClientBuilder handles state manager creation via AnyStateMgr)
-    #[allow(dead_code)]
+    #[allow(dead_code)] // unused in our fork — builder passes statemgr directly
     fn statemgr_from_config(config: &TorClientConfig) -> Result<UsingStateMgr, ErrorDetail> {
         #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         {
@@ -1369,7 +1365,7 @@ impl<R: Runtime> TorClient<R> {
             .reconfigure(&new_config.channel, how, netparams)
             .map_err(wrap_err)?;
 
-        #[cfg(all(feature = "pt-client", not(target_arch = "wasm32")))]
+        #[cfg(feature = "pt-client")]
         self.pt_mgr
             .reconfigure(how, new_config.bridges.transports.clone())
             .map_err(wrap_err)?;
