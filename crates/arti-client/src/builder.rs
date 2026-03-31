@@ -275,19 +275,16 @@ impl<R: Runtime> TorClientBuilder<R> {
     fn resolve_statemgr(&self) -> Result<AnyStateMgr> {
         match self.statemgr.clone() {
             Some(mgr) => Ok(mgr),
+            #[cfg(not(target_arch = "wasm32"))]
             None => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let (state_dir, mistrust) = self.config.state_dir()
-                        .map_err(crate::Error::from)?;
-                    Ok(AnyStateMgr::from_path_and_mistrust(&state_dir, mistrust)
-                        .map_err(|e| crate::Error::from(ErrorDetail::StateMgrSetup(e)))?)
-                }
-                #[cfg(target_arch = "wasm32")]
-                Err(ErrorDetail::Bug(tor_error::bad_api_usage!(
-                    "On WASM, a state manager must be provided via TorClientBuilder::state_mgr()"
-                )).into())
+                let statemgr = TorClient::<R>::statemgr_from_config(&self.config)
+                    .map_err(crate::Error::from)?;
+                Ok(AnyStateMgr::Fs(statemgr))
             }
+            #[cfg(target_arch = "wasm32")]
+            None => Err(ErrorDetail::Bug(tor_error::bad_api_usage!(
+                "On WASM, a state manager must be provided via TorClientBuilder::state_mgr()"
+            )).into()),
         }
     }
 

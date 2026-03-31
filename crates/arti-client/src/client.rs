@@ -1122,20 +1122,13 @@ impl<R: Runtime> TorClient<R> {
     }
 
     /// Construct a state manager from the client configuration.
-    #[allow(dead_code)] // unused in our fork — builder passes statemgr directly
-    fn statemgr_from_config(config: &TorClientConfig) -> Result<UsingStateMgr, ErrorDetail> {
-        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-        {
-            use tor_persist::FsStateMgr;
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn statemgr_from_config(config: &TorClientConfig) -> Result<UsingStateMgr, ErrorDetail> {
+        use tor_persist::FsStateMgr;
 
-            let (state_dir, mistrust) = config.state_dir()?;
-            FsStateMgr::from_path_and_mistrust(state_dir, mistrust)
-                .map_err(ErrorDetail::StateMgrSetup)
-        }
-        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-        {
-            unimplemented!()
-        }
+        let (state_dir, mistrust) = config.state_dir()?;
+        FsStateMgr::from_path_and_mistrust(state_dir, mistrust)
+            .map_err(ErrorDetail::StateMgrSetup)
     }
 
     /// Bootstrap a connection to the Tor network, with a client created by `create_unbootstrapped`.

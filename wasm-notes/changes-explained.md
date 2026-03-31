@@ -107,7 +107,7 @@ the same store is shared by two consumers:
 `Arc` and passes the same Arc to both `AnyStateMgr` and `BoxedDirStore`.
 They share the lock.
 
-### arti-client (+524 -29)
+### arti-client (+518 -37)
 
 #### `src/storage.rs`
 **What:** Re-exports `KeyValueStore` and `StorageError` from `tor-persist`.
@@ -127,9 +127,10 @@ that calls `split_storage`). Builder passes these through to
 #### `src/client.rs`
 **What:**
 - `statemgr` field changed from `FsStateMgr` to `AnyStateMgr`.
-- `pt_mgr` field gated with `not(target_arch = "wasm32")`.
 - `create_keymgr()` returns `Ok(None)` on WASM.
 - `create_inner()` takes `statemgr` and `dirstore` params.
+- `statemgr_from_config()` cfg-gated to non-WASM only; builder's
+  `resolve_statemgr()` calls it for the default case.
 - `DirMgrStore` construction dispatches to custom or default.
 - `reconfigure()`: state directory comparison gated behind `not(wasm32)`.
 - `wait_for_stop()`: split into native/WASM versions.
