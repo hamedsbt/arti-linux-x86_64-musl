@@ -598,8 +598,7 @@ mod test {
     };
     use futures::StreamExt as _;
     use std::net::SocketAddr;
-    use std::time::Duration;
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
     use tor_linkspec::{ChannelMethod, HasRelayIds, RelayIdType};
     use tor_llcrypto::pk::ed25519::Ed25519Identity;
     use tor_llcrypto::pk::rsa::RsaIdentity;

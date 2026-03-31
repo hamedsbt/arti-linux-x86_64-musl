@@ -59,8 +59,6 @@ pub mod vote;
 #[cfg(feature = "build_docs")]
 mod build;
 
-use std::time::SystemTime;
-
 #[cfg(feature = "parse2")]
 use {
     crate::parse2::{self, ArgumentStream}, //
@@ -188,7 +186,7 @@ define_derive_deftly! {
     impl Lifetime {
         /// Construct a new Lifetime.
         pub fn new(
-            $( $fname: SystemTime, )
+            $( $fname: time::SystemTime, )
         ) -> Result<Self> {
             // Make this now because otherwise literal `valid_after` here in the body
             // has the wrong span - the compiler refuses to look at the argument.
@@ -204,12 +202,12 @@ define_derive_deftly! {
         }
       $(
         ${fattrs doc}
-        pub fn $fname(&self) -> SystemTime {
+        pub fn $fname(&self) -> time::SystemTime {
             *self.$fname
         }
       )
         /// Return true if this consensus is officially valid at the provided time.
-        pub fn valid_at(&self, when: SystemTime) -> bool {
+        pub fn valid_at(&self, when: time::SystemTime) -> bool {
             *self.valid_after <= when && when <= *self.valid_until
         }
 

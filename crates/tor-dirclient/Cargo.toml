@@ -24,6 +24,7 @@ zstd = ["async-compression/zstd"]
 zstd-wasm = ["dep:ruzstd"]
 # Enable support for router descriptor downloads.
 routerdesc = []
+
 full = [
     "hs-client",
     "hs-service",

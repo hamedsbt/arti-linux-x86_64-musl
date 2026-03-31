@@ -569,7 +569,7 @@ mod timeimpl {
     use crate::{Error, NetdocErrorKind as EK, Pos, Result};
     use std::time::SystemTime;
     use time::{
-        PrimitiveDateTime, format_description::FormatItem,
+        OffsetDateTime, PrimitiveDateTime, format_description::FormatItem,
         macros::format_description,
     };
 
@@ -594,7 +594,7 @@ mod timeimpl {
                     .at_pos(Pos::at(s))
                     .with_msg(format!("invalid time: {}", e))
             })?;
-            Ok(Iso8601TimeSp(SystemTime::from(d.assume_utc())))
+            Ok(Iso8601TimeSp(d.assume_utc().into()))
         }
     }
 
@@ -606,7 +606,7 @@ mod timeimpl {
         t: SystemTime,
         format_desc: &[FormatItem],
     ) -> core::result::Result<String, std::fmt::Error> {
-        time::OffsetDateTime::from(t)
+        OffsetDateTime::from(t)
             .format(format_desc)
             .map_err(|_| std::fmt::Error)
     }
@@ -643,7 +643,7 @@ mod timeimpl {
                     .at_pos(Pos::at(s))
                     .with_msg(format!("invalid time: {}", e))
             })?;
-            Ok(Iso8601TimeNoSp(SystemTime::from(d.assume_utc())))
+            Ok(Iso8601TimeNoSp(d.assume_utc().into()))
         }
     }
 

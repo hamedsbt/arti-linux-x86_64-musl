@@ -1,19 +1,56 @@
-//! Coarse time types for cheap time operations.
+//! Wrapper for coarsetime.
 //!
-//! This module provides reduced-precision time types that are cheaper to obtain
-//! than standard `Instant` on most platforms.
+// (Note that this is the doc comment for a private module,
+// not public API docs.
+// So this describes the implementation and rationale.)
+//
+//! We want to be able to mock coarsetime in tor-rtmock,
+//! so we need coarse time provision to be part of a `Runtime`.
 //!
-//! On native platforms, this uses `coarsetime` which calls the OS's
+//! (We can't just use `coarsetime`'s mocking facilities,
+//! because they still use a process-wide global for the current time.)
+//!
+//! On native platforms, this uses [`coarsetime::Instant::now`],
+//! which in turn calls the OS's
 //! `CLOCK_MONOTONIC_COARSE`, `CLOCK_MONOTONIC_FAST`, or similar.
 //!
 //! On WASM, this falls back to the standard `Instant` type since browser
 //! `performance.now()` is already relatively cheap.
+//!
+//! We don't use the non-updating coarsetime methods
+//! such as `coarsetime::Instant:: now_without_cache_update`.
+//! So, nor do we start a [`coarsetime::Updater`] update thread
+//! (that would wake up frequently).
+//!
+//! We don't use (or expose any way to use) `coarsetime::Clock`;
+//! we don't think that's a useful thing.
+//!
+//! ### Future possibilities
+//!
+//! If we ever need to mix-and-match coarse time values
+//! from low-level crates like tor-proto,
+//! with the wrapped-up coarsetime we have here,
+//! we have the following options:
+//!
+//!  a. move much of this (perhaps the whole module) to a lower-layer crate
+//!    (let's call it tor-coarsetime) and have everyone use that.
+//!    Even the `CoarseTimeProvider` trait could be moved down,
+//!    since it doesn't depend on anything else from tor-rtcompat.
+//!
+//!  b1. semver-expose coarsetime here in tor-rtcompat,
+//!    perhaps optionally, by exposing a conversions
+//!    with coarsetime::Instant.
+//!
+//!  b2. abolish the newtypes and instead make the types
+//!    here aliases for coarsetime
 
 use std::time;
 
 use derive_more::{Add, AddAssign, Sub, SubAssign};
 #[cfg(not(target_arch = "wasm32"))]
 use paste::paste;
+
+use crate::traits::CoarseTimeProvider;
 
 /// A duration with reduced precision, and, in the future, saturating arithmetic
 ///
@@ -26,6 +63,7 @@ use paste::paste;
 ///
 /// A `CoarseDuration` can represent at least 2^31 seconds,
 /// at a granularity of at least 1 second.
+// We may want to promise a better precision; that would be fine.
 ///
 /// ### Panics
 ///
@@ -33,6 +71,10 @@ use paste::paste;
 /// can panic on under/overflow.
 /// We regard this as a bug.
 /// The intent is that all operations will saturate.
+//
+// Currently this type's API is a bit anaemic.
+// If that turns out to be annoying, we might want to add
+// methods like `from_secs`, `as_secs` etc.
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)] //
 #[derive(Add, Sub, AddAssign, SubAssign)]
 pub struct CoarseDuration(
@@ -70,6 +112,7 @@ pub struct CoarseDuration(
 /// is not guaranteed.
 ///
 /// The precision is no worse than 1 second.
+// We may want to promise a better precision; that would be fine.
 ///
 /// ### Panics
 ///
@@ -85,8 +128,6 @@ pub struct CoarseInstant(coarsetime::Instant);
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
 #[cfg(target_arch = "wasm32")]
 pub struct CoarseInstant(web_time_compat::Instant);
-
-// ==================== CoarseDuration conversions ====================
 
 #[cfg(not(target_arch = "wasm32"))]
 impl From<time::Duration> for CoarseDuration {
@@ -116,8 +157,6 @@ impl From<CoarseDuration> for time::Duration {
     }
 }
 
-// ==================== CoarseInstant arithmetic (native) ====================
-
 /// implement `$AddSub<CoarseDuration> for CoarseInstant`, and `*Assign`
 #[cfg(not(target_arch = "wasm32"))]
 macro_rules! impl_add_sub { { $($AddSub:ident),* $(,)? } => { paste! { $(
@@ -137,8 +176,6 @@ macro_rules! impl_add_sub { { $($AddSub:ident),* $(,)? } => { paste! { $(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl_add_sub!(Add, Sub);
-
-// ==================== CoarseInstant arithmetic (WASM) ====================
 
 #[cfg(target_arch = "wasm32")]
 impl std::ops::Add<CoarseDuration> for CoarseInstant {
@@ -170,8 +207,6 @@ impl std::ops::SubAssign<CoarseDuration> for CoarseInstant {
     }
 }
 
-// ==================== CoarseInstant - CoarseInstant ====================
-
 /// Implement `CoarseInstant - CoarseInstant -> CoarseDuration` (native)
 #[cfg(not(target_arch = "wasm32"))]
 impl std::ops::Sub<CoarseInstant> for CoarseInstant {
@@ -190,8 +225,6 @@ impl std::ops::Sub<CoarseInstant> for CoarseInstant {
         CoarseDuration(self.0 - rhs.0)
     }
 }
-
-// ==================== CoarseInstant methods ====================
 
 impl CoarseInstant {
     /// Returns the current coarse instant.
@@ -225,10 +258,6 @@ impl CoarseInstant {
     }
 }
 
-use crate::traits::CoarseTimeProvider;
-
-// ==================== RealCoarseTimeProvider ====================
-
 /// Provider of reduced-precision timestamps using the real OS clock
 ///
 /// This is a ZST.
@@ -247,15 +276,12 @@ impl RealCoarseTimeProvider {
 }
 
 impl CoarseTimeProvider for RealCoarseTimeProvider {
-    #[inline]
     fn now_coarse(&self) -> CoarseInstant {
         CoarseInstant::now()
     }
 }
 
-// ==================== Tests ====================
-
-#[cfg(not(miri))] // coarse_time subtracts with overflow in miri
+#[cfg(not(miri))] // TODO coarse_time subtracts with overflow!
 #[cfg(test)]
 mod test {
     // @@ begin test lint list maintained by maint/add_warning @@

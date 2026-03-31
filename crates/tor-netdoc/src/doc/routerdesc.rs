@@ -32,7 +32,6 @@
 //!
 //! Most of this module is only available when this crate is built with the
 //! `routerdesc` feature enabled.
-use std::time::SystemTime;
 use crate::parse::keyword::Keyword;
 use crate::parse::parser::{Section, SectionRules};
 use crate::parse::tokenize::{ItemResult, NetDocReader};
@@ -80,7 +79,7 @@ pub struct RouterAnnotation {
     /// Description of where we got this router descriptor
     pub source: Option<String>,
     /// When this descriptor was first downloaded.
-    pub downloaded: Option<SystemTime>,
+    pub downloaded: Option<time::SystemTime>,
     /// Description of what we're willing to use this descriptor for.
     pub purpose: Option<String>,
 }
@@ -120,7 +119,7 @@ pub struct RouterDesc {
     /// Declared uptime for this relay, in seconds.
     pub uptime: Option<u64>,
     /// Time when this router descriptor was published.
-    pub published: SystemTime,
+    pub published: time::SystemTime,
     /// Ed25519 identity certificate (identity key authenticating a
     /// signing key)
     pub identity_cert: tor_cert::Ed25519Cert,
@@ -370,7 +369,7 @@ impl RouterDesc {
     }
 
     /// Return the publication
-    pub fn published(&self) -> SystemTime {
+    pub fn published(&self) -> time::SystemTime {
         self.published
     }
 

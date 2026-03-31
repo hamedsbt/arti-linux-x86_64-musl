@@ -6,6 +6,7 @@ use futures::stream::{Stream, StreamExt};
 use std::net::IpAddr;
 use std::sync::Arc;
 use tor_llcrypto::pk::ValidatableSignature;
+
 use crate::channel::{Canonicity, ChannelFrame, UniqId};
 use crate::memquota::ChannelAccount;
 use crate::peer::PeerInfo;
@@ -650,7 +651,7 @@ impl<
         self,
         peer: &U,
         peer_cert_digest: [u8; 32],
-        now: Option<SystemTime>,
+        now: Option<std::time::SystemTime>,
     ) -> Result<VerifiedChannel<T, S>> {
         use tor_cert::CertType;
 
@@ -725,7 +726,7 @@ impl<
 pub(crate) fn verify_link_auth_cert(
     certs: &msg::Certs,
     kp_relaysign_ed: &Ed25519Identity,
-    now: Option<SystemTime>,
+    now: Option<std::time::SystemTime>,
     clock_skew: ClockSkew,
 ) -> Result<Ed25519Identity> {
     use tor_cert::CertType;
@@ -856,9 +857,8 @@ pub(super) mod test {
     #![allow(clippy::unwrap_used)]
     use hex_literal::hex;
     use regex::Regex;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
     use tor_llcrypto::pk::rsa::RsaIdentity;
-    use std::time::SystemTime;
 
     use super::*;
     use crate::channel::handler::test::MsgBuf;

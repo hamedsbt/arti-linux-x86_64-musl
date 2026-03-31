@@ -6,9 +6,8 @@ use std::ops::Deref;
 use std::{
     collections::HashMap,
     sync::{Arc, Weak},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
-use std::time::SystemTime;
 
 use crate::DirMgrConfig;
 use crate::DocSource;

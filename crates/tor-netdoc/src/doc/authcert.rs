@@ -21,7 +21,7 @@ use tor_llcrypto::{d, pk, pk::rsa::RsaIdentity};
 use std::sync::LazyLock;
 
 use std::result::Result as StdResult;
-use std::{net, time::Duration, time::SystemTime};
+use std::{net, time, time::Duration, time::SystemTime};
 
 use derive_deftly::Deftly;
 use digest::Digest;
@@ -245,7 +245,7 @@ impl AuthCert {
     /*
         /// Return true if this certificate is expired at a given time, or
         /// not yet valid at that time.
-        pub fn is_expired_at(&self, when: SystemTime) -> bool {
+        pub fn is_expired_at(&self, when: time::SystemTime) -> bool {
             when < self.published || when > self.expires
         }
     */
@@ -269,12 +269,12 @@ impl AuthCert {
     }
 
     /// Return the time when this certificate says it was published.
-    pub fn published(&self) -> SystemTime {
+    pub fn published(&self) -> time::SystemTime {
         *self.dir_key_published
     }
 
     /// Return the time when this certificate says it should expire.
-    pub fn expires(&self) -> SystemTime {
+    pub fn expires(&self) -> time::SystemTime {
         *self.dir_key_expires
     }
 

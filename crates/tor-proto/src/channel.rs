@@ -71,6 +71,7 @@ use crate::peer::PeerInfo;
 use crate::util::err::ChannelClosed;
 use crate::util::oneshot_broadcast;
 use crate::util::timeout::TimeoutEstimator;
+use crate::util::ts::AtomicOptTimestamp;
 use crate::{ClockSkew, client};
 use crate::{Error, Result};
 use cfg_if::cfg_if;
@@ -86,7 +87,6 @@ use tor_cell::chancell::{AnyChanCell, CircId, msg::Netinfo, msg::PaddingNegotiat
 use tor_error::internal;
 use tor_linkspec::{HasRelayIds, OwnedChanTarget};
 use tor_memquota::mq_queue::{self, ChannelSpec as _, MpscSpec};
-use crate::util::ts::AtomicOptTimestamp;
 use tor_rtcompat::{CoarseInstant, CoarseTimeProvider, DynTimeProvider, SleepProvider};
 
 #[cfg(feature = "circ-padding")]

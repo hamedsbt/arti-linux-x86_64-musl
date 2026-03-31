@@ -56,6 +56,7 @@
 pub(crate) mod impls;
 pub mod task;
 
+mod coarse_time;
 mod compound;
 mod dyn_time;
 pub mod general;
@@ -81,7 +82,6 @@ pub use traits::{
 pub use coarse_time::{CoarseDuration, CoarseInstant, RealCoarseTimeProvider};
 pub use dyn_time::DynTimeProvider;
 pub use timer::{SleepProviderExt, Timeout, TimeoutError};
-mod coarse_time;
 
 /// Traits used to describe TLS connections and objects that can
 /// create them.

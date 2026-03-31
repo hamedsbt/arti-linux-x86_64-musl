@@ -772,7 +772,7 @@ impl<R: Runtime> DirMgr<R> {
             let reset_at = state.reset_time();
             match reset_at {
                 Some(t) => {
-                    trace!("Sleeping until {}", humantime::format_rfc3339(t));
+                    trace!("Sleeping until {}", time::OffsetDateTime::from(t));
                     schedule.sleep_until_wallclock(t).await?;
                 }
                 None => return Ok(()),
@@ -1186,7 +1186,7 @@ pub(crate) fn default_consensus_cutoff(
     );
     let cutoff = cutoff + Duration::from_secs(3600);
 
-    Ok(SystemTime::from(cutoff))
+    Ok(cutoff.into())
 }
 
 /// Return a list of the protocols [supported](tor_protover::doc_supported) by this crate

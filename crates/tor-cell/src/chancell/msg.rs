@@ -632,8 +632,7 @@ impl Netinfo {
     }
     /// Return the time reported in this NETINFO cell.
     pub fn timestamp(&self) -> Option<std::time::SystemTime> {
-        use std::time::Duration;
-        use std::time::SystemTime;
+        use std::time::{Duration, SystemTime};
         if self.timestamp == 0 {
             None
         } else {

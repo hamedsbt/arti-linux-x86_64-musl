@@ -9,7 +9,7 @@ use derive_more::{From, Into};
 use thiserror::Error;
 use time::format_description::FormatItem;
 use time::macros::format_description;
-use time::PrimitiveDateTime;
+use time::{OffsetDateTime, PrimitiveDateTime};
 use tor_error::{Bug, into_internal};
 use web_time_compat::SystemTime;
 
@@ -45,6 +45,7 @@ impl FromStr for Iso8601TimeSlug {
 
     fn from_str(s: &str) -> Result<Iso8601TimeSlug, Self::Err> {
         let d = PrimitiveDateTime::parse(s, &ISO_8601SP_FMT)?;
+
         Ok(Iso8601TimeSlug(d.assume_utc().into()))
     }
 }
@@ -72,7 +73,7 @@ pub enum BadIso8601TimeSlug {
 
 impl fmt::Display for Iso8601TimeSlug {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ts = time::OffsetDateTime::from(self.0)
+        let ts = OffsetDateTime::from(self.0)
             .format(ISO_8601SP_FMT)
             .map_err(|_| fmt::Error)?;
 

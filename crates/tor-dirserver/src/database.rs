@@ -62,7 +62,7 @@ use rusqlite::{
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
     OptionalExtension, ToSql, Transaction, TransactionBehavior,
 };
-use saturating_time::SaturatingTime as _;
+use saturating_time::SaturatingTime;
 use tor_basic_utils::RngExt;
 use tor_dircommon::config::DirTolerance;
 use tor_error::into_internal;
@@ -212,8 +212,8 @@ pub(crate) enum ContentEncoding {
 /// # Saturating Arithmetic
 ///
 /// This type implements [`Add`] and [`Sub`] for [`Duration`] and [`Timestamp`]
-/// ([`Sub`] only) using saturating arithmetic from [`saturating_time::SaturatingTime`].
-/// It means that addition and subtraction can be safely performed
+/// ([`Sub`] only) using saturating arithmetic from the [`saturating_time`]
+/// crate.  It means that addition and subtraction can be safely performed
 /// without the potential risk of an unexpected panic, instead wrapping to
 /// a local maximum/minimum or [`Duration::ZERO`] depending on the type.
 ///
