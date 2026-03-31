@@ -190,14 +190,10 @@ feature.
 
 ---
 
-## tor-circmgr (+22)
+## tor-circmgr
 
-### `src/build.rs`
-**What:** `double_timeout` split into native (spawns background task for
-soft timeout) and WASM (simplified, just uses abandon timeout).
-
-**Why:** Native version requires `Send` for the spawned task; WASM is
-single-threaded and uses `spawn_local`.
+### `src/hspool.rs`
+**What:** `#[allow(clippy::unused_async)]` on `maybe_extend_stem_circuit`.
 
 ---
 
@@ -221,7 +217,6 @@ for `hs-pow-full` vs stub.
 - **tor-rtcompat** `dyn_time.rs`, `impls.rs`, `impls/streamops.rs` — native-only code gated
 
 **Clippy fixes:**
-- **tor-circmgr** `hspool.rs` — `allow(unused_async)`
 - **tor-memquota** `config.rs` — `expect(identity_op)` on `1 * GIB`; refactored 64-bit check
 - **tor-ptmgr** `ipc.rs` — `expect(drop_non_drop)` on WASM
 

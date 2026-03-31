@@ -679,7 +679,6 @@ pub fn onion_circparams_from_netparams(inp: &NetParameters) -> Result<CircParame
 ///
 /// If the future does not complete by `abandon`, then abandon the
 /// future completely.
-#[cfg(not(target_arch = "wasm32"))]
 async fn double_timeout<R, F, T>(
     runtime: &R,
     fut: F,
@@ -717,26 +716,6 @@ where
     // collapsing all the layers into one.)
     outcome
         .map_err(|_| Error::CircTimeout(None))??
-        .map_err(|_| Error::CircTimeout(None))?
-}
-
-/// WASM version: simplified without background spawning since WASM is single-threaded.
-/// On WASM, we just use the abandon timeout directly.
-#[cfg(target_arch = "wasm32")]
-async fn double_timeout<R, F, T>(
-    runtime: &R,
-    fut: F,
-    _timeout: Duration,
-    abandon: Duration,
-) -> Result<T>
-where
-    R: Runtime,
-    F: Future<Output = Result<T>> + 'static,
-    T: 'static,
-{
-    runtime
-        .timeout(abandon, fut)
-        .await
         .map_err(|_| Error::CircTimeout(None))?
 }
 
