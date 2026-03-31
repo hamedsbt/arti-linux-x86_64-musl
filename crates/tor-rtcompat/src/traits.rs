@@ -411,7 +411,7 @@ pub trait SpawnExt: Spawn {
     #[track_caller]
     fn spawn<Fut>(&self, future: Fut) -> Result<(), SpawnError>
     where
-        Fut: Future<Output = ()> + crate::wasm_compat::Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
     {
         use tracing::Instrument as _;
         #[cfg(not(target_arch = "wasm32"))]
@@ -435,8 +435,8 @@ pub trait SpawnExt: Spawn {
         future: Fut,
     ) -> Result<RemoteHandle<<Fut as Future>::Output>, SpawnError>
     where
-        Fut: Future + crate::wasm_compat::Send + 'static,
-        <Fut as Future>::Output: crate::wasm_compat::Send,
+        Fut: Future + Send + 'static,
+        <Fut as Future>::Output: Send,
     {
         let (future, handle) = future.remote_handle();
         self.spawn(future)?;
