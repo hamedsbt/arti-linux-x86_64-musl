@@ -1,17 +1,12 @@
-# Diff Analysis: `wasm-basic-compat` → `main` (at `2c7f788eb`)
+# Diff Analysis: Changes from upstream (`zydou/main`)
 
-Changes in `crates/`, excluding `crates/tor-js/`, `crates/tor-time/`,
-and `crates/tor-async-compat/`. For non-crate changes (scripts,
-examples, CI, root config), see `non-crate-changes.md`.
+Changes in `crates/`, excluding `crates/tor-js/`. For non-crate changes
+(scripts, examples, CI, root config), see `non-crate-changes.md`.
 
-The `wasm-basic-compat` branch already contains the `tor-time` and
-`tor-async-compat` crates and their full codebase migration
-(`std::time` → `tor_time`, `async_trait` → `tor_async_compat`,
-`coarsetime` → `tor_time::CoarseInstant`, etc.). Those changes are
-**not analyzed here** — this document covers only the additional
-changes on top of that baseline. Import changes referencing `tor_time`
-or `tor_async_compat` that appear in this diff are residual
-adjustments, not the primary migration.
+Upstream's `web-time-compat` crate and its codebase-wide migration
+(`std::time` → `web_time_compat`, `coarsetime` → `CoarseInstant`, etc.)
+are already merged. This document covers our additional changes on top
+of that baseline.
 
 ---
 
@@ -33,62 +28,51 @@ See `wasm-notes/review.md` for a detailed code review of this crate.
 
 ---
 
-## tor-rtcompat (+972 -37)
+## tor-rtcompat (+1,089 -46)
 
 Arti is runtime-agnostic — it works with Tokio, async-std, or anything
 implementing its `Runtime` trait. This crate provides those
 implementations. On WASM, we add a new one: `WasmRuntime`.
 
-The central problem is that WASM is single-threaded but Arti's trait
-bounds assume `Send` (for multi-threaded runtimes). The solution is a
-two-part trick:
-
-1. **`wasm_compat` module** defines `Send` and `Sync` traits that are
-   real `std::marker::Send/Sync` on native but empty auto-implemented
-   traits on WASM. Code that uses `wasm_compat::Send` in bounds compiles
-   on both platforms — on WASM the bound is trivially satisfied.
-
-2. **`WasmRuntime`** implements `Runtime` using browser APIs:
-   `setTimeout` (via `gloo-timers`) for sleep, `spawn_local` for task
-   spawning, and a JS callback for opening socket connections (since
-   WASM can't do TCP). TLS uses `rustls` with `rustls-rustcrypto`
-   (pure-Rust crypto that compiles to WASM). JS types like
-   `JsProxyStream` get `unsafe impl Send` — safe because WASM is
-   single-threaded, so the `Send` bound is just satisfying the type
-   system.
+Non-Send JS types are wrapped in `SendWrapper` at the boundary, so
+all futures are genuinely `Send` and standard `async_trait` works
+without any conditional Send/Sync shims.
 
 ### `src/lib.rs`
 **What:**
-- New `pub mod wasm_compat;` and `pub mod wasm;` (WASM-only).
+- New `pub mod wasm;` (WASM-only).
 - All PreferredRuntime-related `#[cfg]` blocks gain `not(target_arch = "wasm32")`.
 - Various feature gate combinations updated.
 
-**Why:** Core WASM support.
+**Why:** Core WASM support — PreferredRuntime doesn't exist on WASM.
 
 ### `src/traits.rs`
 **What:**
-- `SpawnExt::spawn()`: bound changed from `Send` to `crate::wasm_compat::Send`. On WASM, uses `wasm_bindgen_futures::spawn_local` instead of `spawn_obj`.
-- `SpawnExt::spawn_with_handle()`: bounds changed to `crate::wasm_compat::Send`.
-- Doc comment added about `unsafe impl Send` on WASM types.
+- `SpawnExt::spawn()`: On WASM, uses `wasm_bindgen_futures::spawn_local`
+  instead of `spawn_obj` (cfg-gated implementation).
 
-**Why:** WASM support — WASM is single-threaded, so `Send` bounds need to be relaxed.
+**Why:** WASM has no multi-threaded executor; `spawn_local` is the only
+option. `Send` bounds are satisfied because all JS types use `SendWrapper`.
 
 ### New file: `src/wasm.rs`
-**What:** 868-line WASM runtime implementation including:
-- `WasmRuntime` struct with `SleepProvider`, `CoarseTimeProvider`, `Spawn`, `Blocking` (panics), `NetStreamProvider` (with JS callback support), `UdpProvider` (stub), `TlsProvider` (stub) implementations.
+**What:** ~870-line WASM runtime implementation including:
+- `WasmRuntime` struct implementing `SleepProvider`, `CoarseTimeProvider`,
+  `Spawn`, `Blocking` (panics), `NetStreamProvider` (JS callback),
+  `UdpProvider` (stub), `TlsProvider` (rustls + rustls-rustcrypto).
 - `WasmSleepFuture` using `gloo_timers`.
-- `JsProxyStream` for JS socket objects.
-- Stubs for UDP and TLS (WASM uses external TLS).
-- `unsafe impl Send for WasmSleepFuture` and `unsafe impl Send/Sync for JsProxyStream`.
+- `JsProxyStream` wrapping JS socket objects via `SendWrapper`.
+- `unsafe impl Send` only where `SendWrapper` doesn't cover the type
+  (e.g., composed futures containing gloo timer internals).
 
 **Why:** Core WASM runtime.
 
-**Flags on `unsafe impl Send`:** Both `WasmSleepFuture` and `JsProxyStream` have `unsafe impl Send`. This is necessary because WASM JS types aren't `Send`, but WASM is single-threaded so this is safe. The safety comments are present but brief. These are standard WASM patterns.
+### `src/coarse_time.rs`
+**What:** WASM fallback added — `CoarseInstant` wraps
+`web_time_compat::Instant` on WASM (instead of `coarsetime::Instant`
+which doesn't support WASM). WASM arithmetic impls added for
+`CoarseInstant` ± `CoarseDuration`.
 
-### New file: `src/wasm_compat.rs`
-**What:** 35-line module providing `Send` and `Sync` trait aliases. On native: re-exports `std::marker::{Send, Sync}`. On WASM: provides empty auto-implemented traits.
-
-**Why:** Allows code to use `wasm_compat::Send` in bounds that become no-ops on WASM.
+**Why:** `coarsetime` crate doesn't compile on WASM.
 
 ---
 
@@ -123,197 +107,131 @@ the same store is shared by two consumers:
 `Arc` and passes the same Arc to both `AnyStateMgr` and `BoxedDirStore`.
 They share the lock.
 
-### arti-client (+499 -14)
+### arti-client (+524 -29)
 
 #### `src/storage.rs`
-**What:** Re-exports `KeyValueStore` and `StorageError` from `tor-persist`. Provides `split_storage()` which wraps a `KeyValueStore` in an Arc and passes it to both `AnyStateMgr::from_custom()` and `BoxedDirStore::new()`. Includes unit tests with an in-memory store.
+**What:** Re-exports `KeyValueStore` and `StorageError` from `tor-persist`.
+Provides `split_storage()` which wraps a `KeyValueStore` in an Arc and
+passes it to both `AnyStateMgr::from_custom()` and `BoxedDirStore::new()`.
 
-**Why:** Convenience API so users call `builder.storage(my_store)` and both state + directory subsystems use it.
-
-#### New file: `examples/readme_custom_storage.rs`
-**What:** Example demonstrating the `KeyValueStore` trait with a file-backed implementation.
+#### `examples/readme_custom_storage.rs`
+**What:** Example demonstrating the `KeyValueStore` trait with a
+file-backed implementation.
 
 #### `src/builder.rs`
-**What:** Adds `statemgr: Option<AnyStateMgr>` and `dirstore: Option<BoxedDirStore>` fields to `TorClientBuilder`. New methods: `state_mgr()`, `dir_store()`, `storage()` (convenience that calls `split_storage`). New `resolve_statemgr()` method that returns the override or constructs from config (with `#[cfg(target_arch = "wasm32")]` error path). The builder now passes `statemgr` and `dirstore` through to `TorClient::create_inner`.
-
-**Why:** WASM support — custom storage must be injectable.
+**What:** Adds `statemgr` and `dirstore` fields to `TorClientBuilder`.
+New methods: `state_mgr()`, `dir_store()`, `storage()` (convenience
+that calls `split_storage`). Builder passes these through to
+`TorClient::create_inner`.
 
 #### `src/client.rs`
 **What:**
 - `statemgr` field changed from `FsStateMgr` to `AnyStateMgr`.
-- `pt_mgr` field gated with `not(target_arch = "wasm32")` (WASM has no process-based pluggable transports).
-- `create_keymgr()` returns `Ok(None)` on WASM (no filesystem for keystores).
-- `create_inner()` now takes `statemgr: AnyStateMgr` and `dirstore: Option<BoxedDirStore>` params; the `FsStateMgr::from_path_and_mistrust` call is removed from this function (moved to builder).
-- `DirMgrStore` construction dispatches to `from_custom_store()` or `new()` based on whether a custom store was provided (with WASM error fallback).
-- `reconfigure()`: state directory comparison gated behind `not(wasm32)`, uses `self.statemgr.path().is_some_and(...)`.
-- `wait_for_stop()`: split into two cfg-gated versions (native uses `Either`, WASM only has Custom variant). Both use `use<'_, R>` lifetime capture.
+- `pt_mgr` field gated with `not(target_arch = "wasm32")`.
+- `create_keymgr()` returns `Ok(None)` on WASM.
+- `create_inner()` takes `statemgr` and `dirstore` params.
+- `DirMgrStore` construction dispatches to custom or default.
+- `reconfigure()`: state directory comparison gated behind `not(wasm32)`.
+- `wait_for_stop()`: split into native/WASM versions.
 
-**Why:** All for WASM compatibility — abstracting away filesystem assumptions.
-
-**Flag:** The `wait_for_stop()` split into two near-identical methods (native vs WASM) is a bit unfortunate. A single method using the `AnyStateMgr::wait_for_unlock()` should work for both since `AnyStateMgr` already handles the dispatch internally.
-
-### tor-persist (+391 -2)
+### tor-persist (+391 -1)
 
 #### New file: `src/custom.rs`
-**What:** Defines `KeyValueStore` trait (the single user-facing storage interface) and `AnyStateMgr` enum:
-- `KeyValueStore`: object-safe trait with `get`, `set`, `delete`, `keys`, `try_lock`, `can_store`, `unlock`, `wait_for_unlock`
-- `AnyStateMgr`: dispatches between `Fs(FsStateMgr)` (native) and `Custom(Arc<dyn KeyValueStore>)`
-- Custom variant prefixes keys with `"state:"`, handles JSON serde
-- Unit tests with in-memory store
-
-**Why:** Core storage abstraction — the one trait users implement.
+**What:** `KeyValueStore` trait and `AnyStateMgr` enum dispatching
+between `Fs(FsStateMgr)` and `Custom(Arc<dyn KeyValueStore>)`.
 
 #### `src/err.rs`
-**What:** New `Resource::Memory` variant. New public error constructors: `load_error()`, `store_error()`, `lock_error()`, `unlock_error()`.
+**What:** New `Resource::Memory` variant and public error constructors.
 
-**Why:** External `KeyValueStore` implementations need to construct errors.
-
-#### `src/lib.rs`
-**What:** `Result<T>` type alias changed from `pub(crate)` to `pub`. Exports `AnyStateMgr`, `KeyValueStore`, `StorageError` from `custom` module.
-
-**Why:** External implementations need the `Result` type.
-
-### tor-dirmgr (+679 -3)
+### tor-dirmgr (+696 -8)
 
 #### `src/lib.rs`
-**What:**
-- `DirMgrStore::new()` gated behind `not(wasm32)`.
-- New `DirMgrStore::from_custom_store()` method.
-- Re-exports `BoxedDirStore`.
+**What:** `DirMgrStore::from_custom_store()` method. Re-exports `BoxedDirStore`.
 
-**Why:** WASM support — custom storage backend.
+#### `src/storage.rs`
+**What:** `File`, `IoResult`, `sqlite` module, `InputString::load()` gated
+behind `not(wasm32)`. New `pub(crate) mod custom;` and `pub use custom::BoxedDirStore;`.
+`router_descs` field gets `allow(dead_code)` on WASM.
 
 #### New file: `src/storage/custom.rs`
-**What:** `BoxedDirStore` wrapping `Arc<dyn KeyValueStore>` directly, implementing the full `Store` trait:
-- JSON-serializable types: `StoredConsensus`, `StoredAuthcert`, `StoredMicrodesc`, `StoredRouterdesc`, `StoredBridgedesc`, `StoredProtocols`
-- Helper functions for key building (`dir:consensus:`, `dir:authcert:`, etc.), time conversion, hex encoding
-- Full implementation of all `Store` methods (consensus, authcerts, microdescs, router descs, bridge descs, protocol recommendations, expiration)
-
-**Why:** Directory storage adapter for non-SQLite backends (e.g., IndexedDB on WASM).
+**What:** `BoxedDirStore` implementing the full `Store` trait via
+key-value calls with JSON serialization.
 
 ---
 
-## tor-proto (+51 -36)
+## tor-proto (+101 -26)
 
-Arti tracks "time since last activity" on channels using
-`CoarseInstant` (a cheap monotonic timestamp from `tor-time`). On
-native, `CoarseDuration` converts to `std::time::Duration` via
-`Into::into`. On WASM, `CoarseDuration` *is* `Duration` (same
-underlying type), so the conversion is identity. The cfg-gated returns
-handle this: native goes through `Into::into`, WASM returns directly.
+### `src/util/ts.rs`
+**What:** `AtomicOptTimestamp` — moved here from the deleted `tor-time`
+crate. WASM version uses `js_sys::Date::now()` instead of `coarsetime`.
 
-### `src/channel.rs`
-**What:** `duration_unused()` method gets cfg-gated return: on WASM, returns `duration` directly (already `Option<Duration>`); on native, maps through `Into::into` (converting from `CoarseDuration`).
+### `src/channel.rs`, `src/lib.rs`
+**What:** `duration_unused()` and `time_since_last_incoming_traffic()`
+get cfg-gated returns for WASM where `CoarseDuration` is already
+`std::time::Duration`.
 
-**Why:** `CoarseDuration` → `Duration` conversion differs on WASM.
-
-### `src/lib.rs`
-**What:** `time_since_last_incoming_traffic()` gets cfg-gated return (same pattern as `duration_unused()`).
-
-**Why:** `CoarseDuration` → `Duration` conversion differs on WASM.
+### `src/channel/handshake.rs`, `src/relay/channel/handshake.rs`
+**What:** Replace direct `coarsetime::Instant` usage with our
+`CoarseInstant` wrapper type (which uses `web_time_compat::Instant`
+on WASM). Affects `send_versions_cell` return type and `Netinfo`
+timestamp captures.
 
 ---
 
-## tor-dirclient (+80 -1)
-
-Tor directory servers prefer zstd compression for directory downloads —
-it's significantly smaller than deflate. The standard `zstd` crate wraps
-a C library that can't compile to WASM. `RuzstdDecoder` plugs into the
-existing decoder pipeline (which already supports deflate, xz, and
-native zstd) as a fourth option using `ruzstd`, a pure-Rust zstd
-implementation. It buffers the entire compressed stream then decompresses
-in one shot — acceptable since directory documents are a few MB at most.
-The `zstd-wasm` feature flag controls which decoder is used; when both
-features are enabled, native zstd wins.
+## tor-dirclient (+82 -1)
 
 ### `src/lib.rs`
-**What:**
-1. **New `RuzstdDecoder`** — a pure-Rust zstd decoder using `ruzstd` for WASM targets (where C `zstd-sys` is unavailable). Gated behind `#[cfg(all(feature = "zstd-wasm", not(feature = "zstd")))]`. Buffers the entire compressed stream then decompresses synchronously.
-2. The `get_decoder` macro adds a case for `zstd-wasm`.
-
-**Why:** WASM where C libraries can't be linked.
+**What:** New `RuzstdDecoder` — pure-Rust zstd decoder using `ruzstd`
+for WASM (where C `zstd-sys` is unavailable). Gated behind `zstd-wasm`
+feature.
 
 ### `src/request.rs`
-**What:** `all_encodings()` adds `x-zstd` when `zstd-wasm` feature is enabled.
-
-**Why:** WASM uses pure-Rust zstd (`ruzstd`) and needs to advertise support.
+**What:** `all_encodings()` advertises `x-zstd` when `zstd-wasm` is enabled.
 
 ---
 
-## tor-circmgr (+25 -3)
-
-Circuit building uses a "double timeout" pattern: a soft timeout fires
-first and logs a warning, while a hard "abandon" timeout kills the
-attempt. On native, the soft timeout runs in a spawned background task
-(requires `Send`). On WASM, spawning a `Send` future isn't possible
-(single-threaded), so the WASM version skips the soft timeout and just
-uses the abandon timeout directly.
+## tor-circmgr (+22)
 
 ### `src/build.rs`
-**What:** `double_timeout` function split into two versions: native (spawns background task for the soft timeout) and WASM (simplified, just uses `abandon` timeout directly since WASM is single-threaded and can't spawn background tasks for the soft timeout pattern).
+**What:** `double_timeout` split into native (spawns background task for
+soft timeout) and WASM (simplified, just uses abandon timeout).
 
-**Why:** The native version uses `spawn_obj` which requires `Send` — not available on WASM's single-threaded model.
+**Why:** Native version requires `Send` for the spawned task; WASM is
+single-threaded and uses `spawn_local`.
 
 ---
 
-## tor-basic-utils (+19 -15)
+## tor-hsservice (+13 -1)
 
 ### `src/lib.rs`
-**What:** `IoErrorExt::is_not_a_directory()` refactored from a single method with inline `#[cfg]` attributes around each error constant to three separate platform-specific method implementations (`unix`, `windows`, `not(any(unix, windows))`).
+**What:** `PowManager::new()` call uses cfg-gated argument wrapping
+for `hs-pow-full` vs stub.
 
-**Why:** WASM (and other non-unix/non-windows) platforms don't have `ENOTDIR` or `ERROR_DIRECTORY`. The previous code using inline `#[cfg]` inside a single method body wouldn't compile on WASM because neither branch would exist.
-
----
-
-## tor-hsservice (+21 -10)
-
-### `src/lib.rs`
-**What:** The `PowManager::new()` call now wraps `status_tx.clone()` differently based on `hs-pow-full` feature:
-- With `hs-pow-full`: wraps in `PowManagerStatusSender::from(status_tx.clone())`
-- Without: passes `status_tx.clone()` directly
-
-**Why:** The stub PowManager expects a plain `StatusSender` while the real one expects a `PowManagerStatusSender` newtype. This was likely a compile error fix.
-
----
-
-## tor-memquota (+14 -5)
-
-### `src/config.rs`
-**What:** The 32-bit vs 64-bit memory threshold check is refactored from `#[cfg(target_pointer_width = "64")]` to a runtime boolean `is_64bit`.
-
-**Why:** The `#[cfg]` attribute on an `if` condition doesn't work well (it gates the entire `if` statement, not just the condition). The refactoring makes the logic compile on all platforms.
+### `src/pow/v1_stub.rs`
+**What:** Doc comments and `#[allow(clippy::...)]` on stub methods.
 
 ---
 
 ## Minor Changes
 
-Small cfg guards, clippy fixes, and cleanup that don't introduce new logic.
+**WASM cfg guards:**
+- **fs-mistrust** `file_access.rs` — `expect(clippy::drop_non_drop)` on WASM
+- **hashx** `register.rs` — compiler feature gated with `not(wasm32)`
+- **tor-dirmgr** `config.rs`, `err.rs`, `storage.rs` — SQLite/filesystem gated behind `not(wasm32)`
+- **tor-rtcompat** `dyn_time.rs`, `impls.rs`, `impls/streamops.rs` — native-only code gated
 
-**WASM cfg guards (exclude incompatible code):**
-- **fs-mistrust** `file_access.rs` — `#[cfg_attr(target_arch = "wasm32", expect(clippy::drop_non_drop))]` on `drop(tmp_file)`
-- **hashx** `register.rs` — `#[cfg(feature = "compiler")]` → `#[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]` on `RegisterId::as_u8()`
-- **tor-dirmgr** `config.rs` — `open_store()` gated behind `not(wasm32)` (SQLite unavailable)
-- **tor-dirmgr** `err.rs` — `SqliteError` variant gated behind `not(wasm32)`
-- **tor-dirmgr** `storage.rs` — `File`, `IoResult`, `sqlite` module, `InputString::load()` gated behind `not(wasm32)`; `router_descs` field gets dead_code allowance on WASM
-- **tor-rtcompat** `dyn_time.rs` — `PreferredRuntime` existence check gains `not(wasm32)` guard
-- **tor-rtcompat** `impls.rs` — native module declarations, `tcp_listen()`, `impl_unix_non_provider` gated behind `not(wasm32)`
-- **tor-rtcompat** `impls/streamops.rs` — `io` import and `UnsupportedStreamOp` gated behind `not(wasm32)`
+**Clippy fixes:**
+- **tor-circmgr** `hspool.rs` — `allow(unused_async)`
+- **tor-memquota** `config.rs` — `expect(identity_op)` on `1 * GIB`; refactored 64-bit check
+- **tor-ptmgr** `ipc.rs` — `expect(drop_non_drop)` on WASM
 
-**Clippy / lint fixes:**
-- **tor-circmgr** `hspool.rs` — `#[allow(clippy::unused_async)]` on `maybe_extend_stem_circuit`
-- **tor-memquota** `config.rs` — `#[expect(clippy::identity_op)]` on `1 * GIB`
-- **tor-hsservice** `pow/v1_stub.rs` — doc comments and `#[allow(clippy::...)]` attrs on stub methods
+**Cargo.toml changes:**
+- **arti-client** — `mmap` feature extracted (optional for WASM); WASM dev-deps added
+- **tor-dirmgr** — `rusqlite`/`fslock` behind `cfg(not(wasm32))`; `zstd-wasm` feature
+- **tor-rtcompat** — `coarsetime` in native deps; WASM deps (send_wrapper, wasm-bindgen, js-sys, gloo-timers, rustls-rustcrypto, getrandom 0.2 with js)
+- **tor-proto** — `js-sys` for WASM (AtomicOptTimestamp)
 
-**Cargo.toml changes (WASM platform gating):**
-- **arti-client** — `mmap` feature extracted (was hardcoded in tor-dirmgr dep); WASM dev-deps added (`wasm-bindgen`, `wasm-bindgen-futures`, `console_error_panic_hook`, `tracing-wasm`)
-- **tor-basic-utils** — `getrandom` with `wasm_js` feature for WASM random number generation
-- **tor-dirmgr** — `rusqlite`/`fslock` moved behind `cfg(not(wasm32))`; `gloo-timers` added for WASM; `zstd-wasm` feature forwarded from `tor-dirclient`
-
-**Cleanup:**
-- **arti** `proxy.rs` — `#[cfg_attr(feature = "experimental-api", non_exhaustive)]` on stub `RpcMgr`
-- **arti** `rpc_stub.rs` — removes unnecessary `visibility::make(pub)` attr
-- **tor-chanmgr** `builder.rs` / `transport.rs` / `transport/proxied.rs` — `Send + Sync` bounds consolidated into `TransportImplHelper` trait definition
-- **tor-proto** `maybenot_padding.rs` — `type Instant` reverted to `std::time::Instant` (native-only padding code)
+**Other:**
+- **arti** `proxy.rs` — `non_exhaustive` on stub `RpcMgr`
+- **arti** `rpc_stub.rs` — removed `visibility::make(pub)` attr
 - **arti-client** `lib.rs` — `pub mod storage;` re-export
-
-See also `wasm-notes/trivial-changes.md` for mechanical fixes (clippy, cfg_attr).
