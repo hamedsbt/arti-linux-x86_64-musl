@@ -416,6 +416,9 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
     ///
     /// Otherwise, tries to obtain the descriptor by downloading it from hsdir(s).
     ///
+    /// If `refetch` is `true`, a new descriptor will be refetched
+    /// from the hsdir(s) unconditionally.
+    ///
     /// Does all necessary retries and timeouts.
     /// Returns an error if no valid descriptor could be found.
     #[allow(clippy::cognitive_complexity)] // TODO: Refactor
