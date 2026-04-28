@@ -399,7 +399,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
 
         let mocks = self.mocks.clone();
 
-        let desc = self.descriptor_ensure(&mut data.desc).await?;
+        let desc = self.descriptor_ensure(&mut data.desc, false).await?;
 
         mocks.test_got_desc(desc);
 
@@ -420,7 +420,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
     /// Returns an error if no valid descriptor could be found.
     #[allow(clippy::cognitive_complexity)] // TODO: Refactor
     #[instrument(level = "trace", skip_all)]
-    async fn descriptor_ensure<'d>(&self, data: &'d mut DataHsDesc) -> Result<&'d HsDesc, CE> {
+    async fn descriptor_ensure<'d>(&self, data: &'d mut DataHsDesc, refetch: bool) -> Result<&'d HsDesc, CE> {
         // Maximum number of hsdir connection and retrieval attempts we'll make
         let max_total_attempts = self
             .config
@@ -436,6 +436,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         // When it expires, we discard it completely and try to obtain a new one.
         //   https://gitlab.torproject.org/tpo/core/arti/-/issues/913#note_2914448
         // TODO SPEC: Discuss HS descriptor lifetime and expiry client behaviour
+        if !refetch {
         if let Some(previously) = data {
             let now = self.runtime.wallclock();
             if let Ok(_desc) = previously.as_ref().check_valid_at(&now) {
@@ -449,6 +450,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
                     .expect("Ok but now Err"));
             }
             // Seems to be not valid now.  Try to fetch a fresh one.
+        }
         }
 
         let hs_dirs = self.netdir.hs_dirs_download(
