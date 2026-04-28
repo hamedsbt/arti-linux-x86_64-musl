@@ -16,19 +16,18 @@ npm install tor-js
 import { TorClient } from 'tor-js';
 
 const client = new TorClient({
-  gateway: 'https://tor-js-gateway.voltrevo.com',
+  // gateway: 'https://tor-js-gateway.HOSTME.com',
+
+  // (In NodeJS you can leave this commented, but browsers
+  // don't have raw TCP and so require help to connect to
+  // the tor network.
+  // https://github.com/privacy-ethereum/tor-js-gateway)
 });
 
 const response = await client.fetch('https://check.torproject.org/api/ip');
 console.log(await response.json()); // { IsTor: true, IP: "..." }
 
 client.close();
-```
-
-In Node.js, the gateway is optional (connects via direct TCP):
-
-```javascript
-const client = new TorClient();
 ```
 
 ## Entry points
