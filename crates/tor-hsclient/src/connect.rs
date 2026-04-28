@@ -11,6 +11,7 @@ use futures::{AsyncRead, AsyncWrite};
 use itertools::Itertools;
 use rand::Rng;
 use tor_bytes::Writeable;
+use tor_cell::relaycell::hs::IntroduceAckStatus;
 use tor_cell::relaycell::hs::intro_payload::{self, IntroduceHandshakePayload};
 use tor_cell::relaycell::hs::pow::ProofOfWork;
 use tor_cell::relaycell::msg::{AnyRelayMsg, Introduce1, Rendezvous2};
@@ -403,7 +404,46 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
 
         mocks.test_got_desc(desc);
 
-        let tunnel = self.intro_rend_connect(desc, &mut data.ipts).await?;
+        let tunnel = match self.intro_rend_connect(desc, &mut data.ipts).await {
+            Ok(tunnel) => tunnel,
+            Err(e) => {
+                let is_intro_nack = |e| {
+                    if let FAE::IntroductionFailed { status, .. } = e {
+                        status == IntroduceAckStatus::NOT_RECOGNIZED
+                    } else {
+                        false
+                    }
+                };
+
+                let retry = if let CE::Failed(ref errors) = e {
+                    // If any of the errors are an INTRODUCE_NACK,
+                    // then it's worth retrying one more time
+                    // with a fresh descriptor.
+                    //
+                    // TODO: perhaps it would be better to bail
+                    // out of intro_rend_connect() after the first NACK,
+                    // instead of waiting until all connection attempts
+                    // are exhausted?
+                    errors.clone().into_iter().any(is_intro_nack)
+                } else {
+                    false
+                };
+
+                if retry {
+                    debug!(
+                        "Introduction to {} NACKed, refetching descriptor and retrying",
+                        &self.hsid,
+                    );
+                    // Refetch the descriptor and try one more time
+                    let desc = self.descriptor_ensure(&mut data.desc, true).await?;
+                    mocks.test_got_desc(desc);
+                    self.intro_rend_connect(desc, &mut data.ipts).await?
+                } else {
+                    return Err(e);
+                }
+            }
+        };
+
         mocks.test_got_tunnel(&tunnel);
 
         Ok(tunnel)
