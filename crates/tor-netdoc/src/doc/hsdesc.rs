@@ -72,13 +72,14 @@ pub type UncheckedStoredHsDescMeta =
 /// Information about how long to hold a given onion service descriptor, and
 /// when to replace it.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // TODO RELAY: Remove this if there turns out to be no need for it.
 struct IndexInfo {
     /// The lifetime in minutes that this descriptor should be held after it is
     /// received.
+    #[allow(dead_code)] // TODO RELAY: Remove this if there turns out to be no need for it.
     lifetime: IntegerMinutes<u16>,
     /// The expiration time on the `descriptor-signing-key-cert` included in this
     /// descriptor.
+    #[allow(dead_code)] // TODO RELAY: Remove this if there turns out to be no need for it.
     signing_cert_expires: SystemTime,
     /// The revision counter on this descriptor: higher values should replace
     /// older ones.
@@ -95,7 +96,6 @@ struct IndexInfo {
 pub struct HsDesc {
     /// Information about the expiration and revision counter for this
     /// descriptor.
-    #[allow(dead_code)] // TODO RELAY: Remove this if there turns out to be no need for it.
     idx_info: IndexInfo,
 
     /// The list of authentication types that this onion service supports.
