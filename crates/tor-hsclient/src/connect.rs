@@ -486,6 +486,16 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             // let's give them as many retries as we can manage.
             .unwrap_or(usize::MAX);
 
+        let now = self.runtime.wallclock();
+        let unwrap_valid_desc = |data: &'d mut DataHsDesc| -> &'d HsDesc {
+            data
+                .as_ref()
+                .expect("Some but now None")
+                .as_ref()
+                .check_valid_at(&now)
+                .expect("Ok but now Err")
+        };
+
         // We retain a previously obtained descriptor precisely until its lifetime expires,
         // and pay no attention to the descriptor's revision counter.
         // When it expires, we discard it completely and try to obtain a new one.
@@ -493,16 +503,10 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         // TODO SPEC: Discuss HS descriptor lifetime and expiry client behaviour
         if refetch.is_none() {
             if let Some(previously) = data {
-                let now = self.runtime.wallclock();
                 if let Ok(_desc) = previously.as_ref().check_valid_at(&now) {
                     // Ideally we would just return desc but that confuses borrowck.
                     // https://github.com/rust-lang/rust/issues/51545
-                    return Ok(data
-                        .as_ref()
-                        .expect("Some but now None")
-                        .as_ref()
-                        .check_valid_at(&now)
-                        .expect("Ok but now Err"));
+                    return Ok(unwrap_valid_desc(data));
                 }
                 // Seems to be not valid now.  Try to fetch a fresh one.
             }
