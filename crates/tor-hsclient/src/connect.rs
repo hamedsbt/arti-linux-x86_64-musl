@@ -495,11 +495,14 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
                 .expect("Ok but now Err")
         };
 
-        // XXX this comment is no longer accurate
         // We retain a previously obtained descriptor precisely until its lifetime expires,
-        // and pay no attention to the descriptor's revision counter.
+        // or until we refetch a more recent one
+        // as a result of an `intro_rend_connect()` failure caused by introduce NACK.
+        //
         // When it expires, we discard it completely and try to obtain a new one.
-        //   https://gitlab.torproject.org/tpo/core/arti/-/issues/913#note_2914448
+        //
+        // We only replace our cached descriptor if the new one has a higher revision counter.
+        //
         // TODO SPEC: Discuss HS descriptor lifetime and expiry client behaviour
         let now = self.runtime.wallclock();
 
@@ -602,6 +605,21 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             // as descriptor_fetch_attempt has already checked the timeliness of the descriptor.
             let new_desc = desc.as_ref().dangerously_assume_timely();
 
+            // TODO: revision counters are not supposed to grow unboundedly,
+            // which means a long-running client will eventually reach a point
+            // where its cached descriptor has the highest allowed revision counter.
+            // At that point, a well-behaved service will reset its revision counter.
+            // This new revision counter can be lower the revision counter before the reset.
+            // When that happens, the condition below will prevent the client
+            // from renewing its descriptor (at least until the new revision counter
+            // catches up with the counter in our cached descriptor).
+            //
+            // But how we even detect when the counter has reset, and what value it was reset to?
+            //
+            // See <https://spec.torproject.org/rend-spec/revision-counter-mgt.html#avoid>:
+            //
+            // "Similarly, implementations SHOULD NOT let the revision counter increase forever without
+            // resetting it – doing so links the service across changes in the blinded public key."
             if cur_revision >= new_desc.revision() {
                 // Our cached descriptor is still timely, and has a higher revision counter
                 // than the one we've just fetched, so we retain it.
