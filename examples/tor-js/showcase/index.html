@@ -410,6 +410,59 @@
             max-height: 120px;
         }
 
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .modal-backdrop.open { display: flex; }
+
+        .modal {
+            background: var(--bg-light);
+            border: 1px solid var(--selection);
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 640px;
+            width: 100%;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--yellow);
+            margin: 0 0 12px 0;
+        }
+
+        .modal-body {
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--fg);
+            margin-bottom: 20px;
+        }
+
+        .modal-body code {
+            background: var(--bg-dark);
+            color: var(--cyan);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 12px;
+            word-break: break-all;
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
         @media (max-width: 900px) {
             .main-container {
                 grid-template-columns: 1fr;
@@ -458,6 +511,21 @@
             </a>
         </div>
     </header>
+
+    <!-- Default gateway warning dialog -->
+    <div class="modal-backdrop" id="gatewayModal" role="dialog" aria-modal="true" aria-labelledby="gatewayModalTitle" aria-describedby="gatewayModalBody">
+        <div class="modal">
+            <h2 class="modal-title" id="gatewayModalTitle">Heads up</h2>
+            <div class="modal-body" id="gatewayModalBody">
+                <p style="margin: 0 0 12px 0;"><strong>Important:</strong> This will connect using <code id="gatewayModalUrl"></code>, which is for demonstration purposes only. It has limited capacity and may be removed at any time. You'll need to host your own gateway if you want to deploy this solution for your users.</p>
+                <p style="margin: 0;">The gateway is not doing any of the tor protocol - it's only required for TCP. In NodeJS you can run tor-js without a gateway because it can open TCP sockets directly.</p>
+            </div>
+            <div class="modal-actions">
+                <button id="gatewayModalCancel" class="secondary">Cancel</button>
+                <button id="gatewayModalContinue">Continue</button>
+            </div>
+        </div>
+    </div>
 
     <div class="main-container">
         <!-- Left Panel - Controls -->
@@ -557,6 +625,7 @@
         const LOG_DB_NAME = 'tor-js-logs';
         const LOG_STORE_NAME = 'logs';
         const SESSION_ID = Date.now();     // unique identifier for this page load
+        const DEFAULT_GATEWAY = 'https://tor-js-gateway.voltrevo.com';
 
         // ── URL validation ─────────────────────────────────────────────────────
         function validateUrl(url) {
@@ -1027,11 +1096,47 @@
             statusDot.className = 'status-dot';
             log.info('Ready - click "Connect" to start');
 
+            // Default-gateway warning modal
+            const gatewayModal = document.getElementById('gatewayModal');
+            const gatewayModalUrl = document.getElementById('gatewayModalUrl');
+            const gatewayModalCancel = document.getElementById('gatewayModalCancel');
+            const gatewayModalContinue = document.getElementById('gatewayModalContinue');
+
+            function confirmDefaultGateway(gateway) {
+                return new Promise((resolve) => {
+                    gatewayModalUrl.textContent = gateway;
+                    gatewayModal.classList.add('open');
+                    gatewayModalContinue.focus();
+
+                    const cleanup = () => {
+                        gatewayModal.classList.remove('open');
+                        gatewayModalCancel.removeEventListener('click', onCancel);
+                        gatewayModalContinue.removeEventListener('click', onContinue);
+                        document.removeEventListener('keydown', onKey);
+                    };
+                    const onCancel = () => { cleanup(); resolve(false); };
+                    const onContinue = () => { cleanup(); resolve(true); };
+                    const onKey = (e) => {
+                        if (e.key === 'Escape') onCancel();
+                        else if (e.key === 'Enter') onContinue();
+                    };
+
+                    gatewayModalCancel.addEventListener('click', onCancel);
+                    gatewayModalContinue.addEventListener('click', onContinue);
+                    document.addEventListener('keydown', onKey);
+                });
+            }
+
             connectBtn.addEventListener('click', async () => {
                 const gateway = gatewayUrlInput.value.trim();
                 if (!gateway) {
                     log.error('Gateway URL is required');
                     return;
+                }
+
+                if (gateway === DEFAULT_GATEWAY) {
+                    const proceed = await confirmDefaultGateway(gateway);
+                    if (!proceed) return;
                 }
 
                 connectBtn.disabled = true;
