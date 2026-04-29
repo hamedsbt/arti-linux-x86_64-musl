@@ -21,7 +21,6 @@ async function main() {
   log.info('Creating TorClient...');
   const startTime = performance.now();
   const client = new TorClient({
-    gateway: 'https://tor-js-gateway.voltrevo.com',
     log,
   });
   await client.ready();

@@ -12,7 +12,7 @@ export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
  * without a URL; providing one enables fast bootstrap from that server.
  */
 export type TorClientOptions = {
-  /** Gateway URL (e.g., `"https://tor-js-gateway.voltrevo.com"`). Required in browsers for relay connections; optional in Node.js/Deno (enables fast bootstrap). */
+  /** Gateway URL. Required in browsers for relay connections; optional in Node.js/Deno (enables fast bootstrap). */
   gateway?: string;
 
   /**

@@ -3,9 +3,7 @@ import type { TorClientOptions, FetchInit } from './types.js';
 
 let client: TorClient | undefined;
 
-let config: TorClientOptions = {
-  gateway: 'https://tor-js-gateway.voltrevo.com',
-};
+let config: TorClientOptions = {};
 
 export const tor = {
   /**

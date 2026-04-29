@@ -4,7 +4,7 @@
 //
 // Build:   scripts/tor-js/build.sh
 // Usage:   examples/tor-js/tor-fetch.js [--websocket <gateway-url>] [--in-memory] [url]
-// Example: examples/tor-js/tor-fetch.js --websocket https://tor-js-gateway.voltrevo.com https://check.torproject.org/api/ip
+// Example: examples/tor-js/tor-fetch.js --websocket https://tor-js-gateway.HOSTME.com https://check.torproject.org/api/ip
 //
 // State is persisted to ~/.local/share/tor-js/
 // Subsequent runs will load cached state for faster bootstrap.

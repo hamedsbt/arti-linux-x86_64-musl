@@ -10,6 +10,13 @@ import { Log } from './Log.js';
 import { createAutoStorage } from './storage/index.js';
 import { ArtiSocketProvider } from './socketProvider.js';
 
+function isBrowser(): boolean {
+  const g = globalThis as any;
+  const hasNode = typeof g.process?.versions?.node !== 'undefined';
+  const hasDeno = typeof g.Deno !== 'undefined';
+  return !hasNode && !hasDeno && typeof g.window !== 'undefined';
+}
+
 export class TorClient {
   private log: Log;
   private clientPromise: Promise<WasmTorClient>;
@@ -20,6 +27,11 @@ export class TorClient {
   private socketProvider: ArtiSocketProvider | null = null;
 
   constructor(options: TorClientOptions = {}) {
+    if (isBrowser() && !options.gateway && !options.socketProvider) {
+      throw new Error(
+        'TorClient: in the browser, you must configure a gateway because browsers can\'t open regular TCP sockets.',
+      );
+    }
     this.log = (options.log ?? new Log({ rawLog: () => {} }));
     this.clientPromise = this.bootstrap(options);
   }

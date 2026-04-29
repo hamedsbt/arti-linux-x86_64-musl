@@ -13,7 +13,6 @@ const url = process.argv[2] ?? 'https://check.torproject.org/api/ip';
 console.log(`Fetching ${url} via Tor...`);
 
 tor.configure({
-  gateway: 'https://tor-js-gateway.voltrevo.com',
   // log: new Log(),
 });
 

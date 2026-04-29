@@ -106,6 +106,15 @@ For simple use cases, import the singleton wrapper:
 ```javascript
 import { tor } from 'tor-js/singleton';
 
+// tor.configure({
+//   gateway: 'https://tor-js-gateway.HOSTME.com',
+//
+//   (In NodeJS you can leave this commented, but browsers
+//   don't have raw TCP and so require help to connect to
+//   the tor network.
+//   https://github.com/privacy-ethereum/tor-js-gateway)
+// });
+
 const response = await tor.fetch('https://check.torproject.org/api/ip');
 ```
 
