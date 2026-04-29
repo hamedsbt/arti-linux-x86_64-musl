@@ -341,6 +341,10 @@ impl From<Option<&IptExperience>> for IptSortKeyOutcome {
     }
 }
 
+/// Token indicating that a descriptor fetch is wanted
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+struct RefetchDescriptor;
+
 impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
     /// Make a new `Context` from the input data
     fn new(
@@ -400,7 +404,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
 
         let mocks = self.mocks.clone();
 
-        let desc = self.descriptor_ensure(&mut data.desc, false).await?;
+        let desc = self.descriptor_ensure(&mut data.desc, None).await?;
 
         mocks.test_got_desc(desc);
 
@@ -424,18 +428,18 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
                     // out of intro_rend_connect() after the first NACK,
                     // instead of waiting until all connection attempts
                     // are exhausted?
-                    errors.clone().into_iter().any(is_intro_nack)
+                    errors.clone().into_iter().any(is_intro_nack).then_some(RefetchDescriptor)
                 } else {
-                    false
+                    None
                 };
 
-                if retry {
+                if let Some(RefetchDescriptor) = retry {
                     debug!(
                         "Introduction to {} NACKed, refetching descriptor and retrying",
                         &self.hsid,
                     );
                     // Refetch the descriptor and try one more time
-                    let desc = self.descriptor_ensure(&mut data.desc, true).await?;
+                    let desc = self.descriptor_ensure(&mut data.desc, retry).await?;
                     mocks.test_got_desc(desc);
                     self.intro_rend_connect(desc, &mut data.ipts).await?
                 } else {
@@ -466,7 +470,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
     async fn descriptor_ensure<'d>(
         &self,
         data: &'d mut DataHsDesc,
-        refetch: bool,
+        refetch: Option<RefetchDescriptor>,
     ) -> Result<&'d HsDesc, CE> {
         // Maximum number of hsdir connection and retrieval attempts we'll make
         let max_total_attempts = self
@@ -483,7 +487,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         // When it expires, we discard it completely and try to obtain a new one.
         //   https://gitlab.torproject.org/tpo/core/arti/-/issues/913#note_2914448
         // TODO SPEC: Discuss HS descriptor lifetime and expiry client behaviour
-        if !refetch {
+        if refetch.is_none() {
             if let Some(previously) = data {
                 let now = self.runtime.wallclock();
                 if let Ok(_desc) = previously.as_ref().check_valid_at(&now) {
