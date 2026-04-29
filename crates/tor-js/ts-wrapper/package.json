@@ -53,6 +53,15 @@
   },
   "author": "Andrew Morris",
   "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voltrevo/arti.git",
+    "directory": "crates/tor-js/ts-wrapper"
+  },
+  "homepage": "https://github.com/voltrevo/arti/blob/main/crates/tor-js/ts-wrapper",
+  "bugs": {
+    "url": "https://github.com/voltrevo/arti/issues"
+  },
   "devDependencies": {
     "@types/node": "^25.3.0",
     "tsup": "^8.3.5",

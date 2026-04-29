@@ -6,6 +6,14 @@ Uses [Arti](https://gitlab.torproject.org/tpo/core/arti) (the Tor Project's Rust
 
 **[Live Demo](https://voltrevo.github.io/arti/)**
 
+## Status
+
+[Experimental](https://github.com/voltrevo/arti/issues/2).
+
+It is your responsibilty to decide whether tor-js meets your security requirements. This software is provided for free and without warranty, per the MIT license.
+
+Please reach out ([on github](https://github.com/voltrevo/arti/issues/2) or otherwise) if you'd like to see more security validation for tor-js.
+
 ## Quick start
 
 ```
@@ -36,7 +44,7 @@ The package offers three ways to load the WASM binary. All export the same API.
 
 | Import | WASM loading | Size (gzip) | Best for |
 |---|---|---|---|
-| `tor-js` | Fetched from CDN, cached locally | 16 kB | Production web apps |
+| `tor-js` | Fetched from CDN, cached locally | 17 kB | Production web apps |
 | `tor-js/wasm-base64` | Embedded in the JS bundle | 2.3 MB | Single-file deploys |
 | `tor-js/wasm-file` | Loaded from `tor_js_bg.wasm` next to the module | 15 kB + 1.7 MB | Self-hosted, server-side |
 
