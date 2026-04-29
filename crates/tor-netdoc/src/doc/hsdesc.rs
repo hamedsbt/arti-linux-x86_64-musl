@@ -346,6 +346,11 @@ impl HsDesc {
     pub fn pow_params(&self) -> &[pow::PowParams] {
         self.pow_params.slice()
     }
+
+    /// Return the revision counter of this descriptor
+    pub fn revision(&self) -> RevisionCounter {
+        self.idx_info.revision
+    }
 }
 
 /// An error returned by [`HsDesc::parse_decrypt_validate`], indicating what
