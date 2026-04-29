@@ -496,19 +496,35 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
                 .expect("Ok but now Err")
         };
 
+        // XXX this comment is no longer accurate
         // We retain a previously obtained descriptor precisely until its lifetime expires,
         // and pay no attention to the descriptor's revision counter.
         // When it expires, we discard it completely and try to obtain a new one.
         //   https://gitlab.torproject.org/tpo/core/arti/-/issues/913#note_2914448
         // TODO SPEC: Discuss HS descriptor lifetime and expiry client behaviour
-        if refetch.is_none() {
+        let now = self.runtime.wallclock();
+
+        let cur_revision =
             if let Some(previously) = data {
-                if let Ok(_desc) = previously.as_ref().check_valid_at(&now) {
-                    // Ideally we would just return desc but that confuses borrowck.
-                    // https://github.com/rust-lang/rust/issues/51545
-                    return Ok(unwrap_valid_desc(data));
-                }
+                if let Ok(desc) = previously.as_ref().check_valid_at(&now) {
+                    Some(desc.revision())
+                } else {
                 // Seems to be not valid now.  Try to fetch a fresh one.
+                    None
+                }
+            } else {
+                None
+            };
+
+        match (cur_revision, refetch) {
+            (Some(_), None) => {
+                // Our cached descriptor is still timely,
+                // and we don't need to fetch a new one.
+                return Ok(unwrap_valid_desc(data));
+            }
+            (None, _) | (_, Some(RefetchDescriptor)) => {
+                // We either don't have a timely descriptor,
+                // or we have been asked to try to fetch a new descriptor.
             }
         }
 
@@ -579,6 +595,20 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
                 }
             }
         };
+
+        // If our existing descriptor is newer than the one we have just fetched,
+        // we should retain it.
+        if let Some(cur_revision) = cur_revision {
+            // It is safe to dangerously_assume_timely,
+            // as descriptor_fetch_attempt has already checked the timeliness of the descriptor.
+            let new_desc = desc.as_ref().dangerously_assume_timely();
+
+            if cur_revision >= new_desc.revision() {
+                // Our cached descriptor is still timely, and has a higher revision counter
+                // than the one we've just fetched, so we retain it.
+                return Ok(unwrap_valid_desc(data));
+            }
+        }
 
         // Store the bounded value in the cache for reuse,
         // but return a reference to the unwrapped `HsDesc`.
