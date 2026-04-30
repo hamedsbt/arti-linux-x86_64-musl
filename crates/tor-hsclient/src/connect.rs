@@ -949,7 +949,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         };
 
         let num_hops = rend_tunnel
-            .m_num_own_real_hops()
+            .m_num_own_hops()
             .map_err(|error| FAE::RendezvousCircuitObtain { error })?;
 
         let timeout_roundtrip =
@@ -1238,7 +1238,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
 
         let num_hops = rendezvous
             .rend_tunnel
-            .m_num_own_real_hops()
+            .m_num_own_hops()
             // This is not necessarily the best error, but it isn't totally wrong.
             // We can't wrap the tor_circuit error in anything else that makes sense.
             // See #2513.
@@ -1494,10 +1494,14 @@ trait MockableClientData: Debug {
         capabilities: &tor_protover::Protocols,
     ) -> tor_circmgr::Result<()>;
 
-    /// Return the number of our own non-virtual hops in this circuit.
+    /// Return the number of our own hops in this circuit.
     ///
     /// This does not count any hops for the service's rendezvous circuit.
-    fn m_num_own_real_hops(&self) -> tor_circmgr::Result<usize>;
+    /// It does count our virtual hop, if we have one.
+    /// (That isn't a problem, since we only use this method to calculate
+    /// timeouts, and we only calculate timeouts _before_ we establish
+    /// the virtual hop.)
+    fn m_num_own_hops(&self) -> tor_circmgr::Result<usize>;
 }
 
 /// Mock for onion service client introduction tunnel.
@@ -1600,8 +1604,8 @@ impl MockableClientData for ClientOnionServiceDataTunnel {
         Self::extend_virtual(self, protocol, role, handshake, params, capabilities).await
     }
 
-    fn m_num_own_real_hops(&self) -> tor_circmgr::Result<usize> {
-        self.n_hops() // XXXX This counts the virtual hop.
+    fn m_num_own_hops(&self) -> tor_circmgr::Result<usize> {
+        self.n_hops()
     }
 }
 
@@ -1799,7 +1803,7 @@ mod test {
             todo!()
         }
 
-        fn m_num_own_real_hops(&self) -> tor_circmgr::Result<usize> {
+        fn m_num_own_hops(&self) -> tor_circmgr::Result<usize> {
             Ok(4)
         }
     }
