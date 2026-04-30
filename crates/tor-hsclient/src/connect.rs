@@ -567,14 +567,14 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             }
             (None, _) => {
                 // We don't have a timely descriptor,
-                // so ignore the requery_period,
+                // so ignore the requery_interval,
                 // and reach out to all HsDirs
                 recent_hsdirs.clear();
             }
             (_, Some(RefetchDescriptor)) => {
                 // We have been asked to try to fetch a new descriptor.
                 // We will only reach out to the HsDirs that are
-                // not within the `hs_dir_requery_period`
+                // not within the `hs_dir_requery_interval`
             }
         }
 
@@ -644,9 +644,9 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             let hsdir_for_error: Sensitive<Ed25519Identity> = (*relay.id()).into();
 
             let hsdir = RelayIdForRequeryPeriod::for_store(relay)?;
-            // Ensure we wait at least hs_dir_requery_period() until we try to
+            // Ensure we wait at least hs_dir_requery_interval() until we try to
             // fecth from this HsDir again
-            recent_hsdirs.insert(hsdir, now + self.config.retry.hs_dir_requery_period());
+            recent_hsdirs.insert(hsdir, now + self.config.retry.hs_dir_requery_interval());
 
             match self.descriptor_fetch_attempt(relay).await {
                 Ok(desc) => break desc,

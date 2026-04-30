@@ -236,9 +236,9 @@ pub struct CircuitTiming {
     //
     // This parameter is honoured by tor-hsclient, not here.
     #[cfg(feature = "hs-client")]
-    #[deftly(tor_config(default = "default_hs_dir_requery_period()"))]
+    #[deftly(tor_config(default = "default_hs_dir_requery_interval()"))]
     #[getter(as_copy)]
-    pub(crate) hs_dir_requery_period: Duration,
+    pub(crate) hs_dir_requery_interval: Duration,
 }
 
 /// Return default threshold
@@ -293,7 +293,7 @@ fn default_hs_max_attempts() -> u32 {
 /// Return the default HsDir requery period.
 ///
 // Corresponds to C Tor's REND_HID_SERV_DIR_REQUERY_PERIOD
-fn default_hs_dir_requery_period() -> Duration {
+fn default_hs_dir_requery_interval() -> Duration {
     Duration::from_secs(15 * 60)
 }
 
