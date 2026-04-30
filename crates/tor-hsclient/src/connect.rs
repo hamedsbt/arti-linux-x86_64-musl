@@ -1470,6 +1470,10 @@ trait MockableClientDir: Debug {
 
     /// Get a tor_dirclient::SourceInfo for this circuit, if possible.
     fn m_source_info(&self) -> tor_proto::Result<Option<SourceInfo>>;
+
+    /// Return the length of this circuit.
+    #[allow(unused)] // XXXX
+    fn m_num_hops(&self) -> tor_circmgr::Result<usize>;
 }
 
 /// Mock for onion service client data tunnel.
@@ -1495,6 +1499,12 @@ trait MockableClientData: Debug {
         params: CircParameters,
         capabilities: &tor_protover::Protocols,
     ) -> tor_circmgr::Result<()>;
+
+    /// Return the number of our own non-virtual hops in this circuit.
+    ///
+    /// This does not count any hops for the service's rendezvous circuit.
+    #[allow(unused)] // XXXX
+    fn m_num_own_real_hops(&self) -> tor_circmgr::Result<usize>;
 }
 
 /// Mock for onion service client introduction tunnel.
@@ -1510,6 +1520,10 @@ trait MockableClientIntro: Debug {
         msg: Option<AnyRelayMsg>,
         reply_handler: impl MsgHandler + Send + 'static,
     ) -> tor_circmgr::Result<Self::Conversation<'_>>;
+
+    /// Return the number of hops in this circuit.
+    #[allow(unused)] // XXXX
+    fn m_num_hops(&self) -> tor_circmgr::Result<usize>;
 }
 
 impl<R: Runtime> MocksForConnect<R> for () {
@@ -1565,6 +1579,10 @@ impl MockableClientDir for ClientOnionServiceDirTunnel {
     fn m_source_info(&self) -> tor_proto::Result<Option<SourceInfo>> {
         SourceInfo::from_tunnel(self)
     }
+
+    fn m_num_hops(&self) -> tor_circmgr::Result<usize> {
+        self.n_hops()
+    }
 }
 
 #[async_trait]
@@ -1589,6 +1607,10 @@ impl MockableClientData for ClientOnionServiceDataTunnel {
     ) -> tor_circmgr::Result<()> {
         Self::extend_virtual(self, protocol, role, handshake, params, capabilities).await
     }
+
+    fn m_num_own_real_hops(&self) -> tor_circmgr::Result<usize> {
+        self.n_hops() // XXXX This counts the virtual hop.
+    }
 }
 
 #[async_trait]
@@ -1601,6 +1623,10 @@ impl MockableClientIntro for ClientOnionServiceIntroTunnel {
         reply_handler: impl MsgHandler + Send + 'static,
     ) -> tor_circmgr::Result<Self::Conversation<'_>> {
         Self::start_conversation(self, msg, reply_handler, TargetHop::LastHop).await
+    }
+
+    fn m_num_hops(&self) -> tor_circmgr::Result<usize> {
+        self.n_hops()
     }
 }
 
@@ -1752,6 +1778,10 @@ mod test {
         fn m_source_info(&self) -> tor_proto::Result<Option<SourceInfo>> {
             Ok(None)
         }
+
+        fn m_num_hops(&self) -> tor_circmgr::Result<usize> {
+            Ok(4)
+        }
     }
 
     #[allow(clippy::diverging_sub_expression)] // async_trait + todo!()
@@ -1776,6 +1806,10 @@ mod test {
         ) -> tor_circmgr::Result<()> {
             todo!()
         }
+
+        fn m_num_own_real_hops(&self) -> tor_circmgr::Result<usize> {
+            Ok(4)
+        }
     }
 
     #[allow(clippy::diverging_sub_expression)] // async_trait + todo!()
@@ -1788,6 +1822,10 @@ mod test {
             reply_handler: impl MsgHandler + Send + 'static,
         ) -> tor_circmgr::Result<Self::Conversation<'_>> {
             todo!()
+        }
+
+        fn m_num_hops(&self) -> tor_circmgr::Result<usize> {
+            Ok(4)
         }
     }
 
