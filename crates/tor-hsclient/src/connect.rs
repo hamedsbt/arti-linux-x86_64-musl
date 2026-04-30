@@ -232,7 +232,7 @@ struct UsableIntroPt<'i> {
     sort_rand: IptSortRand,
 }
 
-/// Lookup key for looking up and recording our IPT use experiences
+/// Lookup key for looking up and recording information about a relay
 ///
 /// Used to identify a relay when looking to see what happened last time we used it,
 /// and storing that information after we tried it.
@@ -246,7 +246,23 @@ struct UsableIntroPt<'i> {
 ///
 /// While this is, structurally, a relay identity, it is not suitable for other purposes.
 #[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Debug)]
-struct RelayIdForExperience(RelayId);
+struct RelayIdFor<K> {
+    /// The relay id
+    inner: RelayId,
+
+    /// Phantom data to allow parameterizing over `K`
+    ///
+    /// `K` is a marker type that represents the kind of map
+    /// this key will be used in.
+    marker: PhantomData<K>,
+}
+
+/// Marker type, to make typed Ipt exprience [`RelayIdFor`] keys
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
+struct IptExperienceMap;
+
+/// Lookup key for looking up and recording our IPT use experiences
+type RelayIdForExperience = RelayIdFor<IptExperienceMap>;
 
 /// Details of an apparently-successful INTRODUCE exchange
 ///
@@ -265,12 +281,20 @@ struct Introduced<R: Runtime, M: MocksForConnect<R>> {
     marker: PhantomData<fn() -> (R, M)>,
 }
 
-impl RelayIdForExperience {
+impl<K> RelayIdFor<K> {
+    /// Create a new key for use with `T`
+    fn new(inner: RelayId) -> Self {
+        Self {
+            inner,
+            marker: Default::default(),
+        }
+    }
+
     /// Identities to use to try to find previous experience information about this IPT
     fn for_lookup(intro_target: &OwnedCircTarget) -> impl Iterator<Item = Self> + '_ {
         intro_target
             .identities()
-            .map(|id| RelayIdForExperience(id.to_owned()))
+            .map(|id| RelayIdFor::new(id.to_owned()))
     }
 
     /// Identity to use to store previous experience information about this IPT
@@ -280,7 +304,7 @@ impl RelayIdForExperience {
             .next()
             .ok_or_else(|| internal!("introduction point relay with no identities"))?
             .to_owned();
-        Ok(RelayIdForExperience(id))
+        Ok(RelayIdFor::new(id))
     }
 }
 
