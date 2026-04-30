@@ -291,14 +291,14 @@ impl<K> RelayIdFor<K> {
     }
 
     /// Identities to use to try to find previous experience information about this IPT
-    fn for_lookup(intro_target: &OwnedCircTarget) -> impl Iterator<Item = Self> + '_ {
+    fn for_lookup<T: HasRelayIds>(intro_target: &T) -> impl Iterator<Item = Self> + '_ {
         intro_target
             .identities()
             .map(|id| RelayIdFor::new(id.to_owned()))
     }
 
     /// Identity to use to store previous experience information about this IPT
-    fn for_store(intro_target: &OwnedCircTarget) -> Result<Self, Bug> {
+    fn for_store<T: HasRelayIds>(intro_target: &T) -> Result<Self, Bug> {
         let id = intro_target
             .identities()
             .next()
