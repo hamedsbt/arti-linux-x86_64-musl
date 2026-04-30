@@ -2,9 +2,12 @@
 
 use tor_cell::relaycell::flow_ctrl::{Xoff, Xon, XonKbpsEwma};
 use tor_cell::relaycell::msg::{AnyRelayMsg, Sendme};
-use tor_cell::relaycell::{RelayMsg, UnparsedRelayMsg};
+use tor_cell::relaycell::{RelayCmd, RelayMsg, UnparsedRelayMsg};
 
-use crate::congestion::sendme::{self, StreamSendWindow};
+use crate::congestion::sendme::{
+    self, StreamRecvWindow, StreamSendWindow, cmd_counts_towards_windows,
+};
+use crate::stream::RECV_WINDOW_INIT;
 use crate::stream::flow_ctrl::state::{FlowCtrlHooks, HalfStreamFlowCtrlHooks};
 use crate::{Error, Result};
 
@@ -75,24 +78,57 @@ impl FlowCtrlHooks for WindowFlowCtrl {
 
 /// State for window-based flow control on a half-stream.
 #[derive(Debug)]
-pub(crate) struct HalfStreamWindowFlowCtrl {}
+pub(crate) struct HalfStreamWindowFlowCtrl {
+    /// The original [`WindowFlowCtrl`] from the full stream.
+    ///
+    /// We keep this since we need to continue validating any incoming messages.
+    inner: WindowFlowCtrl,
+    /// The stream's receive window.
+    ///
+    /// When it was a full-stream, the receive window was tracked by the `DataStream`.
+    /// But since the `DataStream` has gone away, we need to track it ourselves.
+    recv_window: StreamRecvWindow,
+}
 
 impl HalfStreamWindowFlowCtrl {
     /// Returns a new sendme-window-based state for a half-stream.
-    pub(crate) fn new(_flow_ctrl: WindowFlowCtrl) -> Self {
-        // XXXX
-        Self {}
+    pub(crate) fn new(flow_ctrl: WindowFlowCtrl) -> Self {
+        Self {
+            inner: flow_ctrl,
+            // FIXME(eta): we don't copy the receive window, instead just creating a new one,
+            //             so a malicious peer can send us slightly more data than they should
+            //             be able to; see arti#230.
+            recv_window: StreamRecvWindow::new(RECV_WINDOW_INIT),
+        }
     }
 }
 
 impl HalfStreamFlowCtrlHooks for HalfStreamWindowFlowCtrl {
     fn handle_incoming_dropped(&mut self, msg_count: u16) -> Result<()> {
-        // XXXX
-        todo!()
+        self.recv_window.decrement_n(msg_count)
     }
 
     fn handle_incoming_msg(&mut self, msg: UnparsedRelayMsg) -> Result<Option<UnparsedRelayMsg>> {
-        // XXXX
-        todo!()
+        match msg.cmd() {
+            RelayCmd::SENDME => {
+                self.inner.put_for_incoming_sendme(msg)?;
+                Ok(None)
+            }
+            RelayCmd::XON => {
+                self.inner.handle_incoming_xon(msg)?;
+                Ok(None)
+            }
+            RelayCmd::XOFF => {
+                self.inner.handle_incoming_xoff(msg)?;
+                Ok(None)
+            }
+            cmd if cmd_counts_towards_windows(cmd) => {
+                // Discard the returned bool since we aren't sending any more SENDMEs.
+                let _ = self.recv_window.take()?;
+                Ok(Some(msg))
+            }
+            // Nothing to do here.
+            _ => Ok(Some(msg)),
+        }
     }
 }

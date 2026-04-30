@@ -36,7 +36,7 @@ use std::sync::Arc;
 use postage::watch;
 use tor_cell::relaycell::flow_ctrl::{FlowCtrlVersion, Xoff, Xon, XonKbpsEwma};
 use tor_cell::relaycell::msg::AnyRelayMsg;
-use tor_cell::relaycell::{RelayMsg, UnparsedRelayMsg};
+use tor_cell::relaycell::{RelayCmd, RelayMsg, UnparsedRelayMsg};
 use tracing::trace;
 
 use super::reader::DrainRateRequest;
@@ -229,25 +229,44 @@ impl FlowCtrlHooks for XonXoffFlowCtrl {
 
 /// State for XON/XOFF flow control on a half-stream.
 #[derive(Debug)]
-pub(crate) struct HalfStreamXonXoffFlowCtrl {}
+pub(crate) struct HalfStreamXonXoffFlowCtrl {
+    /// The original [`XonXoffFlowCtrl`] from the full stream.
+    ///
+    /// We keep this since we need to continue validating any incoming messages
+    /// and continue applying the sidechannel mitigations.
+    inner: XonXoffFlowCtrl,
+}
 
 impl HalfStreamXonXoffFlowCtrl {
     /// Returns a new xon/xoff-based state for a half-stream.
-    pub(crate) fn new(_flow_ctrl: XonXoffFlowCtrl) -> Self {
-        // XXXX
-        Self {}
+    pub(crate) fn new(flow_ctrl: XonXoffFlowCtrl) -> Self {
+        Self { inner: flow_ctrl }
     }
 }
 
 impl HalfStreamFlowCtrlHooks for HalfStreamXonXoffFlowCtrl {
     fn handle_incoming_dropped(&mut self, _msg_count: u16) -> Result<()> {
-        // XXXX
-        todo!()
+        // Nothing to do here.
+        Ok(())
     }
 
     fn handle_incoming_msg(&mut self, msg: UnparsedRelayMsg) -> Result<Option<UnparsedRelayMsg>> {
-        // XXXX
-        todo!()
+        match msg.cmd() {
+            RelayCmd::SENDME => {
+                self.inner.put_for_incoming_sendme(msg)?;
+                Ok(None)
+            }
+            RelayCmd::XON => {
+                self.inner.handle_incoming_xon(msg)?;
+                Ok(None)
+            }
+            RelayCmd::XOFF => {
+                self.inner.handle_incoming_xoff(msg)?;
+                Ok(None)
+            }
+            // Nothing to do here.
+            _ => Ok(Some(msg)),
+        }
     }
 }
 
