@@ -68,6 +68,17 @@ pub(crate) trait TimeoutEstimator {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Action {
     /// Build a circuit of a given length.
+    ///
+    /// Note that you should not generally have to use
+    /// this timeout outside of the circmgr code:
+    /// The circmgr already computes and applies
+    /// timeouts for creating and extending circuits.
+    ///
+    /// If you are using this timeout to estimate how long
+    /// it will take somebody _else_ to build a circuit,
+    /// remember that Tor clients will retry circuits when they fail,
+    /// and so it may take longer than this for your peer to
+    /// actually get a working circuit.
     BuildCircuit {
         /// The length of the circuit to construct.
         ///
