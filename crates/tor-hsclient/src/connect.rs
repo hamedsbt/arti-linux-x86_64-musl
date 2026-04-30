@@ -547,6 +547,11 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
 
         let cur_revision = data.as_ref().and_then(|previously| {
             if let Ok(desc) = previously.as_ref().check_valid_at(&now) {
+                // Ideally we would just return desc but that confuses borrowck,
+                // so we have to use unwrap_valid_desc() each time
+                // we need the known-to-be-Some descriptor instead.
+                //
+                // https://github.com/rust-lang/rust/issues/51545
                 Some(desc.revision())
             } else {
                 // Seems to be not valid now.  Try to fetch a fresh one.
