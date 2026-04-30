@@ -88,6 +88,20 @@ pub struct Data {
     hsdirs: DataHsDirs,
 }
 
+/// An onion service descriptor and its associated HsBlindId.
+#[derive(Debug)]
+struct HsDescForTp {
+    /// The blinded onion identity of this descriptor
+    ///
+    /// Used for determining whether a newly fetched descriptor
+    /// is for the same time period as this one.
+    ///
+    // XXX this is not implemented yet
+    hs_blind_id: HsBlindId,
+    /// The descriptor
+    desc: TimerangeBound<HsDesc>,
+}
+
 /// Part of `Data` that relates to our information about the HsDir requery periods
 type DataHsDirs = HashMap<RelayIdForRequeryPeriod, SystemTime>;
 
@@ -99,7 +113,7 @@ struct RequeryPeriodMap;
 type RelayIdForRequeryPeriod = RelayIdFor<RequeryPeriodMap>;
 
 /// Part of `Data` that relates to the HS descriptor
-type DataHsDesc = Option<TimerangeBound<HsDesc>>;
+type DataHsDesc = Option<HsDescForTp>;
 
 /// Part of `Data` that relates to our information about introduction points
 type DataIpts = HashMap<RelayIdForExperience, IptExperience>;
@@ -529,6 +543,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         let unwrap_valid_desc = |data: &'d mut DataHsDesc| -> &'d HsDesc {
             data.as_ref()
                 .expect("Some but now None")
+                .desc
                 .as_ref()
                 .check_valid_at(&now)
                 .expect("Ok but now Err")
@@ -546,7 +561,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         let now = self.runtime.wallclock();
 
         let cur_revision = data.as_ref().and_then(|previously| {
-            if let Ok(desc) = previously.as_ref().check_valid_at(&now) {
+            if let Ok(desc) = previously.desc.as_ref().check_valid_at(&now) {
                 // Ideally we would just return desc but that confuses borrowck,
                 // so we have to use unwrap_valid_desc() each time
                 // we need the known-to-be-Some descriptor instead.
@@ -721,8 +736,12 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         //
         // It is safe to dangerously_assume_timely,
         // as descriptor_fetch_attempt has already checked the timeliness of the descriptor.
+        let desc = HsDescForTp {
+            hs_blind_id: self.hs_blind_id,
+            desc,
+        };
         let ret = data.insert(desc);
-        Ok(ret.as_ref().dangerously_assume_timely())
+        Ok(ret.desc.as_ref().dangerously_assume_timely())
     }
 
     /// Make one attempt to fetch the descriptor from a specific hsdir
@@ -2089,7 +2108,7 @@ mod test {
         );
 
         // Check how long the descriptor is valid for
-        let (start_time, end_time) = data.desc.as_ref().unwrap().bounds();
+        let (start_time, end_time) = data.desc.as_ref().unwrap().desc.bounds();
         assert_eq!(start_time, None);
 
         let desc_valid_until = humantime::parse_rfc3339("2023-02-11T20:00:00Z").unwrap();
