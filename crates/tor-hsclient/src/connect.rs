@@ -464,11 +464,6 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
                     // If any of the errors are an INTRODUCE_NACK,
                     // then it's worth retrying one more time
                     // with a fresh descriptor.
-                    //
-                    // TODO: perhaps it would be better to bail
-                    // out of intro_rend_connect() after the first NACK,
-                    // instead of waiting until all connection attempts
-                    // are exhausted?
                     errors
                         .clone()
                         .into_iter()
