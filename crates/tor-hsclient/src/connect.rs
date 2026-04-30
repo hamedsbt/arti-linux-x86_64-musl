@@ -1467,7 +1467,6 @@ trait MockableClientDir: Debug {
     fn m_source_info(&self) -> tor_proto::Result<Option<SourceInfo>>;
 
     /// Return the length of this circuit.
-    #[allow(unused)] // XXXX
     fn m_num_hops(&self) -> tor_circmgr::Result<usize>;
 }
 
@@ -1498,7 +1497,6 @@ trait MockableClientData: Debug {
     /// Return the number of our own non-virtual hops in this circuit.
     ///
     /// This does not count any hops for the service's rendezvous circuit.
-    #[allow(unused)] // XXXX
     fn m_num_own_real_hops(&self) -> tor_circmgr::Result<usize>;
 }
 
@@ -1517,7 +1515,6 @@ trait MockableClientIntro: Debug {
     ) -> tor_circmgr::Result<Self::Conversation<'_>>;
 
     /// Return the number of hops in this circuit.
-    #[allow(unused)] // XXXX
     fn m_num_hops(&self) -> tor_circmgr::Result<usize>;
 }
 
