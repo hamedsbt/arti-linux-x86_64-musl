@@ -450,12 +450,6 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             // let's give them as many retries as we can manage.
             .unwrap_or(usize::MAX);
 
-        // Limit on the duration of each retrieval attempt
-        let each_timeout = self.estimate_timeout(&[
-            (1, TimeoutsAction::BuildCircuit { length: HOPS }), // build circuit
-            (1, TimeoutsAction::RoundTrip { length: HOPS }),    // One HTTP query/response
-        ]);
-
         // We retain a previously obtained descriptor precisely until its lifetime expires,
         // and pay no attention to the descriptor's revision counter.
         // When it expires, we discard it completely and try to obtain a new one.
@@ -509,12 +503,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
                 }
             };
             let hsdir_for_error: Sensitive<Ed25519Identity> = (*relay.id()).into();
-            match self
-                .runtime
-                .timeout(each_timeout, self.descriptor_fetch_attempt(relay))
-                .await
-                .unwrap_or(Err(DescriptorErrorDetail::Timeout))
-            {
+            match self.descriptor_fetch_attempt(relay).await {
                 Ok(desc) => break desc,
                 Err(error) => {
                     if error.should_report_as_suspicious() {
@@ -600,16 +589,31 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             .circpool
             .m_get_or_launch_dir(&self.netdir, OwnedCircTarget::from_circ_target(hsdir))
             .await?;
+        let n_hops = circuit.m_num_hops()?;
+        let timeout_roundtrip =
+            self.estimate_timeout(&[(1, TimeoutsAction::RoundTrip { length: n_hops })]);
+
         let source: Option<SourceInfo> = circuit
             .m_source_info()
             .map_err(into_internal!("Couldn't get SourceInfo for circuit"))?;
-        let mut stream = circuit
-            .m_begin_dir_stream()
-            .await
+
+        let mut stream = self
+            .runtime
+            // NOTE: In fact this timeout is overkill: this operation should succeed immediately,
+            // since we always send BEGINDIR messages optimistically (without waiting for a reply).
+            // But since our code is complex, and since it could become possible for this to block
+            // if the circuit is saturated or we implement proposal 367 or something,
+            // we may as well have _some_ timeout here.
+            .timeout(timeout_roundtrip, circuit.m_begin_dir_stream())
+            .await?
             .map_err(DescriptorErrorDetail::Circuit)?;
 
-        let response = tor_dirclient::send_request(self.runtime, &request, &mut stream, source)
-            .await
+        let request_future =
+            tor_dirclient::send_request(self.runtime, &request, &mut stream, source);
+        let response = self
+            .runtime
+            .timeout(timeout_roundtrip, request_future)
+            .await?
             .map_err(|dir_error| match dir_error {
                 tor_dirclient::Error::RequestFailed(rfe) => DescriptorErrorDetail::from(rfe.error),
                 tor_dirclient::Error::CircMgr(ce) => into_internal!(
