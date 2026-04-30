@@ -42,7 +42,7 @@ use tracing::trace;
 use super::reader::DrainRateRequest;
 
 use crate::stream::flow_ctrl::params::{CellCount, FlowCtrlParameters};
-use crate::stream::flow_ctrl::state::{FlowCtrlHooks, StreamRateLimit};
+use crate::stream::flow_ctrl::state::{FlowCtrlHooks, HalfStreamFlowCtrlHooks, StreamRateLimit};
 use crate::util::notify::NotifySender;
 use crate::{Error, Result};
 
@@ -224,6 +224,30 @@ impl FlowCtrlHooks for XonXoffFlowCtrl {
         trace!("Want to send an XOFF");
 
         Ok(Some(Xoff::new(FlowCtrlVersion::V0)))
+    }
+}
+
+/// State for XON/XOFF flow control on a half-stream.
+#[derive(Debug)]
+pub(crate) struct HalfStreamXonXoffFlowCtrl {}
+
+impl HalfStreamXonXoffFlowCtrl {
+    /// Returns a new xon/xoff-based state for a half-stream.
+    pub(crate) fn new(_flow_ctrl: XonXoffFlowCtrl) -> Self {
+        // XXXX
+        Self {}
+    }
+}
+
+impl HalfStreamFlowCtrlHooks for HalfStreamXonXoffFlowCtrl {
+    fn handle_incoming_dropped(&mut self, _msg_count: u16) -> Result<()> {
+        // XXXX
+        todo!()
+    }
+
+    fn handle_incoming_msg(&mut self, msg: UnparsedRelayMsg) -> Result<Option<UnparsedRelayMsg>> {
+        // XXXX
+        todo!()
     }
 }
 

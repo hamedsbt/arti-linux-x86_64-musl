@@ -5,7 +5,7 @@ use tor_cell::relaycell::msg::{AnyRelayMsg, Sendme};
 use tor_cell::relaycell::{RelayMsg, UnparsedRelayMsg};
 
 use crate::congestion::sendme::{self, StreamSendWindow};
-use crate::stream::flow_ctrl::state::FlowCtrlHooks;
+use crate::stream::flow_ctrl::state::{FlowCtrlHooks, HalfStreamFlowCtrlHooks};
 use crate::{Error, Result};
 
 #[cfg(doc)]
@@ -70,5 +70,29 @@ impl FlowCtrlHooks for WindowFlowCtrl {
     fn maybe_send_xoff(&mut self, _buffer_len: usize) -> Result<Option<Xoff>> {
         let msg = "XOFF messages cannot be sent with window flow control";
         Err(Error::CircProto(msg.into()))
+    }
+}
+
+/// State for window-based flow control on a half-stream.
+#[derive(Debug)]
+pub(crate) struct HalfStreamWindowFlowCtrl {}
+
+impl HalfStreamWindowFlowCtrl {
+    /// Returns a new sendme-window-based state for a half-stream.
+    pub(crate) fn new(_flow_ctrl: WindowFlowCtrl) -> Self {
+        // XXXX
+        Self {}
+    }
+}
+
+impl HalfStreamFlowCtrlHooks for HalfStreamWindowFlowCtrl {
+    fn handle_incoming_dropped(&mut self, msg_count: u16) -> Result<()> {
+        // XXXX
+        todo!()
+    }
+
+    fn handle_incoming_msg(&mut self, msg: UnparsedRelayMsg) -> Result<Option<UnparsedRelayMsg>> {
+        // XXXX
+        todo!()
     }
 }
