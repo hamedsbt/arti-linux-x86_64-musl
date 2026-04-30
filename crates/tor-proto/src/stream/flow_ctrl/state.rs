@@ -28,7 +28,12 @@ enum StreamFlowCtrlEnum {
     XonXoffBased(XonXoffFlowCtrl),
 }
 
-/// Manages flow control for a stream.
+/// Manages the circuit reactor's flow control for a stream.
+///
+/// Note that the flow control logic can be distributed across multiple parts of Arti.
+/// For example some flow control logic will exist in the circuit reactor,
+/// but other logic will exist in the stream's `DataStream`.
+/// So this doesn't include all flow control logic.
 #[derive(Debug)]
 pub(crate) struct StreamFlowCtrl {
     /// Private internal enum.
