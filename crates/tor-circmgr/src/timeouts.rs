@@ -89,6 +89,14 @@ pub enum Action {
         /// The length of the circuit.
         length: usize,
     },
+    /// Wait for a message to arrive to the other end of a circuit.
+    ///
+    /// (This is almost never the right operation to use unless you
+    /// are doing something tricky.)
+    OneWay {
+        /// The length of the circuit.
+        length: usize,
+    },
 }
 
 impl Action {
@@ -139,6 +147,8 @@ impl Action {
                 build_scale(final_length) - build_scale(initial_length)
             }
             Action::RoundTrip { length } => length.clamp(0, MAX_LEN),
+            // XXXX eliminate the div_ceil here.
+            Action::OneWay { length } => length.clamp(0, MAX_LEN * 2).div_ceil(2),
         }
     }
 }

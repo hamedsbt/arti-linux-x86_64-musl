@@ -1252,7 +1252,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         };
 
         // The number of hops that the peer may be using beyond our own.
-        // let extra_peer_hops = peer_circ_len.saturating_sub(num_hops);
+        let extra_peer_hops = peer_circ_len.saturating_sub(num_hops);
 
         // The total number of hops from the peer to us.
         //
@@ -1264,25 +1264,18 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         let rpt_ipt_timeout = self.estimate_timeout(&[
             // The API requires us to specify a number of circuit builds and round trips.
             // So what we tell the estimator is a rather imprecise description.
-            // (TODO it would be nice if the circmgr offered us a one-way trip Action).
             //
             // What we are timing here is:
             //
-            //    INTRODUCE2 goes from IPT to HS
-            //    but that happens in parallel with us waiting for INTRODUCE_ACK,
-            //    which is controlled by `intro_timeout` so not pat of `ipt_rpt_timeout`.
-            //    and which has to come HOPS hops.  So don't count INTRODUCE2 here.
-            //
-
-            /* XXXX enable.
             //    INTRODUCE2 goes from IPT to HS.
             //    This happens in parallel with our waiting for the INTRODUCE_ACK,
             //    so we only wait for the _extra_ hops that apply to the peer's circuit.
-            ( 1,
-
-                TimeoutsAction::OneHop { length: extra_peer_hops }
+            (
+                1,
+                TimeoutsAction::OneWay {
+                    length: extra_peer_hops,
+                },
             ),
-            */
             //    HS builds to our RPT
             (
                 1,
@@ -1295,9 +1288,8 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             //    RENDEZVOUS2 goes from RPT to us.  `num_hops`, one-way.
             (
                 1,
-                // XXXX This is temporary. Create a OneWay action and get the length right.
-                TimeoutsAction::RoundTrip {
-                    length: total_circ_len.div_ceil(2),
+                TimeoutsAction::OneWay {
+                    length: total_circ_len,
                 },
             ),
         ]);
