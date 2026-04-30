@@ -24,8 +24,8 @@ use tor_error::{Bug, debug_report, warn_report};
 use tor_hscrypto::Subcredential;
 use tor_proto::TargetHop;
 use tor_proto::client::circuit::handshake::hs_ntor;
-use tracing::{debug, instrument, trace};
-use web_time_compat::{Duration, Instant};
+use tracing::{debug, instrument, trace, warn};
+use web_time_compat::{Duration, Instant, SystemTime};
 
 use retry_error::RetryError;
 use safelog::{DispRedacted, Sensitive};
@@ -79,7 +79,24 @@ pub struct Data {
     /// Information about the latest status of trying to connect to this service
     /// through each of its introduction points.
     ipts: DataIpts,
+    /// Information about the requery period of each HsDir we have recently queried.
+    ///
+    /// Each entry represents an HsDir that we cannot requery until
+    /// its specified timestamp elapses.
+    ///
+    /// Any HsDir that does not have an entry in this map can be requeried.
+    hsdirs: DataHsDirs,
 }
+
+/// Part of `Data` that relates to our information about the HsDir requery periods
+type DataHsDirs = HashMap<RelayIdForRequeryPeriod, SystemTime>;
+
+/// Marker type, to make typed HsDir [`RelayIdFor`] keys
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
+struct RequeryPeriodMap;
+
+/// Lookup key for looking up and recording our IPT use experiences
+type RelayIdForRequeryPeriod = RelayIdFor<RequeryPeriodMap>;
 
 /// Part of `Data` that relates to the HS descriptor
 type DataHsDesc = Option<TimerangeBound<HsDesc>>;
@@ -426,7 +443,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
 
         let mocks = self.mocks.clone();
 
-        let desc = self.descriptor_ensure(&mut data.desc, None).await?;
+        let desc = self.descriptor_ensure(&mut data.desc, &mut data.hsdirs, None).await?;
 
         mocks.test_got_desc(desc);
 
@@ -465,7 +482,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
                         &self.hsid,
                     );
                     // Refetch the descriptor and try one more time
-                    let desc = self.descriptor_ensure(&mut data.desc, retry).await?;
+                    let desc = self.descriptor_ensure(&mut data.desc, &mut data.hsdirs, retry).await?;
                     mocks.test_got_desc(desc);
                     self.intro_rend_connect(desc, &mut data.ipts).await?
                 } else {
@@ -496,6 +513,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
     async fn descriptor_ensure<'d>(
         &self,
         data: &'d mut DataHsDesc,
+        recent_hsdirs: &'d mut DataHsDirs,
         refetch: Option<RefetchDescriptor>,
     ) -> Result<&'d HsDesc, CE> {
         // Maximum number of hsdir connection and retrieval attempts we'll make
@@ -552,11 +570,16 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             }
         }
 
-        let hs_dirs = self.netdir.hs_dirs_download(
-            self.hs_blind_id,
-            self.netdir.hs_time_period(),
-            &mut self.mocks.thread_rng(),
-        )?;
+        // First, filter out any HsDirs that we *can* requery
+        recent_hsdirs.retain(|_hsdir, requery| *requery >= now);
+
+        let hs_dirs = self
+            .netdir
+            .hs_dirs_download(
+                self.hs_blind_id,
+                self.netdir.hs_time_period(),
+                &mut self.mocks.thread_rng(),
+            )?;
 
         trace!(
             "HS desc fetch for {}, for period {}, using {} hsdirs",
@@ -564,6 +587,34 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             self.netdir.hs_time_period(),
             hs_dirs.len()
         );
+
+        let hs_dirs = hs_dirs
+            .into_iter()
+            .filter(|hsdir| {
+                // Skip over any HsDirs that we are not allowed to requery right now
+                let should_skip = recent_hsdirs.keys().any(|recent| {
+                    RelayIdForRequeryPeriod::for_lookup(hsdir).any(|id| id == *recent)
+                });
+
+                !should_skip
+            })
+            .collect::<Vec<_>>();
+
+        if hs_dirs.is_empty() {
+            warn!(
+                "Tried to fetch HS desc for {}, for period {}, but all hsdirs are rate-limited",
+                &self.hsid,
+                self.netdir.hs_time_period(),
+            );
+
+            if cur_revision.is_none() {
+                // We can't fetch a new descriptor, and we don't have a cached one.
+                return Err(CE::NoUsableHsDirs);
+            } else {
+                // Return our cached descriptor
+                return Ok(unwrap_valid_desc(data));
+            }
+        }
 
         // We might consider launching requests to multiple HsDirs in parallel.
         //   https://gitlab.torproject.org/tpo/core/arti/-/merge_requests/1118#note_2894463
@@ -585,6 +636,12 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
                 }
             };
             let hsdir_for_error: Sensitive<Ed25519Identity> = (*relay.id()).into();
+
+            let hsdir = RelayIdForRequeryPeriod::for_store(relay)?;
+            // Ensure we wait at least hs_dir_requery_period() until we try to
+            // fecth from this HsDir again
+            recent_hsdirs.insert(hsdir, now + self.config.retry.hs_dir_requery_period());
+
             match self.descriptor_fetch_attempt(relay).await {
                 Ok(desc) => break desc,
                 Err(error) => {
