@@ -1944,7 +1944,6 @@ mod test {
             Ok(MockKeyGenerator)
         }
     }
-    #[allow(clippy::diverging_sub_expression)] // async_trait + todo!()
     #[async_trait]
     impl<R: Runtime> MockableCircPool<R> for Mocks<()> {
         type DataTunnel = Mocks<()>;
@@ -1984,7 +1983,6 @@ mod test {
             Duration::from_secs(10)
         }
     }
-    #[allow(clippy::diverging_sub_expression)] // async_trait + todo!()
     #[async_trait]
     impl MockableClientDir for Mocks<()> {
         type DirStream = JoinReadWrite<futures::io::Cursor<Box<[u8]>>, futures::io::Sink>;
@@ -2013,7 +2011,6 @@ mod test {
         }
     }
 
-    #[allow(clippy::diverging_sub_expression)] // async_trait + todo!()
     #[async_trait]
     impl MockableClientData for Mocks<()> {
         type Conversation<'r> = &'r ();
@@ -2054,7 +2051,6 @@ mod test {
         }
     }
 
-    #[allow(clippy::diverging_sub_expression)] // async_trait + todo!()
     #[async_trait]
     impl MockableClientIntro for Mocks<()> {
         type Conversation<'r> = &'r ();
