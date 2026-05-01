@@ -1883,15 +1883,6 @@ mod test {
         id: I,
     }
 
-    impl<I> Mocks<I> {
-        fn map_id<J>(&self, f: impl FnOnce(&I) -> J) -> Mocks<J> {
-            Mocks {
-                mglobal: self.mglobal.clone(),
-                id: f(&self.id),
-            }
-        }
-    }
-
     impl<R: Runtime> MocksForConnect<R> for Mocks<()> {
         type HsCircPool = Mocks<()>;
         type Rng = TestingRng;
