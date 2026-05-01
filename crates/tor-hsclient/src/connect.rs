@@ -2139,8 +2139,7 @@ mod test {
         )
         .unwrap();
 
-        let _got = ctx.connect(&mut data)
-            .await;
+        let _got = ctx.connect(&mut data).await;
 
         let (hs_blind_id_key, subcredential) = HsIdKey::try_from(hsid)
             .unwrap()
