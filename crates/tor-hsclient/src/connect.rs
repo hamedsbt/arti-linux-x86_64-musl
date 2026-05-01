@@ -2170,6 +2170,7 @@ mod test {
         let _got = ctx.connect(&mut data).await.unwrap();
 
         let hsdesc = expected_hsdesc(hsid, &netdir, now);
+        {
         let mglobal = mocks.mglobal.lock().unwrap();
         assert_eq!(mglobal.hsdirs_asked.len(), 1);
         // TODO hs: here and in other places, consider implementing PartialEq instead, or creating
@@ -2178,6 +2179,7 @@ mod test {
             format!("{:?}", mglobal.got_desc),
             format!("{:?}", Some(hsdesc))
         );
+        }
 
         // Check how long the descriptor is valid for
         let (start_time, end_time) = data.desc.as_ref().unwrap().desc.bounds();
