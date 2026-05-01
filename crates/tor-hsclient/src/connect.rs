@@ -2171,14 +2171,14 @@ mod test {
 
         let hsdesc = expected_hsdesc(hsid, &netdir, now);
         {
-        let mglobal = mocks.mglobal.lock().unwrap();
-        assert_eq!(mglobal.hsdirs_asked.len(), 1);
-        // TODO hs: here and in other places, consider implementing PartialEq instead, or creating
-        // an assert_dbg_eq macro (which would be part of a test_helpers crate or something)
-        assert_eq!(
-            format!("{:?}", mglobal.got_desc),
-            format!("{:?}", Some(hsdesc))
-        );
+            let mglobal = mocks.mglobal.lock().unwrap();
+            assert_eq!(mglobal.hsdirs_asked.len(), 1);
+            // TODO hs: here and in other places, consider implementing PartialEq instead, or creating
+            // an assert_dbg_eq macro (which would be part of a test_helpers crate or something)
+            assert_eq!(
+                format!("{:?}", mglobal.got_desc),
+                format!("{:?}", Some(hsdesc))
+            );
         }
 
         // Check how long the descriptor is valid for
