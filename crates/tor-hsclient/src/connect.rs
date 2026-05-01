@@ -1957,8 +1957,6 @@ mod test {
         ) -> tor_circmgr::Result<Self::DirTunnel> {
             let target = OwnedCircTarget::from_circ_target(&target);
             self.mglobal.lock().unwrap().hsdirs_asked.push(target);
-            // Adding the `Arc` here is a little ugly, but that's what we get
-            // for using the same Mocks for everything.
             Ok(self.clone())
         }
         async fn m_get_or_launch_intro(
