@@ -2084,6 +2084,12 @@ mod test {
         }
     }
 
+    fn ks_hsc_desc_enc() -> HsClientDescEncKeypair {
+        let pk: HsClientDescEncKey = curve25519::PublicKey::from(test_data::TEST_PUBKEY_2).into();
+        let sk = curve25519::StaticSecret::from(test_data::TEST_SECKEY_2).into();
+        HsClientDescEncKeypair::new(pk, sk)
+    }
+
     fn build_test_netdir() -> Arc<NetDir> {
         let valid_after = humantime::parse_rfc3339("2023-02-09T12:00:00Z").unwrap();
         let fresh_until = valid_after + humantime::parse_duration("1 hours").unwrap();
@@ -2128,10 +2134,8 @@ mod test {
         let hsid = test_data::TEST_HSID_2.into();
         let mut data = Data::default();
 
-        let pk: HsClientDescEncKey = curve25519::PublicKey::from(test_data::TEST_PUBKEY_2).into();
-        let sk = curve25519::StaticSecret::from(test_data::TEST_SECKEY_2).into();
         let mut secret_keys_builder = HsClientSecretKeysBuilder::default();
-        secret_keys_builder.ks_hsc_desc_enc(HsClientDescEncKeypair::new(pk.clone(), sk));
+        secret_keys_builder.ks_hsc_desc_enc(ks_hsc_desc_enc());
         let secret_keys = secret_keys_builder.build().unwrap();
 
         let ctx = Context::new(
@@ -2153,14 +2157,12 @@ mod test {
             .unwrap();
         let hs_blind_id = hs_blind_id_key.id();
 
-        let sk = curve25519::StaticSecret::from(test_data::TEST_SECKEY_2).into();
-
         let hsdesc = HsDesc::parse_decrypt_validate(
             test_data::TEST_DATA_2,
             &hs_blind_id,
             now,
             &subcredential,
-            Some(&HsClientDescEncKeypair::new(pk, sk)),
+            Some(&ks_hsc_desc_enc()),
         )
         .unwrap()
         .dangerously_assume_timely();
