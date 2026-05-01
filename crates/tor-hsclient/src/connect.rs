@@ -593,7 +593,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         }
 
         // First, filter out any HsDirs that we *can* requery
-        recent_hsdirs.retain(|_hsdir, requery| *requery >= now);
+        recent_hsdirs.retain(|_hsdir, requery| *requery > now);
 
         let hs_dirs = self.netdir.hs_dirs_download(
             self.hs_blind_id,
