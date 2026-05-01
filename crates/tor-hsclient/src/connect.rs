@@ -1884,6 +1884,7 @@ mod test {
 
     use super::*;
     use crate::*;
+    use itertools::chain;
     use std::iter;
     use tokio_crate as tokio;
     use tor_async_utils::JoinReadWrite;
@@ -2135,12 +2136,48 @@ mod test {
         let mock_sp = SimpleMockTimeProvider::from_wallclock(now);
         let runtime = runtime
             .with_sleep_provider(mock_sp.clone())
-            .with_coarse_time_provider(mock_sp);
+            .with_coarse_time_provider(mock_sp.clone());
 
-        let intro_acks = vec![(
+        let success = (
             IntroduceAck::new(IntroduceAckStatus::SUCCESS),
             ConversationFinished,
-        )];
+        );
+
+        let nack = (
+            IntroduceAck::new(IntroduceAckStatus::NOT_RECOGNIZED),
+            ConversationFinished,
+        );
+
+        // The number of times to make Context:connect() fail due to intro NACK
+        //
+        // Set to 5 in order to trigger a rate-limit for all 6 HsDirs:
+        //
+        // there are 6 HsDirs in total, one of which is "used up" by the
+        // first (successful) connect() attempt below.
+        const INTRO_FAIL_COUNT: usize = 5;
+
+        /// The number of times we expect the client to retry the
+        /// introduction per connect() call
+        /// (it will essentially try two rounds of `intro_rend_connect()`,
+        /// once with the cached descriptor, and once with the potentially
+        /// new descriptor).
+        const IPT_RETRY_COUNT: usize = 12;
+
+        // The first introduction will succeed
+        let intro_acks = chain!(
+            [&success],
+            // But the next INTRO_FAIL_COUNT connect() will fail
+            // (+1 because we want to fail *again*, in order to find
+            // that there's now a limit on all our HsDirs)
+            [&nack; IPT_RETRY_COUNT * (INTRO_FAIL_COUNT + 1)],
+            // One more round of failures, to trigger a refecth after the rate-limit is lifted
+            [&nack; IPT_RETRY_COUNT - 1],
+            // After refetching the descriptor, the client will retry the introduction,
+            // and succeed.
+            [&success],
+        )
+        .cloned()
+        .collect();
 
         let mglobal = Arc::new(Mutex::new(MocksGlobal {
             intro_acks,
@@ -2151,6 +2188,7 @@ mod test {
         // From C Tor src/test/test_hs_common.c test_build_address
         let hsid = test_data::TEST_HSID_2.into();
         let mut data = Data::default();
+        let mut expected_hsdirs_asked = 1;
 
         let mut secret_keys_builder = HsClientSecretKeysBuilder::default();
         secret_keys_builder.ks_hsc_desc_enc(ks_hsc_desc_enc());
@@ -2169,15 +2207,18 @@ mod test {
 
         let _got = ctx.connect(&mut data).await.unwrap();
 
+        // Our mock IPT hasn't sent any NACKs yet
+        assert!(!logs_contain("NACKed, refetching descriptor and retrying"));
+
         let hsdesc = expected_hsdesc(hsid, &netdir, now);
         {
             let mglobal = mocks.mglobal.lock().unwrap();
-            assert_eq!(mglobal.hsdirs_asked.len(), 1);
+            assert_eq!(mglobal.hsdirs_asked.len(), expected_hsdirs_asked);
             // TODO hs: here and in other places, consider implementing PartialEq instead, or creating
             // an assert_dbg_eq macro (which would be part of a test_helpers crate or something)
             assert_eq!(
                 format!("{:?}", mglobal.got_desc),
-                format!("{:?}", Some(hsdesc))
+                format!("{:?}", Some(hsdesc.clone()))
             );
         }
 
@@ -2187,6 +2228,73 @@ mod test {
 
         let desc_valid_until = humantime::parse_rfc3339("2023-02-11T20:00:00Z").unwrap();
         assert_eq!(end_time, Some(desc_valid_until));
+
+        // These attempts will all fail due to intro NACK,
+        // and trigger a rate-limit for all 6 HsDirs
+        for i in 1..=INTRO_FAIL_COUNT + 1 {
+            let err = ctx.connect(&mut data).await.unwrap_err();
+
+            let is_intro_nack = |e| matches!(e, FAE::IntroductionFailed { status, .. });
+
+            // All attempts failed because of our repeated intro NACKs
+            assert!(matches!(err, CE::Failed(e) if e.clone().into_iter().all(is_intro_nack)));
+
+            {
+                assert!(logs_contain("NACKed, refetching descriptor and retrying"));
+                let mglobal = mocks.mglobal.lock().unwrap();
+                // Because all intro attempts failed with NACK (NOT_RECOGNIZED),
+                // the client must've tried to refetch the descriptor
+                if i <= INTRO_FAIL_COUNT {
+                    // No rate limiting yet, so the client must've tried to fetch a new
+                    // descriptor, before failing again.
+                    expected_hsdirs_asked += 1;
+                    assert!(!logs_contain("but all hsdirs are rate-limited"));
+                    assert_eq!(mglobal.hsdirs_asked.len(), expected_hsdirs_asked);
+                } else {
+                    // The final failure won't lead to an HsDir fetch
+                    // because all HsDirs will be rate-limited at that point
+                    assert!(logs_contain("but all hsdirs are rate-limited"));
+                    assert_eq!(mglobal.hsdirs_asked.len(), expected_hsdirs_asked);
+                }
+
+                // Same descriptor each time
+                // TODO hs: here and in other places, consider implementing PartialEq instead, or creating
+                // an assert_dbg_eq macro (which would be part of a test_helpers crate or something)
+                assert_eq!(
+                    format!("{:?}", mglobal.got_desc),
+                    format!("{:?}", Some(hsdesc.clone()))
+                );
+            }
+
+            let (start_time, end_time) = data.desc.as_ref().unwrap().desc.bounds();
+            assert_eq!(start_time, None);
+
+            let desc_valid_until = humantime::parse_rfc3339("2023-02-11T20:00:00Z").unwrap();
+            assert_eq!(end_time, Some(desc_valid_until));
+        }
+
+        // By default, the HsDir fetches are rate-limited for 15min
+        mock_sp.advance(Duration::from_secs(15 * 60));
+        // Finally, we succeed.
+        let _got = ctx.connect(&mut data).await.unwrap();
+
+        // And it turns out we did, in fact refetch the descriptor
+
+        // Finally, we try again, but find that all HsDirs are now rate-limited!
+        // So now we advance the time to lift the rate limit, and hope that
+        //
+        // TODO HS TESTS: we could extend our mock infrastructure
+        // to support returning a different hsdesc this time,
+        // with various revision counters, to check that the client is indeed
+        // keeping the newest one.
+        {
+            assert!(logs_contain("NACKed, refetching descriptor and retrying"));
+            let mglobal = mocks.mglobal.lock().unwrap();
+            // Because all intro attempts failed with NACK (NOT_RECOGNIZED),
+            // the client must've tried to refetch the descriptor
+            expected_hsdirs_asked += 1;
+            assert_eq!(mglobal.hsdirs_asked.len(), expected_hsdirs_asked);
+        }
 
         // TODO HS TESTS: check the circuit in got is the one we gave out
 
