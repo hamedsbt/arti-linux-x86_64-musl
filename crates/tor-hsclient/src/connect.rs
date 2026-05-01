@@ -45,7 +45,7 @@ use tor_linkspec::{CircTarget, HasRelayIds, OwnedCircTarget, RelayId};
 use tor_llcrypto::pk::ed25519::Ed25519Identity;
 use tor_netdir::{NetDir, Relay};
 use tor_netdoc::doc::hsdesc::{HsDesc, IntroPointDesc};
-use tor_proto::client::circuit::CircParameters;
+use tor_proto::client::circuit::{CircParameters, handshake};
 use tor_proto::{MetaCellDisposition, MsgHandler};
 use tor_rtcompat::{Runtime, SleepProviderExt as _, TimeoutError};
 
@@ -1407,8 +1407,6 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         introduced: Introduced<R, M>,
         is_single_onion_service: bool,
     ) -> Result<DataTunnel!(R, M), FAE> {
-        use tor_proto::client::circuit::handshake;
-
         /// Largest number of hops that the onion service must build for _its_
         /// circuits to our rendezvous points.
         ///
@@ -1683,9 +1681,9 @@ trait MockableClientData: Debug {
     /// Add a virtual hop to the circuit.
     async fn m_extend_virtual(
         &self,
-        protocol: tor_proto::client::circuit::handshake::RelayProtocol,
-        role: tor_proto::client::circuit::handshake::HandshakeRole,
-        handshake: impl tor_proto::client::circuit::handshake::KeyGenerator + Send,
+        protocol: handshake::RelayProtocol,
+        role: handshake::HandshakeRole,
+        handshake: impl handshake::KeyGenerator + Send,
         params: CircParameters,
         capabilities: &tor_protover::Protocols,
     ) -> tor_circmgr::Result<()>;
@@ -1814,9 +1812,9 @@ impl MockableClientData for ClientOnionServiceDataTunnel {
 
     async fn m_extend_virtual(
         &self,
-        protocol: tor_proto::client::circuit::handshake::RelayProtocol,
-        role: tor_proto::client::circuit::handshake::HandshakeRole,
-        handshake: impl tor_proto::client::circuit::handshake::KeyGenerator + Send,
+        protocol: handshake::RelayProtocol,
+        role: handshake::HandshakeRole,
+        handshake: impl handshake::KeyGenerator + Send,
         params: CircParameters,
         capabilities: &tor_protover::Protocols,
     ) -> tor_circmgr::Result<()> {
@@ -1913,7 +1911,7 @@ mod test {
 
     struct MockKeyGenerator;
 
-    impl tor_proto::client::circuit::handshake::KeyGenerator for MockKeyGenerator {
+    impl handshake::KeyGenerator for MockKeyGenerator {
         fn expand(self, _keylen: usize) -> tor_proto::Result<tor_bytes::SecretBuf> {
             todo!()
         }
@@ -2035,9 +2033,9 @@ mod test {
 
         async fn m_extend_virtual(
             &self,
-            protocol: tor_proto::client::circuit::handshake::RelayProtocol,
-            role: tor_proto::client::circuit::handshake::HandshakeRole,
-            handshake: impl tor_proto::client::circuit::handshake::KeyGenerator + Send,
+            protocol: handshake::RelayProtocol,
+            role: handshake::HandshakeRole,
+            handshake: impl handshake::KeyGenerator + Send,
             params: CircParameters,
             capabilities: &tor_protover::Protocols,
         ) -> tor_circmgr::Result<()> {
