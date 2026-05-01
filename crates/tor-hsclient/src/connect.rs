@@ -1902,7 +1902,9 @@ mod test {
         got_desc: Option<HsDesc>,
         #[debug(skip)]
         rendezvous: Option<Box<dyn MsgHandler + Send + 'static>>,
+        intro_acks: Vec<(IntroduceAck, MetaCellDisposition)>,
     }
+
     #[derive(Clone, Debug)]
     struct Mocks<I> {
         mglobal: Arc<Mutex<MocksGlobal>>,
@@ -2057,14 +2059,12 @@ mod test {
         ) -> tor_circmgr::Result<Self::Conversation<'_>> {
             match msg {
                 Some(AnyRelayMsg::Introduce1(introduce1)) => {
-                    // TODO: need infrastructure for sending various intro point errors
-                    // to test retries and descriptor re-fetching
-                    let reply = IntroduceAck::new(IntroduceAckStatus::SUCCESS);
+                    let mut global = self.mglobal.lock().unwrap();
+                    let (reply, expected_disp) = global.intro_acks.remove(0);
                     let disp = reply_handler.handle_msg(reply.into()).unwrap();
-                    assert_eq!(disp, MetaCellDisposition::ConversationFinished);
+                    assert_eq!(disp, expected_disp);
 
                     // Mock the service's response
-                    let mut global = self.mglobal.lock().unwrap();
                     let rendezvous = global
                         .rendezvous
                         .as_mut()
@@ -2087,6 +2087,8 @@ mod test {
     #[traced_test]
     #[tokio::test]
     async fn test_connect() {
+        use MetaCellDisposition::*;
+
         let valid_after = humantime::parse_rfc3339("2023-02-09T12:00:00Z").unwrap();
         let fresh_until = valid_after + humantime::parse_duration("1 hours").unwrap();
         let valid_until = valid_after + humantime::parse_duration("24 hours").unwrap();
@@ -2108,7 +2110,16 @@ mod test {
             .with_coarse_time_provider(mock_sp);
         let time_period = netdir.hs_time_period();
 
-        let mglobal = Arc::new(Mutex::new(MocksGlobal::default()));
+        let intro_acks = vec![(
+            IntroduceAck::new(IntroduceAckStatus::SUCCESS),
+            ConversationFinished,
+        )];
+
+        let mglobal = Arc::new(Mutex::new(MocksGlobal {
+            intro_acks,
+            ..Default::default()
+        }));
+
         let mocks = Mocks { mglobal, id: () };
         // From C Tor src/test/test_hs_common.c test_build_address
         let hsid = test_data::TEST_HSID_2.into();
