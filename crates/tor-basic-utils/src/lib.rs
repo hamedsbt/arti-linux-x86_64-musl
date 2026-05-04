@@ -578,21 +578,6 @@ macro_rules! derive_serde_raw { {
 
 // ----------------------------------------------------------------------
 
-/// Flatten a `Result<Result<T, E>, E>` into a `Result<T, E>`.
-///
-/// See [`Result::flatten`], which is not available
-/// at our current MSRV.
-// TODO MSRV 1.89: When our MSRV is at least 1.89,
-// remove this function and replace uses with `Result::flatten`.
-pub fn flatten<T, E>(x: Result<Result<T, E>, E>) -> Result<T, E> {
-    match x {
-        Ok(Ok(x)) => Ok(x),
-        Err(e) | Ok(Err(e)) => Err(e),
-    }
-}
-
-// ----------------------------------------------------------------------
-
 /// Asserts that the type of the expression implements the given trait.
 ///
 /// Example:
