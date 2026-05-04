@@ -111,7 +111,7 @@ pub fn iter_join(
     separator: &str,
     iter: impl Iterator<Item: fmt::Display> + Clone,
 ) -> impl fmt::Display {
-    // TODO: This can be replaced with `std::fmt::from_fn()` once stabilised and within our MSRV.
+    // TODO MSRV 1.93: Replace with `std::fmt::from_fn()`?
     struct Fmt<'a, I: Iterator<Item: fmt::Display> + Clone> {
         /// Separates items in `iter`.
         separator: &'a str,
