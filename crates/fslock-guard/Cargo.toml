@@ -16,7 +16,6 @@ default = []
 full = []
 
 [dependencies]
-fslock = { version = "0.2.0", package = "fslock-arti-fork" }
 thiserror = "2"
 
 [dev-dependencies]
