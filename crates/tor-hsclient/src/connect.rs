@@ -22,6 +22,7 @@ use tor_circmgr::{
 use tor_dirclient::SourceInfo;
 use tor_error::{Bug, debug_report, warn_report};
 use tor_hscrypto::Subcredential;
+use tor_hscrypto::time::TimePeriod;
 use tor_proto::TargetHop;
 use tor_proto::client::circuit::handshake::hs_ntor::{self, HsNtorHkdfKeyGenerator};
 use tracing::{debug, instrument, trace, warn};
@@ -92,11 +93,11 @@ pub struct Data {
 /// An onion service descriptor and its associated HsBlindId.
 #[derive(Debug)]
 struct HsDescForTp {
-    /// The blinded onion identity of this descriptor
+    /// The TP this descriptor is for.
     ///
     /// Used for determining whether a newly fetched descriptor
     /// is for the same time period as this one.
-    hs_blind_id: HsBlindId,
+    time_period: TimePeriod,
     /// The descriptor
     desc: TimerangeBound<HsDesc>,
 }
@@ -566,7 +567,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
                 // we need the known-to-be-Some descriptor instead.
                 //
                 // https://github.com/rust-lang/rust/issues/51545
-                Some((desc.revision(), previously.hs_blind_id))
+                Some((desc.revision(), previously.time_period))
             } else {
                 // Seems to be not valid now.  Try to fetch a fresh one.
                 None
@@ -699,7 +700,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
 
         // If our existing descriptor is newer than the one we have just fetched,
         // we should retain it.
-        if let Some((cur_revision, hs_blind_id)) = cur_revision {
+        if let Some(stored_revision) = cur_revision {
             // It is safe to dangerously_assume_timely,
             // as descriptor_fetch_attempt has already checked the timeliness of the descriptor.
             let new_desc = desc.as_ref().dangerously_assume_timely();
@@ -709,7 +710,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             // it means they are both used for the same time period,
             // and so we should only update our cache if the new descriptor is more recent
             // (i.e. it has a higher revision counter).
-            if hs_blind_id == self.hs_blind_id && cur_revision >= new_desc.revision() {
+            if stored_revision >= (new_desc.revision(), working_tp) {
                 // Our cached descriptor is still timely, and has a higher revision counter
                 // than the one we've just fetched, so we retain it.
                 return Ok(unwrap_valid_desc(data));
@@ -726,7 +727,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         // It is safe to dangerously_assume_timely,
         // as descriptor_fetch_attempt has already checked the timeliness of the descriptor.
         let desc = HsDescForTp {
-            hs_blind_id: self.hs_blind_id,
+            time_period: working_tp,
             desc,
         };
         let ret = data.insert(desc);
