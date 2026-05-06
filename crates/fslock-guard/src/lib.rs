@@ -309,6 +309,22 @@ mod os {
     }
 }
 
+/// Non-windows, non-unix implementation for lockfile_has_path.
+///
+/// For now, this implementation always reports an error.
+/// It exists so that we can build (but not run) on wasm.
+#[cfg(all(not(windows), not(unix)))]
+mod os {
+    use std::path::Path;
+
+    /// Return true if `lf` currently exists with the given `path`, and false otherwise.
+    pub(crate) fn lockfile_has_path(_lf: &std::fs::File, _path: &Path) -> std::io::Result<bool> {
+        Err(std::io::Error::other(
+            "fslock-guard does not support this operating system".to_string(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // @@ begin test lint list maintained by maint/add_warning @@
