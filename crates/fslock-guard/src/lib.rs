@@ -71,7 +71,7 @@ use std::{fs, path::Path};
 pub struct LockFileGuard {
     /// A [`File`](fs::File) with its exclusive lock held.
     ///
-    /// This `LockFile` instance will remain locked for as long as this
+    /// This `File` instance will remain locked for as long as this
     /// LockFileGuard exists.
     locked_file: fs::File,
 }
@@ -242,13 +242,13 @@ mod os {
 /// determine if our assumptions hold.
 ///
 /// Here we assume as follows:
-/// * When `fslock` calls `CreateFileW`, it gets a `HANDLE` to an open file.
+/// * When `File::open` calls `CreateFileW`, it gets a `HANDLE` to an open file.
 ///   As we use them, the `HANDLE` behaves
 ///   similarly to the "fd" in the Unix argument above,
 ///   and the open file behaves similarly to the "open-file".
 ///   * We assume that any differences that exist in their behavior do not
 ///     affect our correctness above.
-/// * When `fslock` calls `LockFileEx`, and it completes successfully,
+/// * When `File::lock` calls `LockFileEx`, and it completes successfully,
 ///   we now have a lock on the file.
 ///   Only one lock can exist on a file at a time.
 /// * When we compare members of `handle.metadata()` and `path.metadata()`,
@@ -256,8 +256,9 @@ mod os {
 ///   the two files are truly the same.
 ///   * We rely on the property that a file cannot change its file_index while it is
 ///     open.
-/// * Deleting the lock file will actually work, since `fslock` opened it with
-///   FILE_SHARE_DELETE.
+/// * Deleting the lock file will actually work, since `File::open` opened it with
+///   FILE_SHARE_DELETE.  (This is the default according to the documentation
+///   for `OpenOptionsExt::share_mode`.)
 /// * When we delete the lock file, possibly-asynchronous ("deferred") deletion
 ///   definitely won't mean that the OS kernel violates our rule that no-one but the lockholder
 ///   is allowed to delete the file.
@@ -286,7 +287,15 @@ mod os {
 
         let f2 = File::open(path)?;
 
+        // Note: we would like to just use the MetadataExt methods for index and
+        // volume serial number, but they are currently available only on nightly:
+        // https://github.com/rust-lang/rust/issues/63010
+        //
+        // If and when they stabilize at our MSRV, we can use them here instead.
+
         let (i1, i2) = unsafe {
+            // TODO: I am told that there is a GetFileInformationByHandleEx
+            // that can return 128-bit IDs.
             if GetFileInformationByHandle(lf.as_raw_handle() as _, m1.as_mut_ptr()) == 0 {
                 return Err(std::io::Error::last_os_error());
             }
