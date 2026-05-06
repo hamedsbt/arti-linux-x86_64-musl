@@ -624,8 +624,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         if hs_dirs.is_empty() {
             warn!(
                 "Tried to fetch HS desc for {}, for period {}, but all hsdirs are rate-limited",
-                &self.hsid,
-                working_tp,
+                &self.hsid, working_tp,
             );
 
             if cur_revision.is_none() {
