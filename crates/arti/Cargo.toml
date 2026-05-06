@@ -198,7 +198,7 @@ postage = { version = "0.5.0", default-features = false, features = ["futures-tr
 rustls-crate = { package = "rustls", version = "0.23.5", optional = true, default-features = false, features = [
     "logging",
 ] }
-safelog = { path = "../safelog", version = "0.8.1" }
+safelog = { path = "../safelog", version = "0.8.2" }
 secmem-proc = { version = "0.3.4", optional = true }
 serde = { version = "1.0.103", features = ["derive"] }
 serde_json = "1.0.50"
