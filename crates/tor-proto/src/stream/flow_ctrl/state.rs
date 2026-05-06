@@ -20,7 +20,7 @@ use crate::util::notify::NotifySender;
 /// Private internals of [`StreamFlowCtrl`].
 #[enum_dispatch::enum_dispatch]
 #[derive(Debug)]
-enum StreamFlowCtrlEnum {
+enum StreamFlowCtrlInner {
     /// "legacy" sendme-window-based flow control.
     WindowBased(WindowFlowCtrl),
     /// XON/XOFF flow control.
@@ -37,14 +37,14 @@ enum StreamFlowCtrlEnum {
 #[derive(Debug)]
 pub(crate) struct StreamFlowCtrl {
     /// Private internal enum.
-    e: StreamFlowCtrlEnum,
+    e: StreamFlowCtrlInner,
 }
 
 impl StreamFlowCtrl {
     /// Returns a new sendme-window-based [`StreamFlowCtrl`].
     pub(crate) fn new_window(window: sendme::StreamSendWindow) -> Self {
         Self {
-            e: StreamFlowCtrlEnum::WindowBased(WindowFlowCtrl::new(window)),
+            e: StreamFlowCtrlInner::WindowBased(WindowFlowCtrl::new(window)),
         }
     }
 
@@ -57,7 +57,7 @@ impl StreamFlowCtrl {
         drain_rate_requester: NotifySender<DrainRateRequest>,
     ) -> Self {
         Self {
-            e: StreamFlowCtrlEnum::XonXoffBased(XonXoffFlowCtrl::new(
+            e: StreamFlowCtrlInner::XonXoffBased(XonXoffFlowCtrl::new(
                 params,
                 use_sidechannel_mitigations,
                 rate_limit_updater,
@@ -72,12 +72,12 @@ impl StreamFlowCtrl {
     /// that is designed to be used for half-streams.
     pub(crate) fn half_stream(self) -> HalfStreamFlowCtrl {
         let inner = match self.e {
-            StreamFlowCtrlEnum::WindowBased(x) => {
-                HalfStreamFlowCtrlEnum::WindowBased(HalfStreamWindowFlowCtrl::new(x))
+            StreamFlowCtrlInner::WindowBased(x) => {
+                HalfStreamFlowCtrlInner::WindowBased(HalfStreamWindowFlowCtrl::new(x))
             }
             #[cfg(feature = "flowctl-cc")]
-            StreamFlowCtrlEnum::XonXoffBased(x) => {
-                HalfStreamFlowCtrlEnum::XonXoffBased(HalfStreamXonXoffFlowCtrl::new(x))
+            StreamFlowCtrlInner::XonXoffBased(x) => {
+                HalfStreamFlowCtrlInner::XonXoffBased(HalfStreamXonXoffFlowCtrl::new(x))
             }
         };
 
@@ -118,8 +118,8 @@ impl FlowCtrlHooks for StreamFlowCtrl {
 
 /// Methods that can be called on a [`StreamFlowCtrl`].
 ///
-/// We use a trait so that we can use `enum_dispatch` on the inner [`StreamFlowCtrlEnum`] enum.
-#[enum_dispatch::enum_dispatch(StreamFlowCtrlEnum)]
+/// We use a trait so that we can use `enum_dispatch` on the inner [`StreamFlowCtrlInner`] enum.
+#[enum_dispatch::enum_dispatch(StreamFlowCtrlInner)]
 pub(crate) trait FlowCtrlHooks {
     /// Whether this stream is ready to send `msg`.
     fn can_send<M: RelayMsg>(&self, msg: &M) -> bool;
@@ -174,13 +174,13 @@ pub(crate) trait FlowCtrlHooks {
 #[derive(Debug)]
 pub(crate) struct HalfStreamFlowCtrl {
     /// Private internal enum.
-    e: HalfStreamFlowCtrlEnum,
+    e: HalfStreamFlowCtrlInner,
 }
 
 /// Private internals of [`HalfStreamFlowCtrl`].
 #[enum_dispatch::enum_dispatch]
 #[derive(Debug)]
-enum HalfStreamFlowCtrlEnum {
+enum HalfStreamFlowCtrlInner {
     /// "legacy" sendme-window-based flow control.
     WindowBased(HalfStreamWindowFlowCtrl),
     /// XON/XOFF flow control.
@@ -190,10 +190,10 @@ enum HalfStreamFlowCtrlEnum {
 
 /// Methods that can be called on a [`HalfStreamFlowCtrl`].
 ///
-/// We use a trait so that we can use `enum_dispatch` on the inner [`HalfStreamFlowCtrlEnum`] enum.
+/// We use a trait so that we can use `enum_dispatch` on the inner [`HalfStreamFlowCtrlInner`] enum.
 /// While this may seem unnecessary since this trait currently only has two methods,
 /// it's consistent with the [`FlowCtrlHooks`] trait above.
-#[enum_dispatch::enum_dispatch(HalfStreamFlowCtrlEnum)]
+#[enum_dispatch::enum_dispatch(HalfStreamFlowCtrlInner)]
 pub(crate) trait HalfStreamFlowCtrlHooks {
     /// Handle some number of dropped stream messages.
     ///
