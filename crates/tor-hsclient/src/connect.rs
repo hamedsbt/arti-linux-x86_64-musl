@@ -560,7 +560,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         // TODO SPEC: Discuss HS descriptor lifetime and expiry client behaviour
         let now = self.runtime.wallclock();
 
-        let cur_revision = data.as_ref().and_then(|previously| {
+        let stored_revision = data.as_ref().and_then(|previously| {
             if let Ok(desc) = previously.desc.as_ref().check_valid_at(&now) {
                 // Ideally we would just return desc but that confuses borrowck,
                 // so we have to use unwrap_valid_desc() each time
@@ -574,7 +574,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             }
         });
 
-        match (cur_revision, refetch) {
+        match (stored_revision, refetch) {
             (Some(_), None) => {
                 // Our cached descriptor is still timely,
                 // and we don't need to fetch a new one.
@@ -628,7 +628,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
                 &self.hsid, working_tp,
             );
 
-            if cur_revision.is_none() {
+            if stored_revision.is_none() {
                 // We can't fetch a new descriptor, and we don't have a cached one.
                 return Err(CE::NoUsableHsDirs);
             } else {
@@ -700,7 +700,7 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
 
         // If our existing descriptor is newer than the one we have just fetched,
         // we should retain it.
-        if let Some(stored_revision) = cur_revision {
+        if let Some(stored_revision) = stored_revision {
             // It is safe to dangerously_assume_timely,
             // as descriptor_fetch_attempt has already checked the timeliness of the descriptor.
             let new_desc = desc.as_ref().dangerously_assume_timely();
