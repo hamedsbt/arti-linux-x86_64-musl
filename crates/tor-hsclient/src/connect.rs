@@ -11,6 +11,7 @@ use futures::{AsyncRead, AsyncWrite};
 use itertools::Itertools;
 use rand::Rng;
 use tor_bytes::Writeable;
+use tor_cell::relaycell::hs::IntroduceAckStatus;
 use tor_cell::relaycell::hs::intro_payload::{self, IntroduceHandshakePayload};
 use tor_cell::relaycell::hs::pow::ProofOfWork;
 use tor_cell::relaycell::msg::{AnyRelayMsg, Introduce1, Rendezvous2};
@@ -21,10 +22,11 @@ use tor_circmgr::{
 use tor_dirclient::SourceInfo;
 use tor_error::{Bug, debug_report, warn_report};
 use tor_hscrypto::Subcredential;
+use tor_hscrypto::time::TimePeriod;
 use tor_proto::TargetHop;
-use tor_proto::client::circuit::handshake::hs_ntor;
-use tracing::{debug, instrument, trace};
-use web_time_compat::{Duration, Instant};
+use tor_proto::client::circuit::handshake::hs_ntor::{self, HsNtorHkdfKeyGenerator};
+use tracing::{debug, instrument, trace, warn};
+use web_time_compat::{Duration, Instant, SystemTime};
 
 use retry_error::RetryError;
 use safelog::{DispRedacted, Sensitive};
@@ -44,11 +46,12 @@ use tor_linkspec::{CircTarget, HasRelayIds, OwnedCircTarget, RelayId};
 use tor_llcrypto::pk::ed25519::Ed25519Identity;
 use tor_netdir::{NetDir, Relay};
 use tor_netdoc::doc::hsdesc::{HsDesc, IntroPointDesc};
-use tor_proto::client::circuit::CircParameters;
+use tor_proto::client::circuit::{CircParameters, handshake};
 use tor_proto::{MetaCellDisposition, MsgHandler};
 use tor_rtcompat::{Runtime, SleepProviderExt as _, TimeoutError};
 
 use crate::Config;
+use crate::err::RendPtIdentityForError;
 use crate::pow::HsPowClient;
 use crate::proto_oneshot;
 use crate::relay_info::ipt_to_circtarget;
@@ -78,10 +81,39 @@ pub struct Data {
     /// Information about the latest status of trying to connect to this service
     /// through each of its introduction points.
     ipts: DataIpts,
+    /// Information about the requery period of each HsDir we have recently queried.
+    ///
+    /// Each entry represents an HsDir that we cannot requery until
+    /// its specified timestamp elapses.
+    ///
+    /// Any HsDir that does not have an entry in this map can be requeried.
+    hsdirs: DataHsDirs,
 }
 
+/// An onion service descriptor and its associated HsBlindId.
+#[derive(Debug)]
+struct HsDescForTp {
+    /// The TP this descriptor is for.
+    ///
+    /// Used for determining whether a newly fetched descriptor
+    /// is for the same time period as this one.
+    time_period: TimePeriod,
+    /// The descriptor
+    desc: TimerangeBound<HsDesc>,
+}
+
+/// Part of `Data` that relates to our information about the HsDir requery periods
+type DataHsDirs = HashMap<RelayIdForRequeryPeriod, SystemTime>;
+
+/// Marker type, to make typed HsDir [`RelayIdFor`] keys
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
+struct RequeryPeriodMap;
+
+/// Lookup key for looking up and recording our IPT use experiences
+type RelayIdForRequeryPeriod = RelayIdFor<RequeryPeriodMap>;
+
 /// Part of `Data` that relates to the HS descriptor
-type DataHsDesc = Option<TimerangeBound<HsDesc>>;
+type DataHsDesc = Option<HsDescForTp>;
 
 /// Part of `Data` that relates to our information about introduction points
 type DataIpts = HashMap<RelayIdForExperience, IptExperience>;
@@ -231,7 +263,7 @@ struct UsableIntroPt<'i> {
     sort_rand: IptSortRand,
 }
 
-/// Lookup key for looking up and recording our IPT use experiences
+/// Lookup key for looking up and recording information about a relay
 ///
 /// Used to identify a relay when looking to see what happened last time we used it,
 /// and storing that information after we tried it.
@@ -245,7 +277,23 @@ struct UsableIntroPt<'i> {
 ///
 /// While this is, structurally, a relay identity, it is not suitable for other purposes.
 #[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Debug)]
-struct RelayIdForExperience(RelayId);
+struct RelayIdFor<K> {
+    /// The relay id
+    inner: RelayId,
+
+    /// Phantom data to allow parameterizing over `K`
+    ///
+    /// `K` is a marker type that represents the kind of map
+    /// this key will be used in.
+    marker: PhantomData<K>,
+}
+
+/// Marker type, to make typed Ipt exprience [`RelayIdFor`] keys
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
+struct IptExperienceMap;
+
+/// Lookup key for looking up and recording our IPT use experiences
+type RelayIdForExperience = RelayIdFor<IptExperienceMap>;
 
 /// Details of an apparently-successful INTRODUCE exchange
 ///
@@ -264,22 +312,28 @@ struct Introduced<R: Runtime, M: MocksForConnect<R>> {
     marker: PhantomData<fn() -> (R, M)>,
 }
 
-impl RelayIdForExperience {
+impl<K> RelayIdFor<K> {
+    /// Create a new key for use with `T`
+    fn new(inner: RelayId) -> Self {
+        Self {
+            inner,
+            marker: Default::default(),
+        }
+    }
+
     /// Identities to use to try to find previous experience information about this IPT
-    fn for_lookup(intro_target: &OwnedCircTarget) -> impl Iterator<Item = Self> + '_ {
-        intro_target
-            .identities()
-            .map(|id| RelayIdForExperience(id.to_owned()))
+    fn for_lookup<T: HasRelayIds>(ids: &T) -> impl Iterator<Item = Self> + '_ {
+        ids.identities().map(|id| RelayIdFor::new(id.to_owned()))
     }
 
     /// Identity to use to store previous experience information about this IPT
-    fn for_store(intro_target: &OwnedCircTarget) -> Result<Self, Bug> {
-        let id = intro_target
+    fn for_store<T: HasRelayIds>(ids: &T) -> Result<Self, Bug> {
+        let id = ids
             .identities()
             .next()
             .ok_or_else(|| internal!("introduction point relay with no identities"))?
             .to_owned();
-        Ok(RelayIdForExperience(id))
+        Ok(RelayIdFor::new(id))
     }
 }
 
@@ -340,6 +394,10 @@ impl From<Option<&IptExperience>> for IptSortKeyOutcome {
     }
 }
 
+/// Token indicating that a descriptor fetch is wanted
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+struct RefetchDescriptor;
+
 impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
     /// Make a new `Context` from the input data
     fn new(
@@ -399,11 +457,53 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
 
         let mocks = self.mocks.clone();
 
-        let desc = self.descriptor_ensure(&mut data.desc).await?;
+        let desc = self
+            .descriptor_ensure(&mut data.desc, &mut data.hsdirs, None)
+            .await?;
 
         mocks.test_got_desc(desc);
 
-        let tunnel = self.intro_rend_connect(desc, &mut data.ipts).await?;
+        let tunnel = match self.intro_rend_connect(desc, &mut data.ipts).await {
+            Ok(tunnel) => tunnel,
+            Err(e) => {
+                let is_intro_nack = |e| {
+                    if let FAE::IntroductionFailed { status, .. } = e {
+                        status == IntroduceAckStatus::NOT_RECOGNIZED
+                    } else {
+                        false
+                    }
+                };
+
+                let retry = if let CE::Failed(ref errors) = e {
+                    // If any of the errors are an INTRODUCE_NACK,
+                    // then it's worth retrying one more time
+                    // with a fresh descriptor.
+                    errors
+                        .clone()
+                        .into_iter()
+                        .any(is_intro_nack)
+                        .then_some(RefetchDescriptor)
+                } else {
+                    None
+                };
+
+                if let Some(RefetchDescriptor) = retry {
+                    debug!(
+                        "Introduction to {} NACKed, refetching descriptor and retrying",
+                        &self.hsid,
+                    );
+                    // Refetch the descriptor and try one more time
+                    let desc = self
+                        .descriptor_ensure(&mut data.desc, &mut data.hsdirs, retry)
+                        .await?;
+                    mocks.test_got_desc(desc);
+                    self.intro_rend_connect(desc, &mut data.ipts).await?
+                } else {
+                    return Err(e);
+                }
+            }
+        };
+
         mocks.test_got_tunnel(&tunnel);
 
         Ok(tunnel)
@@ -416,11 +516,19 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
     ///
     /// Otherwise, tries to obtain the descriptor by downloading it from hsdir(s).
     ///
+    /// If `refetch` is `true`, a new descriptor will be refetched
+    /// from the hsdir(s) unconditionally.
+    ///
     /// Does all necessary retries and timeouts.
     /// Returns an error if no valid descriptor could be found.
     #[allow(clippy::cognitive_complexity)] // TODO: Refactor
     #[instrument(level = "trace", skip_all)]
-    async fn descriptor_ensure<'d>(&self, data: &'d mut DataHsDesc) -> Result<&'d HsDesc, CE> {
+    async fn descriptor_ensure<'d>(
+        &self,
+        data: &'d mut DataHsDesc,
+        recent_hsdirs: &'d mut DataHsDirs,
+        refetch: Option<RefetchDescriptor>,
+    ) -> Result<&'d HsDesc, CE> {
         // Maximum number of hsdir connection and retrieval attempts we'll make
         let max_total_attempts = self
             .config
@@ -431,38 +539,103 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             // let's give them as many retries as we can manage.
             .unwrap_or(usize::MAX);
 
+        let now = self.runtime.wallclock();
+        let unwrap_valid_desc = |data: &'d mut DataHsDesc| -> &'d HsDesc {
+            data.as_ref()
+                .expect("Some but now None")
+                .desc
+                .as_ref()
+                .check_valid_at(&now)
+                .expect("Ok but now Err")
+        };
+
         // We retain a previously obtained descriptor precisely until its lifetime expires,
-        // and pay no attention to the descriptor's revision counter.
+        // or until we refetch a more recent one
+        // as a result of an `intro_rend_connect()` failure caused by introduce NACK.
+        //
         // When it expires, we discard it completely and try to obtain a new one.
-        //   https://gitlab.torproject.org/tpo/core/arti/-/issues/913#note_2914448
+        //
+        // We only replace our cached descriptor if the new one has a higher revision counter.
+        //
         // TODO SPEC: Discuss HS descriptor lifetime and expiry client behaviour
-        if let Some(previously) = data {
-            let now = self.runtime.wallclock();
-            if let Ok(_desc) = previously.as_ref().check_valid_at(&now) {
-                // Ideally we would just return desc but that confuses borrowck.
+        let now = self.runtime.wallclock();
+
+        let stored_revision = data.as_ref().and_then(|previously| {
+            if let Ok(desc) = previously.desc.as_ref().check_valid_at(&now) {
+                // Ideally we would just return desc but that confuses borrowck,
+                // so we have to use unwrap_valid_desc() each time
+                // we need the known-to-be-Some descriptor instead.
+                //
                 // https://github.com/rust-lang/rust/issues/51545
-                return Ok(data
-                    .as_ref()
-                    .expect("Some but now None")
-                    .as_ref()
-                    .check_valid_at(&now)
-                    .expect("Ok but now Err"));
+                Some((desc.revision(), previously.time_period))
+            } else {
+                // Seems to be not valid now.  Try to fetch a fresh one.
+                None
             }
-            // Seems to be not valid now.  Try to fetch a fresh one.
+        });
+
+        match (stored_revision, refetch) {
+            (Some(_), None) => {
+                // Our cached descriptor is still timely,
+                // and we don't need to fetch a new one.
+                return Ok(unwrap_valid_desc(data));
+            }
+            (None, _) => {
+                // We don't have a timely descriptor,
+                // so ignore the requery_interval,
+                // and reach out to all HsDirs
+                recent_hsdirs.clear();
+            }
+            (_, Some(RefetchDescriptor)) => {
+                // We have been asked to try to fetch a new descriptor.
+                // We will only reach out to the HsDirs that are
+                // not within the `hs_dir_requery_interval`
+            }
         }
 
+        // First, filter out any HsDirs that we *can* requery
+        recent_hsdirs.retain(|_hsdir, requery| *requery > now);
+
+        let working_tp = self.netdir.hs_time_period();
         let hs_dirs = self.netdir.hs_dirs_download(
             self.hs_blind_id,
-            self.netdir.hs_time_period(),
+            working_tp,
             &mut self.mocks.thread_rng(),
         )?;
 
         trace!(
             "HS desc fetch for {}, for period {}, using {} hsdirs",
             &self.hsid,
-            self.netdir.hs_time_period(),
+            working_tp,
             hs_dirs.len()
         );
+
+        let hs_dirs = hs_dirs
+            .into_iter()
+            .filter(|hsdir| {
+                // Skip over any HsDirs that we are not allowed to requery right now
+                let should_skip = recent_hsdirs.keys().any(|recent| {
+                    RelayIdForRequeryPeriod::for_lookup(hsdir).any(|id| id == *recent)
+                });
+
+                !should_skip
+            })
+            .collect::<Vec<_>>();
+
+        if hs_dirs.is_empty() {
+            warn!(
+                "Tried to fetch HS desc for {}, for period {}, but all hsdirs are rate-limited",
+                &self.hsid, working_tp,
+            );
+
+            if stored_revision.is_none() {
+                // We can't fetch a new descriptor, and we don't have a cached one.
+                return Err(CE::NoUsableHsDirs);
+            } else {
+                // Return our cached descriptor
+                return Ok(unwrap_valid_desc(data));
+            }
+        }
 
         // We might consider launching requests to multiple HsDirs in parallel.
         //   https://gitlab.torproject.org/tpo/core/arti/-/merge_requests/1118#note_2894463
@@ -484,6 +657,12 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
                 }
             };
             let hsdir_for_error: Sensitive<Ed25519Identity> = (*relay.id()).into();
+
+            let hsdir = RelayIdForRequeryPeriod::for_store(relay)?;
+            // Ensure we wait at least hs_dir_requery_interval() until we try to
+            // fecth from this HsDir again
+            recent_hsdirs.insert(hsdir, now + self.config.retry.hs_dir_requery_interval());
+
             match self.descriptor_fetch_attempt(relay).await {
                 Ok(desc) => break desc,
                 Err(error) => {
@@ -519,6 +698,25 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
             }
         };
 
+        // If our existing descriptor is newer than the one we have just fetched,
+        // we should retain it.
+        if let Some(stored_revision) = stored_revision {
+            // It is safe to dangerously_assume_timely,
+            // as descriptor_fetch_attempt has already checked the timeliness of the descriptor.
+            let new_desc = desc.as_ref().dangerously_assume_timely();
+
+            // Revision counters are monotonically increasing within a given time period.
+            // If our newly fetched descriptor has the same HsBlindId as our cached one,
+            // it means they are both used for the same time period,
+            // and so we should only update our cache if the new descriptor is more recent
+            // (i.e. it has a higher revision counter).
+            if stored_revision >= (new_desc.revision(), working_tp) {
+                // Our cached descriptor is still timely, and has a higher revision counter
+                // than the one we've just fetched, so we retain it.
+                return Ok(unwrap_valid_desc(data));
+            }
+        }
+
         // Store the bounded value in the cache for reuse,
         // but return a reference to the unwrapped `HsDesc`.
         //
@@ -528,8 +726,12 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         //
         // It is safe to dangerously_assume_timely,
         // as descriptor_fetch_attempt has already checked the timeliness of the descriptor.
+        let desc = HsDescForTp {
+            time_period: working_tp,
+            desc,
+        };
         let ret = data.insert(desc);
-        Ok(ret.as_ref().dangerously_assume_timely())
+        Ok(ret.desc.as_ref().dangerously_assume_timely())
     }
 
     /// Make one attempt to fetch the descriptor from a specific hsdir
@@ -1206,8 +1408,6 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         introduced: Introduced<R, M>,
         is_single_onion_service: bool,
     ) -> Result<DataTunnel!(R, M), FAE> {
-        use tor_proto::client::circuit::handshake;
-
         /// Largest number of hops that the onion service must build for _its_
         /// circuits to our rendezvous points.
         ///
@@ -1309,18 +1509,9 @@ impl<'c, R: Runtime, M: MocksForConnect<R>> Context<'c, R, M> {
         let handshake_state = introduced.handshake_state;
 
         // Try to complete the cryptographic handshake.
-        let keygen = handshake_state
-            .client_receive_rend(rend2_msg.handshake_info())
-            // If this goes wrong. either the onion service has mangled the crypto,
-            // or the rendezvous point has misbehaved (that that is possible is a protocol bug),
-            // or we have used the wrong handshake_state (let's assume that's not true).
-            //
-            // If this happens we'll go and try another RPT.
-            .map_err(|error| FAE::RendezvousCompletionHandshake {
-                error,
-                intro_index,
-                rend_pt: rend_pt.clone(),
-            })?;
+        let keygen =
+            self.mocks
+                .rendezvous_handshake(handshake_state, rend2_msg, intro_index, &rend_pt)?;
 
         let params = onion_circparams_from_netparams(self.netdir.params())
             .map_err(into_internal!("Failed to build CircParameters"))?;
@@ -1395,6 +1586,9 @@ trait MocksForConnect<R>: Clone {
     /// A random number generator
     type Rng: rand::Rng + rand::CryptoRng;
 
+    /// Key generator used for generating the keys for the virtual hop.
+    type KeyGenerator: tor_proto::client::circuit::handshake::KeyGenerator + Send;
+
     /// Tell tests we got this descriptor text
     fn test_got_desc(&self, _: &HsDesc) {}
     /// Tell tests we got this data tunnel.
@@ -1404,6 +1598,15 @@ trait MocksForConnect<R>: Clone {
 
     /// Return a random number generator
     fn thread_rng(&self) -> Self::Rng;
+
+    /// Complete the rendezvous handshake, returning the resulting keygen
+    fn rendezvous_handshake(
+        &self,
+        handshake_state: hs_ntor::HsNtorClientState,
+        rend2_msg: Rendezvous2,
+        intro_index: IntroPtIndex,
+        rend_pt: &RendPtIdentityForError,
+    ) -> Result<Self::KeyGenerator, FAE>;
 }
 /// Mock for `HsCircPool`
 ///
@@ -1479,9 +1682,9 @@ trait MockableClientData: Debug {
     /// Add a virtual hop to the circuit.
     async fn m_extend_virtual(
         &self,
-        protocol: tor_proto::client::circuit::handshake::RelayProtocol,
-        role: tor_proto::client::circuit::handshake::HandshakeRole,
-        handshake: impl tor_proto::client::circuit::handshake::KeyGenerator + Send,
+        protocol: handshake::RelayProtocol,
+        role: handshake::HandshakeRole,
+        handshake: impl handshake::KeyGenerator + Send,
         params: CircParameters,
         capabilities: &tor_protover::Protocols,
     ) -> tor_circmgr::Result<()>;
@@ -1517,9 +1720,32 @@ trait MockableClientIntro: Debug {
 impl<R: Runtime> MocksForConnect<R> for () {
     type HsCircPool = HsCircPool<R>;
     type Rng = rand::rngs::ThreadRng;
+    type KeyGenerator = HsNtorHkdfKeyGenerator;
 
     fn thread_rng(&self) -> Self::Rng {
         rand::rng()
+    }
+
+    fn rendezvous_handshake(
+        &self,
+        handshake_state: hs_ntor::HsNtorClientState,
+        rend2_msg: Rendezvous2,
+        intro_index: IntroPtIndex,
+        rend_pt: &RendPtIdentityForError,
+    ) -> Result<Self::KeyGenerator, FAE> {
+        // Try to complete the cryptographic handshake.
+        handshake_state
+            .client_receive_rend(rend2_msg.handshake_info())
+            // If this goes wrong. either the onion service has mangled the crypto,
+            // or the rendezvous point has misbehaved (that that is possible is a protocol bug),
+            // or we have used the wrong handshake_state (let's assume that's not true).
+            //
+            // If this happens we'll go and try another RPT.
+            .map_err(|error| FAE::RendezvousCompletionHandshake {
+                error,
+                intro_index,
+                rend_pt: rend_pt.clone(),
+            })
     }
 }
 #[async_trait]
@@ -1587,9 +1813,9 @@ impl MockableClientData for ClientOnionServiceDataTunnel {
 
     async fn m_extend_virtual(
         &self,
-        protocol: tor_proto::client::circuit::handshake::RelayProtocol,
-        role: tor_proto::client::circuit::handshake::HandshakeRole,
-        handshake: impl tor_proto::client::circuit::handshake::KeyGenerator + Send,
+        protocol: handshake::RelayProtocol,
+        role: handshake::HandshakeRole,
+        handshake: impl handshake::KeyGenerator + Send,
         params: CircParameters,
         capabilities: &tor_protover::Protocols,
     ) -> tor_circmgr::Result<()> {
@@ -1659,8 +1885,8 @@ mod test {
 
     use super::*;
     use crate::*;
-    use futures::FutureExt as _;
-    use std::{iter, panic::AssertUnwindSafe};
+    use itertools::chain;
+    use std::iter;
     use tokio_crate as tokio;
     use tor_async_utils::JoinReadWrite;
     use tor_basic_utils::test_rng::{TestingRng, testing_rng};
@@ -1672,29 +1898,33 @@ mod test {
     use tor_rtmock::simple_time::SimpleMockTimeProvider;
     use tracing_test::traced_test;
 
-    #[derive(Debug, Default)]
+    #[derive(derive_more::Debug, Default)]
     struct MocksGlobal {
         hsdirs_asked: Vec<OwnedCircTarget>,
         got_desc: Option<HsDesc>,
+        #[debug(skip)]
+        rendezvous: Option<Box<dyn MsgHandler + Send + 'static>>,
+        intro_acks: Vec<(IntroduceAck, MetaCellDisposition)>,
     }
+
     #[derive(Clone, Debug)]
     struct Mocks<I> {
         mglobal: Arc<Mutex<MocksGlobal>>,
         id: I,
     }
 
-    impl<I> Mocks<I> {
-        fn map_id<J>(&self, f: impl FnOnce(&I) -> J) -> Mocks<J> {
-            Mocks {
-                mglobal: self.mglobal.clone(),
-                id: f(&self.id),
-            }
+    struct MockKeyGenerator;
+
+    impl handshake::KeyGenerator for MockKeyGenerator {
+        fn expand(self, _keylen: usize) -> tor_proto::Result<tor_bytes::SecretBuf> {
+            todo!()
         }
     }
 
     impl<R: Runtime> MocksForConnect<R> for Mocks<()> {
         type HsCircPool = Mocks<()>;
         type Rng = TestingRng;
+        type KeyGenerator = MockKeyGenerator;
 
         fn test_got_desc(&self, desc: &HsDesc) {
             self.mglobal.lock().unwrap().got_desc = Some(desc.clone());
@@ -1705,8 +1935,17 @@ mod test {
         fn thread_rng(&self) -> Self::Rng {
             testing_rng()
         }
+
+        fn rendezvous_handshake(
+            &self,
+            _handshake_state: hs_ntor::HsNtorClientState,
+            _rend2_msg: Rendezvous2,
+            _intro_index: IntroPtIndex,
+            _rend_pt: &RendPtIdentityForError,
+        ) -> Result<Self::KeyGenerator, FAE> {
+            Ok(MockKeyGenerator)
+        }
     }
-    #[allow(clippy::diverging_sub_expression)] // async_trait + todo!()
     #[async_trait]
     impl<R: Runtime> MockableCircPool<R> for Mocks<()> {
         type DataTunnel = Mocks<()>;
@@ -1720,8 +1959,6 @@ mod test {
         ) -> tor_circmgr::Result<Self::DirTunnel> {
             let target = OwnedCircTarget::from_circ_target(&target);
             self.mglobal.lock().unwrap().hsdirs_asked.push(target);
-            // Adding the `Arc` here is a little ugly, but that's what we get
-            // for using the same Mocks for everything.
             Ok(self.clone())
         }
         async fn m_get_or_launch_intro(
@@ -1729,21 +1966,23 @@ mod test {
             _netdir: &NetDir,
             target: impl CircTarget + Send + Sync + 'async_trait,
         ) -> tor_circmgr::Result<Self::IntroTunnel> {
-            todo!()
+            Ok(self.clone())
         }
         /// Client circuit
         async fn m_get_or_launch_client_rend<'a>(
             &self,
             netdir: &'a NetDir,
         ) -> tor_circmgr::Result<(Self::DataTunnel, Relay<'a>)> {
-            todo!()
+            // Pick one of the relays we know to be in the test net as our RPT
+            let rpt = netdir.by_id(&Ed25519Identity::from([12; 32])).unwrap();
+
+            Ok((self.clone(), rpt))
         }
 
         fn m_estimate_timeout(&self, action: &TimeoutsAction) -> Duration {
             Duration::from_secs(10)
         }
     }
-    #[allow(clippy::diverging_sub_expression)] // async_trait + todo!()
     #[async_trait]
     impl MockableClientDir for Mocks<()> {
         type DirStream = JoinReadWrite<futures::io::Cursor<Box<[u8]>>, futures::io::Sink>;
@@ -1772,27 +2011,39 @@ mod test {
         }
     }
 
-    #[allow(clippy::diverging_sub_expression)] // async_trait + todo!()
     #[async_trait]
     impl MockableClientData for Mocks<()> {
         type Conversation<'r> = &'r ();
         async fn m_start_conversation_last_hop(
             &self,
             msg: Option<AnyRelayMsg>,
-            reply_handler: impl MsgHandler + Send + 'static,
+            mut reply_handler: impl MsgHandler + Send + 'static,
         ) -> tor_circmgr::Result<Self::Conversation<'_>> {
-            todo!()
+            match msg {
+                Some(AnyRelayMsg::EstablishRendezvous(_)) => {
+                    let reply = RendezvousEstablished::default();
+                    let disp = reply_handler.handle_msg(reply.into()).unwrap();
+                    assert_eq!(disp, MetaCellDisposition::Consumed);
+                    // Save this, because we'll need to use it later,
+                    // when handling the INTRODUCE1
+                    let mut global = self.mglobal.lock().unwrap();
+                    global.rendezvous = Some(Box::new(reply_handler));
+                }
+                _ => panic!("unexpected msg {msg:?}"),
+            }
+
+            Ok(&())
         }
 
         async fn m_extend_virtual(
             &self,
-            protocol: tor_proto::client::circuit::handshake::RelayProtocol,
-            role: tor_proto::client::circuit::handshake::HandshakeRole,
-            handshake: impl tor_proto::client::circuit::handshake::KeyGenerator + Send,
+            protocol: handshake::RelayProtocol,
+            role: handshake::HandshakeRole,
+            handshake: impl handshake::KeyGenerator + Send,
             params: CircParameters,
             capabilities: &tor_protover::Protocols,
         ) -> tor_circmgr::Result<()> {
-            todo!()
+            Ok(())
         }
 
         fn m_num_own_hops(&self) -> tor_circmgr::Result<usize> {
@@ -1800,16 +2051,34 @@ mod test {
         }
     }
 
-    #[allow(clippy::diverging_sub_expression)] // async_trait + todo!()
     #[async_trait]
     impl MockableClientIntro for Mocks<()> {
         type Conversation<'r> = &'r ();
         async fn m_start_conversation_last_hop(
             &self,
             msg: Option<AnyRelayMsg>,
-            reply_handler: impl MsgHandler + Send + 'static,
+            mut reply_handler: impl MsgHandler + Send + 'static,
         ) -> tor_circmgr::Result<Self::Conversation<'_>> {
-            todo!()
+            match msg {
+                Some(AnyRelayMsg::Introduce1(introduce1)) => {
+                    let mut global = self.mglobal.lock().unwrap();
+                    let (reply, expected_disp) = global.intro_acks.remove(0);
+                    let disp = reply_handler.handle_msg(reply.into()).unwrap();
+                    assert_eq!(disp, expected_disp);
+
+                    // Mock the service's response
+                    let rendezvous = global
+                        .rendezvous
+                        .as_mut()
+                        .expect("got INTRODUCE1 before ESTABLISH_RENDEZVOUS?!");
+                    let reply = Rendezvous2::new(b"dummy handshake info, ignored");
+                    let disp = rendezvous.handle_msg(reply.into()).unwrap();
+                    assert_eq!(disp, MetaCellDisposition::ConversationFinished);
+                }
+                _ => panic!("unexpected msg {msg:?}"),
+            }
+
+            Ok(&())
         }
 
         fn m_num_hops(&self) -> tor_circmgr::Result<usize> {
@@ -1817,9 +2086,32 @@ mod test {
         }
     }
 
-    #[traced_test]
-    #[tokio::test]
-    async fn test_connect() {
+    fn ks_hsc_desc_enc() -> HsClientDescEncKeypair {
+        let pk: HsClientDescEncKey = curve25519::PublicKey::from(test_data::TEST_PUBKEY_2).into();
+        let sk = curve25519::StaticSecret::from(test_data::TEST_SECKEY_2).into();
+        HsClientDescEncKeypair::new(pk, sk)
+    }
+
+    fn expected_hsdesc(hsid: HsId, netdir: &NetDir, now: SystemTime) -> HsDesc {
+        let time_period = netdir.hs_time_period();
+        let (hs_blind_id_key, subcredential) = HsIdKey::try_from(hsid)
+            .unwrap()
+            .compute_blinded_key(time_period)
+            .unwrap();
+        let hs_blind_id = hs_blind_id_key.id();
+
+        HsDesc::parse_decrypt_validate(
+            test_data::TEST_DATA_2,
+            &hs_blind_id,
+            now,
+            &subcredential,
+            Some(&ks_hsc_desc_enc()),
+        )
+        .unwrap()
+        .dangerously_assume_timely()
+    }
+
+    fn build_test_netdir() -> Arc<NetDir> {
         let valid_after = humantime::parse_rfc3339("2023-02-09T12:00:00Z").unwrap();
         let fresh_until = valid_after + humantime::parse_duration("1 hours").unwrap();
         let valid_until = valid_after + humantime::parse_duration("24 hours").unwrap();
@@ -1832,31 +2124,81 @@ mod test {
         )
         .expect("failed to build default testing netdir");
 
-        let netdir = Arc::new(netdir.unwrap_if_sufficient().unwrap());
+        Arc::new(netdir.unwrap_if_sufficient().unwrap())
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn test_connect() {
+        use MetaCellDisposition::*;
+        let netdir = build_test_netdir();
         let runtime = TokioNativeTlsRuntime::current().unwrap();
         let now = humantime::parse_rfc3339("2023-02-09T12:00:00Z").unwrap();
         let mock_sp = SimpleMockTimeProvider::from_wallclock(now);
         let runtime = runtime
             .with_sleep_provider(mock_sp.clone())
-            .with_coarse_time_provider(mock_sp);
-        let time_period = netdir.hs_time_period();
+            .with_coarse_time_provider(mock_sp.clone());
 
-        let mglobal = Arc::new(Mutex::new(MocksGlobal::default()));
+        let success = (
+            IntroduceAck::new(IntroduceAckStatus::SUCCESS),
+            ConversationFinished,
+        );
+
+        let nack = (
+            IntroduceAck::new(IntroduceAckStatus::NOT_RECOGNIZED),
+            ConversationFinished,
+        );
+
+        // The number of times to make Context:connect() fail due to intro NACK
+        //
+        // Set to 5 in order to trigger a rate-limit for all 6 HsDirs:
+        //
+        // there are 6 HsDirs in total, one of which is "used up" by the
+        // first (successful) connect() attempt below.
+        const INTRO_FAIL_COUNT: usize = 5;
+
+        /// The number of times we expect the client to retry the
+        /// introduction per connect() call
+        /// (it will essentially try two rounds of `intro_rend_connect()`,
+        /// once with the cached descriptor, and once with the potentially
+        /// new descriptor).
+        const IPT_RETRY_COUNT: usize = 12;
+
+        // The first introduction will succeed
+        let intro_acks = chain!(
+            [&success],
+            // But the next INTRO_FAIL_COUNT connect() will fail
+            // (+1 because we want to fail *again*, in order to find
+            // that there's now a limit on all our HsDirs)
+            [&nack; IPT_RETRY_COUNT * (INTRO_FAIL_COUNT + 1)],
+            // One more round of failures, to trigger a refecth after the rate-limit is lifted
+            [&nack; IPT_RETRY_COUNT - 1],
+            // After refetching the descriptor, the client will retry the introduction,
+            // and succeed.
+            [&success],
+        )
+        .cloned()
+        .collect();
+
+        let mglobal = Arc::new(Mutex::new(MocksGlobal {
+            intro_acks,
+            ..Default::default()
+        }));
+
         let mocks = Mocks { mglobal, id: () };
         // From C Tor src/test/test_hs_common.c test_build_address
         let hsid = test_data::TEST_HSID_2.into();
         let mut data = Data::default();
+        let mut expected_hsdirs_asked = 1;
 
-        let pk: HsClientDescEncKey = curve25519::PublicKey::from(test_data::TEST_PUBKEY_2).into();
-        let sk = curve25519::StaticSecret::from(test_data::TEST_SECKEY_2).into();
         let mut secret_keys_builder = HsClientSecretKeysBuilder::default();
-        secret_keys_builder.ks_hsc_desc_enc(HsClientDescEncKeypair::new(pk.clone(), sk));
+        secret_keys_builder.ks_hsc_desc_enc(ks_hsc_desc_enc());
         let secret_keys = secret_keys_builder.build().unwrap();
 
         let ctx = Context::new(
             &runtime,
             &mocks,
-            netdir,
+            Arc::clone(&netdir),
             Default::default(),
             hsid,
             secret_keys,
@@ -1864,43 +2206,96 @@ mod test {
         )
         .unwrap();
 
-        let _got = AssertUnwindSafe(ctx.connect(&mut data))
-            .catch_unwind() // TODO HS TESTS: remove this and the AssertUnwindSafe
-            .await;
+        let _got = ctx.connect(&mut data).await.unwrap();
 
-        let (hs_blind_id_key, subcredential) = HsIdKey::try_from(hsid)
-            .unwrap()
-            .compute_blinded_key(time_period)
-            .unwrap();
-        let hs_blind_id = hs_blind_id_key.id();
+        // Our mock IPT hasn't sent any NACKs yet
+        assert!(!logs_contain("NACKed, refetching descriptor and retrying"));
 
-        let sk = curve25519::StaticSecret::from(test_data::TEST_SECKEY_2).into();
-
-        let hsdesc = HsDesc::parse_decrypt_validate(
-            test_data::TEST_DATA_2,
-            &hs_blind_id,
-            now,
-            &subcredential,
-            Some(&HsClientDescEncKeypair::new(pk, sk)),
-        )
-        .unwrap()
-        .dangerously_assume_timely();
-
-        let mglobal = mocks.mglobal.lock().unwrap();
-        assert_eq!(mglobal.hsdirs_asked.len(), 1);
-        // TODO hs: here and in other places, consider implementing PartialEq instead, or creating
-        // an assert_dbg_eq macro (which would be part of a test_helpers crate or something)
-        assert_eq!(
-            format!("{:?}", mglobal.got_desc),
-            format!("{:?}", Some(hsdesc))
-        );
+        let hsdesc = expected_hsdesc(hsid, &netdir, now);
+        {
+            let mglobal = mocks.mglobal.lock().unwrap();
+            assert_eq!(mglobal.hsdirs_asked.len(), expected_hsdirs_asked);
+            // TODO hs: here and in other places, consider implementing PartialEq instead, or creating
+            // an assert_dbg_eq macro (which would be part of a test_helpers crate or something)
+            assert_eq!(
+                format!("{:?}", mglobal.got_desc),
+                format!("{:?}", Some(hsdesc.clone()))
+            );
+        }
 
         // Check how long the descriptor is valid for
-        let (start_time, end_time) = data.desc.as_ref().unwrap().bounds();
+        let (start_time, end_time) = data.desc.as_ref().unwrap().desc.bounds();
         assert_eq!(start_time, None);
 
         let desc_valid_until = humantime::parse_rfc3339("2023-02-11T20:00:00Z").unwrap();
         assert_eq!(end_time, Some(desc_valid_until));
+
+        // These attempts will all fail due to intro NACK,
+        // and trigger a rate-limit for all 6 HsDirs
+        for i in 1..=INTRO_FAIL_COUNT + 1 {
+            let err = ctx.connect(&mut data).await.unwrap_err();
+
+            let is_intro_nack = |e| matches!(e, FAE::IntroductionFailed { status, .. });
+
+            // All attempts failed because of our repeated intro NACKs
+            assert!(matches!(err, CE::Failed(e) if e.clone().into_iter().all(is_intro_nack)));
+
+            {
+                assert!(logs_contain("NACKed, refetching descriptor and retrying"));
+                let mglobal = mocks.mglobal.lock().unwrap();
+                // Because all intro attempts failed with NACK (NOT_RECOGNIZED),
+                // the client must've tried to refetch the descriptor
+                if i <= INTRO_FAIL_COUNT {
+                    // No rate limiting yet, so the client must've tried to fetch a new
+                    // descriptor, before failing again.
+                    expected_hsdirs_asked += 1;
+                    assert!(!logs_contain("but all hsdirs are rate-limited"));
+                    assert_eq!(mglobal.hsdirs_asked.len(), expected_hsdirs_asked);
+                } else {
+                    // The final failure won't lead to an HsDir fetch
+                    // because all HsDirs will be rate-limited at that point
+                    assert!(logs_contain("but all hsdirs are rate-limited"));
+                    assert_eq!(mglobal.hsdirs_asked.len(), expected_hsdirs_asked);
+                }
+
+                // Same descriptor each time
+                // TODO hs: here and in other places, consider implementing PartialEq instead, or creating
+                // an assert_dbg_eq macro (which would be part of a test_helpers crate or something)
+                assert_eq!(
+                    format!("{:?}", mglobal.got_desc),
+                    format!("{:?}", Some(hsdesc.clone()))
+                );
+            }
+
+            let (start_time, end_time) = data.desc.as_ref().unwrap().desc.bounds();
+            assert_eq!(start_time, None);
+
+            let desc_valid_until = humantime::parse_rfc3339("2023-02-11T20:00:00Z").unwrap();
+            assert_eq!(end_time, Some(desc_valid_until));
+        }
+
+        // By default, the HsDir fetches are rate-limited for 15min
+        mock_sp.advance(Duration::from_secs(15 * 60));
+        // Finally, we succeed.
+        let _got = ctx.connect(&mut data).await.unwrap();
+
+        // And it turns out we did, in fact refetch the descriptor
+
+        // Finally, we try again, but find that all HsDirs are now rate-limited!
+        // So now we advance the time to lift the rate limit, and hope that
+        //
+        // TODO HS TESTS: we could extend our mock infrastructure
+        // to support returning a different hsdesc this time,
+        // with various revision counters, to check that the client is indeed
+        // keeping the newest one.
+        {
+            assert!(logs_contain("NACKed, refetching descriptor and retrying"));
+            let mglobal = mocks.mglobal.lock().unwrap();
+            // Because all intro attempts failed with NACK (NOT_RECOGNIZED),
+            // the client must've tried to refetch the descriptor
+            expected_hsdirs_asked += 1;
+            assert_eq!(mglobal.hsdirs_asked.len(), expected_hsdirs_asked);
+        }
 
         // TODO HS TESTS: check the circuit in got is the one we gave out
 
