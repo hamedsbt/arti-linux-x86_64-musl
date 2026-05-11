@@ -29,7 +29,7 @@ variables:
   FF_TIMESTAMPS: "true"
   # Pinned CI image for most Rust tests
   # Using "amd64/" single-arch variant to work around https://gitlab.torproject.org/tpo/tpa/team/-/issues/41621.
-  RECENT_RUST_IMAGE: "docker.io/amd64/rust:1.91.0-trixie"
+  RECENT_RUST_IMAGE: "docker.io/amd64/rust:1.94.1-trixie"
   # Profile to use when building the arti bins that we use for integration tests.
   # When changing this, also update ARTI_CI_PROFILE_PATH, below.
   ARTI_CI_PROFILE: quicktest
@@ -40,8 +40,8 @@ variables:
   # For static website deployment job
   SITE_URL: arti.torproject.org
   # Pinned chutney version.
-  # main @ 2026-03-04
-  CHUTNEY_COMMIT: "6b2e7eb2b72607538fad39beec937c94ab9e48ac"
+  # main @ 2026-04-08
+  CHUTNEY_COMMIT: "9ca2446f4837c1730d31cf9be8ebb7865ebe8fc3"
 
 default:
   image:
@@ -333,11 +333,9 @@ rust-recent-integration:
   script: &rust-recent-arti-extra-features-script
     - ./maint/common/apt-install jq
     - rustup show
-    # Disable:
-    # * flowctl-cc pending arti#2400
-    # * arti-client/experimental pending arti#2400 (because it enables flowctl-cc)
-    # * counter-galois-onion pending arti#2400 (because it enables flowctl-cc)
-    - disabled_features='["flowctl-cc", "arti-client/experimental", "counter-galois-onion"]'
+    # If there are experimental features that currently break arti,
+    # we can temporarily disable them here.
+    - disabled_features='[]'
     # Include all features in `full` and `experimental`, except for those
     # explicitly listed in `disabled_features`.
     - included_features=$(
@@ -569,9 +567,9 @@ minimal-versions:
   variables:
     # To be overridden in template instantiations
     TARGET: UNDEFINED--BUG-IN-CI-YAML
-  # If you upgrade this image, also change the one in docker-reproducible-build.
+  # If you upgrade this image, also change the one in maint/docker-reproducible-build.
   # Using "amd64/" single-arch variant to work around https://gitlab.torproject.org/tpo/tpa/team/-/issues/41621.
-  image: docker.io/amd64/rust:1.91.0-alpine3.22
+  image: docker.io/amd64/rust:1.95.0-alpine3.23
   script:
     - apk add bash
     - ./maint/reproducible-build $TARGET

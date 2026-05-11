@@ -79,6 +79,10 @@
 #console = "info"
 
 # As above, but specify filtering directives for sending trace messages to
+# the system syslog. Empty string means not to use syslog.
+#syslog = ""
+
+# As above, but specify filtering directives for sending trace messages to
 # the journald logging system.  Empty string means not to use journald.
 #journald = ""
 
@@ -96,6 +100,13 @@
 # If set to `false` (the default), such information is not logged in messages of
 # level `info` or higher.
 #log_sensitive_information = false
+
+# Whether to promote protocol-violation log messages to warning level.
+#
+# If set to `false` (the default), protocol violations are logged at their
+# original level. If set to `true`, violations of kind `TorProtocolViolation`
+# are promoted to `warn`. Intended for use in private test networks.
+#protocol_warnings = false
 
 # The granularity with which to display times in our logs.
 #
@@ -568,6 +579,10 @@
 # (ii) conduct the introduction and rendezvous exchange, before giving up.
 #hs_desc_fetch_attempts = 6
 #hs_intro_rend_attempts = 6
+
+# The period for which a hidden service directory cannot be queried for
+# the same descriptor ID again.
+#hs_dir_requery_interval = "15 min"
 
 # Rules for which addresses a client is willing to try to connect to over
 # the tor network.

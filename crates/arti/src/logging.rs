@@ -47,6 +47,16 @@ pub(crate) struct LoggingConfig {
     ))]
     journald: Option<String>,
 
+    /// Filtering directives for the syslog logger.
+    ///
+    /// Only takes effect if Arti is built with the `syslog` feature.
+    #[deftly(tor_config(
+        cfg = r#"all(feature = "syslog", unix)"#,
+        cfg_desc = "with syslog support",
+        default = r#"Some("".into())"#,
+    ))]
+    syslog: Option<String>,
+
     /// Configuration for logging spans with OpenTelemetry.
     #[deftly(tor_config(
         sub_builder,
@@ -82,6 +92,10 @@ pub(crate) struct LoggingConfig {
     // "unsafe" flag on particular lines.
     #[deftly(tor_config(default))]
     log_sensitive_information: bool,
+
+    /// If set to true, promote Tor protocol-violation reports to warning level.
+    #[deftly(tor_config(default))]
+    protocol_warnings: bool,
 
     /// An approximate granularity with which log times should be displayed.
     ///
@@ -309,6 +323,39 @@ where
         Ok(Some(tracing_journald::layer()?.with_filter(filter)))
     } else {
         // Fortunately, Option<Layer> implements Layer, so we can just return None here.
+        Ok(None)
+    }
+}
+
+/// Try to construct a tracing [`Layer`] for logging to syslog, if one is
+/// configured.
+#[cfg(all(feature = "syslog", unix))]
+fn syslog_layer<S>(config: &LoggingConfig) -> Result<impl Layer<S>>
+where
+    S: Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+{
+    use syslog_tracing::{Facility, Options, Syslog};
+
+    let identity = c"arti";
+
+    if let Some(filter) = filt_from_opt_str(&config.syslog, "logging.syslog")? {
+        let options = Options::LOG_PID;
+        let facility = Facility::Daemon;
+
+        let syslog_maker = Syslog::new(identity, options, facility).ok_or_else(|| {
+            anyhow::anyhow!("syslog already initialized; only one logger allowed")
+        })?;
+
+        let layer = tracing_subscriber::fmt::layer()
+            .with_writer(syslog_maker)
+            // Syslog doesn't support ANSI colors, and we usually want
+            // the system log to handle the timestamping.
+            .with_ansi(false)
+            .without_time()
+            .with_filter(filter);
+
+        Ok(Some(layer))
+    } else {
         Ok(None)
     }
 }
@@ -559,6 +606,9 @@ pub(crate) fn setup_logging(
     #[cfg(feature = "journald")]
     let registry = registry.with(journald_layer(config)?);
 
+    #[cfg(all(feature = "syslog", unix))]
+    let registry = registry.with(syslog_layer(config)?);
+
     #[cfg(feature = "opentelemetry")]
     let registry = registry.with(otel_layer(config, path_resolver)?);
 
@@ -596,6 +646,13 @@ pub(crate) fn setup_logging(
     } else {
         None
     };
+
+    let mode = if config.protocol_warnings {
+        tor_error::tracing::ProtocolWarningMode::Warn
+    } else {
+        tor_error::tracing::ProtocolWarningMode::Off
+    };
+    tor_error::tracing::set_protocol_warning_mode(mode);
 
     install_panic_handler();
 

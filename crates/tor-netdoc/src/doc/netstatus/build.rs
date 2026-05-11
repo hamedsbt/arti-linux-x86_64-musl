@@ -4,10 +4,11 @@
 //! support signing or encoding.)
 
 use super::{
-    ConsensusFlavor, ConsensusVoterInfo, DirSource, Footer, Lifetime, NetParams, ProtoStatus,
+    ConsensusAuthorityEntry, ConsensusFlavor, DirSource, Footer, Lifetime, NetParams, ProtoStatus,
     ProtoStatuses, SharedRandStatus, SharedRandVal,
 };
 
+use crate::types::relay_flags::DocRelayFlags;
 use crate::types::{Iso8601TimeNoSp, NotPresent};
 use crate::{BuildError as Error, BuildResult as Result};
 use tor_llcrypto::pk::rsa::RsaIdentity;
@@ -18,7 +19,6 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 pub(crate) mod md;
-#[cfg(feature = "plain-consensus")]
 pub(crate) mod plain;
 
 ns_export_each_flavor! {

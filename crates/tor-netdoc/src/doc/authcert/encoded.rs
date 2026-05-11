@@ -1,7 +1,9 @@
 //! `EncodedAuthCert`
 
 use std::str::FromStr;
+use tor_error::Bug;
 
+use crate::encode::{NetdocEncodable, NetdocEncoder};
 use crate::parse2::{
     ErrorProblem, IsStructural, ItemStream, KeywordRef, NetdocParseable, ParseInput,
 };
@@ -267,6 +269,15 @@ impl NetdocParseable for EncodedAuthCert {
         Ok(EncodedAuthCert(text.to_string()))
     }
 }
+
+impl NetdocEncodable for EncodedAuthCert {
+    fn encode_unsigned(&self, out: &mut NetdocEncoder) -> Result<(), Bug> {
+        // OK because invariants include the right syntax including a trailing newline.
+        out.push_raw_string(&self.as_str());
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
     // @@ begin test lint list maintained by maint/add_warning @@

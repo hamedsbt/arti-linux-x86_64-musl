@@ -5,40 +5,20 @@
 //!
 //! These types shouldn't be exposed outside of the netdoc crate.
 
-pub(crate) use b16impl::*;
+pub use b16impl::*;
 pub use b64impl::*;
-pub(crate) use curve25519impl::*;
-pub(crate) use ed25519impl::*;
-#[cfg(any(feature = "routerdesc", feature = "hs-common"))]
+pub use contact_info::*;
+pub use curve25519impl::*;
+pub use ed25519impl::*;
 pub(crate) use edcert::*;
-pub(crate) use fingerprint::*;
-pub(crate) use rsa::*;
+pub use fingerprint::*;
+pub use hostname::*;
+pub use rsa::*;
 pub use timeimpl::*;
 
-#[cfg(feature = "encode")]
-use {
-    crate::encode::{
-        self,
-        ItemEncoder,
-        ItemObjectEncodable,
-        ItemValueEncodable,
-        // `E` for "encode`; different from `parse2::MultiplicitySelector`
-        MultiplicitySelector as EMultiplicitySelector,
-    },
-    std::iter,
-};
-#[cfg(feature = "parse2")]
-use {
-    crate::parse2::multiplicity::{
-        ItemSetMethods,
-        // `P2` for "parse2`; different from `encode::MultiplicitySelector`
-        MultiplicitySelector as P2MultiplicitySelector,
-        ObjectSetMethods,
-    },
-    crate::parse2::{ArgumentError, ArgumentStream, ItemArgumentParseable, ItemObjectParseable}, //
-};
+pub use nickname::{InvalidNickname, Nickname};
 
-pub use nickname::Nickname;
+pub use boolean::NumericBoolean;
 
 pub use fingerprint::{Base64Fingerprint, Fingerprint};
 
@@ -47,12 +27,40 @@ pub use identified_digest::{DigestName, IdentifiedDigest};
 pub use ignored_impl::{Ignored, IgnoredItemOrObjectValue, NotPresent};
 
 use crate::NormalItemArgument;
-use derive_deftly::{Deftly, define_derive_deftly};
+use crate::encode::{
+    self,
+    ItemArgument,
+    ItemEncoder,
+    ItemObjectEncodable,
+    ItemValueEncodable,
+    // `E` for "encode`; different from `parse2::MultiplicitySelector`
+    MultiplicitySelector as EMultiplicitySelector,
+    NetdocEncoder,
+};
+use crate::parse2::{
+    self, ArgumentError, ArgumentStream, ItemArgumentParseable, ItemObjectParseable,
+    ItemValueParseable, SignatureHashInputs, SignatureItemParseable, UnparsedItem,
+    multiplicity::{
+        ItemSetMethods,
+        // `P2` for "parse2`; different from `encode::MultiplicitySelector`
+        MultiplicitySelector as P2MultiplicitySelector,
+        ObjectSetMethods,
+    },
+    sig_hashes::Sha1WholeKeywordLine,
+};
+
+use derive_deftly::{Deftly, define_derive_deftly, define_derive_deftly_module};
+use digest::Digest as _;
+use educe::Educe;
 use std::cmp::{self, PartialOrd};
 use std::fmt::{self, Display};
+use std::iter;
 use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
+use std::result::Result as StdResult;
 use std::str::FromStr;
-use tor_error::{Bug, ErrorReport as _, internal};
+use subtle::{Choice, ConstantTimeEq};
+use tor_error::{Bug, ErrorReport as _, internal, into_internal};
 use void::{ResultVoidExt as _, Void};
 
 /// Describes a value that van be decoded from a bunch of bytes.
@@ -68,37 +76,187 @@ pub(crate) trait FromBytes: Sized {
     }
 }
 
+define_derive_deftly_module! {
+    /// Implement conversion traits for a transparent newtype around bytes - shared code
+    ///
+    /// This is precisely `#[derive_deftly(Transparent)]`, but in the form of a deftly module,
+    /// so that other derives (eg `BytesTransparent`) can re-use it.
+    Transparent beta_deftly:
+
+    // Expands to bullet points for "generated code", except omitting
+    // `AsRef` & `AsMut` because some uses sites have additional impls of those,
+    // which are best presented together in the docs.
+  ${define TRANSPARENT_DOCS_IMPLS {
+    ///  * impls of `Deref`, `DerefMut`
+    ///  * impls of `From<field>` and "`Into`" (technically, `From<Self> for field`)
+  }}
+
+    // Expands to the implementations
+  ${define TRANSPARENT_IMPLS {
+
+  ${for fields {
+    ${loop_exactly_1 "must be applied to a single-field struct"}
+
+    impl<$tgens> From<$ftype> for $ttype {
+        fn from($fpatname: $ftype) -> $ttype {
+            $vpat
+        }
+    }
+
+    impl<$tgens> From<$ttype> for $ftype {
+        fn from(self_: $ttype) -> $ftype {
+            self_.$fname
+        }
+    }
+
+    impl<$tgens> Deref for $ttype {
+        type Target = $ftype;
+        fn deref(&self) -> &$ftype {
+            &self.$fname
+        }
+    }
+
+    impl<$tgens> DerefMut for $ttype {
+        fn deref_mut(&mut self) -> &mut $ftype {
+            &mut self.$fname
+        }
+    }
+
+    impl<$tgens> AsRef<$ftype> for $ttype {
+        fn as_ref(&self) -> &$ftype {
+            &self.$fname
+        }
+    }
+
+    impl<$tgens> AsMut<$ftype> for $ttype {
+        fn as_mut(&mut self) -> &mut $ftype {
+            &mut self.$fname
+        }
+    }
+  }}
+  }}
+}
+
+define_derive_deftly! {
+    use Transparent;
+
+    /// Implement conversion traits for an arbitrary transparent newtype
+    ///
+    /// # Requirements
+    ///
+    ///  * Self should be a single-field struct
+    ///  * Self should have no runtime invariants
+    ///
+    /// # Generated code
+    ///
+    $TRANSPARENT_DOCS_IMPLS
+    ///  * impls of `AsMut<field>`, `AsRef<field>`
+    ///
+    /// # Guidelines
+    ///
+    ///  * the field should be `pub`, with `#[allow(clippy::exhaustive_structs)]`
+    ///  * derive `Hash`, `Debug` and (usually) `Clone`
+    ///  * consider deriving `PartialEq` and `Eq`
+    ///    but for types containing bytes, use [`ConstantTimeEq`],
+    ///    eg with [`#[derive_deftly(BytesTransparent)]`](derive_deftly_template_BytesTransparent)
+    ///    (instead of `Transparent`).
+    ///  * implement `FromStr`, `Display`, `NormalItemArgument`, as required
+    Transparent for struct, beta_deftly:
+
+    $TRANSPARENT_IMPLS
+}
+
+define_derive_deftly! {
+    use Transparent;
+
+    /// Implement `ConstantTimeEq`, `.as_bytes()`, etc., for a transparent newtype around bytes
+    ///
+    /// # Requirements
+    ///
+    ///  * Self should be a single-field struct
+    ///  * Self should deref to `&[u8]` (and to `&mut [u8]`).
+    ///  * (so Self should have no runtime invariants)
+    ///
+    /// # Generated code
+    ///
+    ///  * impls of `ConstantTimeEq`, `Eq`, `PartialEq`
+    ///  * `as_bytes()` method
+    ${TRANSPARENT_DOCS_IMPLS}
+    ///  * impls of `AsMut<field>`, `AsRef<field>`, `AsRef<[u8]>`, `AsMut<[u8]>`
+    ///
+    // We could derive Debug here but then we have to deal with the Fixed's N
+    // which gets quite fiddly.
+    //
+    /// # Guidelines
+    ///
+    ///  * derive `Hash` and write `#[allow(clippy::derived_hash_with_manual_eq)]`
+    ///  * impl `FromStr` and `Display` (if required, which they usually will be)
+    ///  * derive `derive_more::Debug` eg with `#[debug(r#"B64("{self}")"#)]`
+    ///  * `impl NormalItemArgument` if appropriate (ie the representation has no spaces)
+    BytesTransparent for struct, beta_deftly:
+
+    $TRANSPARENT_IMPLS
+
+    impl<$tgens> ConstantTimeEq for $ttype {
+        fn ct_eq(&self, other: &$ttype) -> Choice {
+          $(
+            self.$fname.ct_eq(&other.$fname)
+          )
+        }
+    }
+    $/// `$tname` is `Eq` via its constant-time implementation.
+    impl<$tgens> PartialEq for $ttype {
+        fn eq(&self, other: &$ttype) -> bool {
+            self.ct_eq(other).into()
+        }
+    }
+    impl<$tgens> Eq for $ttype {}
+
+    impl<$tgens> $ttype {
+        /// Return the byte array from this object.
+        pub fn as_bytes(&self) -> &[u8] {
+          $(
+            &self.$fname[..]
+          )
+        }
+    }
+
+    impl<$tgens> AsRef<[u8]> for $ttype {
+        fn as_ref(&self) -> &[u8] {
+          $(
+            self.$fname.as_ref()
+          )
+        }
+    }
+
+    impl<$tgens> AsMut<[u8]> for $ttype {
+        fn as_mut(&mut self) -> &mut [u8] {
+          $(
+            self.$fname.as_mut()
+          )
+        }
+    }
+}
+
 /// Types for decoding base64-encoded values.
 mod b64impl {
+    use super::*;
     use crate::{Error, NetdocErrorKind as EK, Pos, Result};
     use base64ct::{Base64, Base64Unpadded, Encoding};
-    use std::fmt::{self, Display};
     use std::ops::RangeBounds;
-    use subtle::{Choice, ConstantTimeEq};
 
     /// A byte array, encoded in base64 with optional padding.
     ///
     /// On output (`Display`), output is unpadded.
-    #[derive(Clone)]
+    #[derive(Clone, Hash, Deftly)]
+    #[derive_deftly(BytesTransparent)]
     #[allow(clippy::derived_hash_with_manual_eq)]
-    #[derive(Hash, derive_more::Debug, derive_more::From, derive_more::Into)]
+    #[derive(derive_more::Debug)]
     #[debug(r#"B64("{self}")"#)]
-    pub struct B64(Vec<u8>);
+    #[allow(clippy::exhaustive_structs)]
+    pub struct B64(pub Vec<u8>);
 
-    impl ConstantTimeEq for B64 {
-        fn ct_eq(&self, other: &B64) -> Choice {
-            self.0.ct_eq(&other.0)
-        }
-    }
-    /// `B64` is `Eq` via its constant-time implementation.
-    impl PartialEq for B64 {
-        fn eq(&self, other: &B64) -> bool {
-            self.ct_eq(other).into()
-        }
-    }
-    impl Eq for B64 {}
-
-    impl std::str::FromStr for B64 {
+    impl FromStr for B64 {
         type Err = Error;
         fn from_str(s: &str) -> Result<Self> {
             let v: core::result::Result<Vec<u8>, base64ct::Error> = match s.len() % 4 {
@@ -121,10 +279,6 @@ mod b64impl {
     }
 
     impl B64 {
-        /// Return the byte array from this object.
-        pub fn as_bytes(&self) -> &[u8] {
-            &self.0[..]
-        }
         /// Return this object if its length is within the provided bounds
         /// object, or an error otherwise.
         pub(crate) fn check_len<B: RangeBounds<usize>>(self, bounds: B) -> Result<Self> {
@@ -138,24 +292,89 @@ mod b64impl {
         /// Try to convert this object into an array of N bytes.
         ///
         /// Return an error if the length is wrong.
-        pub fn into_array<const N: usize>(self) -> Result<[u8; N]> {
+        pub(crate) fn into_array<const N: usize>(self) -> Result<[u8; N]> {
             self.0
                 .try_into()
                 .map_err(|_| EK::BadObjectVal.with_msg("Invalid length on base64 data"))
         }
     }
+
+    impl FromIterator<u8> for B64 {
+        fn from_iter<T: IntoIterator<Item = u8>>(iter: T) -> Self {
+            Self(iter.into_iter().collect())
+        }
+    }
+
+    impl NormalItemArgument for B64 {}
+
+    /// A byte array encoded in a hexadecimal with a fixed length.
+    #[derive(Clone, Hash, Deftly)]
+    #[derive_deftly(BytesTransparent)]
+    #[allow(clippy::derived_hash_with_manual_eq)]
+    #[derive(derive_more::Debug)]
+    #[debug(r#"FixedB64::<{N}>("{self}")"#)]
+    #[allow(clippy::exhaustive_structs)]
+    pub struct FixedB64<const N: usize>(pub [u8; N]);
+
+    impl<const N: usize> Display for FixedB64<N> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            Display::fmt(&B64(self.0.to_vec()), f)
+        }
+    }
+
+    impl<const N: usize> FromStr for FixedB64<N> {
+        type Err = Error;
+        fn from_str(s: &str) -> Result<Self> {
+            Ok(Self(B64::from_str(s)?.0.try_into().map_err(|_| {
+                EK::BadArgument
+                    .at_pos(Pos::at(s))
+                    .with_msg("invalid length")
+            })?))
+        }
+    }
+
+    impl<const N: usize> NormalItemArgument for FixedB64<N> {}
 }
 
 // ============================================================
 
 /// Types for decoding hex-encoded values.
 mod b16impl {
+    use super::*;
     use crate::{Error, NetdocErrorKind as EK, Pos, Result};
 
-    /// A byte array encoded in hexadecimal.
-    pub(crate) struct B16(Vec<u8>);
+    /// A byte array encoded in hexadecimal; prints in lowercase
+    ///
+    /// Both uppercase and lowercase are tolerated when parsing.
+    #[derive(Clone, Hash, Deftly)]
+    #[derive_deftly(BytesTransparent)]
+    #[allow(clippy::derived_hash_with_manual_eq)]
+    #[derive(derive_more::Debug)]
+    #[debug(r#"B16("{self}")"#)]
+    #[allow(clippy::exhaustive_structs)]
+    pub struct B16(pub Vec<u8>);
 
-    impl std::str::FromStr for B16 {
+    /// A byte array encoded in hexadecimal; prints in uppercase
+    ///
+    /// Both uppercase and lowercase are tolerated when parsing.
+    #[derive(Clone, Hash, Deftly)]
+    #[derive_deftly(BytesTransparent)]
+    #[allow(clippy::derived_hash_with_manual_eq)]
+    #[derive(derive_more::Debug)]
+    #[debug(r#"B16U("{self}")"#)]
+    #[allow(clippy::exhaustive_structs)]
+    pub struct B16U(pub Vec<u8>);
+
+    /// A fixed-length version of [`B16U`].
+    #[derive(Clone, Hash, Deftly)]
+    #[derive_deftly(BytesTransparent)]
+    #[allow(clippy::derived_hash_with_manual_eq)]
+    #[derive(derive_more::Debug)]
+    #[debug(r#"FixedB16U("{self}")"#)]
+    #[allow(clippy::exhaustive_structs)]
+    pub struct FixedB16U<const N: usize>(pub [u8; N]);
+
+    impl FromStr for B16 {
         type Err = Error;
         fn from_str(s: &str) -> Result<Self> {
             let bytes = hex::decode(s).map_err(|_| {
@@ -167,85 +386,175 @@ mod b16impl {
         }
     }
 
-    impl B16 {
-        /// Return the underlying byte array.
-        #[allow(unused)]
-        pub(crate) fn as_bytes(&self) -> &[u8] {
-            &self.0[..]
+    impl FromStr for B16U {
+        type Err = Error;
+        fn from_str(s: &str) -> Result<Self> {
+            Ok(B16U(B16::from_str(s)?.0))
         }
     }
 
-    impl From<B16> for Vec<u8> {
-        fn from(w: B16) -> Vec<u8> {
-            w.0
+    impl<const N: usize> FromStr for FixedB16U<N> {
+        type Err = Error;
+        fn from_str(s: &str) -> Result<Self> {
+            Ok(Self(B16U::from_str(s)?.0.try_into().map_err(|_| {
+                EK::BadArgument
+                    .at_pos(Pos::at(s))
+                    .with_msg("invalid length")
+            })?))
         }
     }
+
+    impl Display for B16 {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            // `hex` has `hex::encode` but that allocates a `String`, which this approach doesn't
+            for c in self.as_bytes() {
+                write!(f, "{c:02x}")?;
+            }
+            Ok(())
+        }
+    }
+
+    impl Display for B16U {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            // `hex` has `hex::encode_upper` but that allocates a `String`
+            for c in self.as_bytes() {
+                write!(f, "{c:02X}")?;
+            }
+            Ok(())
+        }
+    }
+
+    impl<const N: usize> Display for FixedB16U<N> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            // TODO DIRAUTH combine this with the same code in `Display for B16U`
+            // `hex` has `hex::encode_upper` but that allocates a `String`
+            for c in self.as_bytes() {
+                write!(f, "{c:02X}")?;
+            }
+            Ok(())
+        }
+    }
+
+    impl NormalItemArgument for B16 {}
+    impl NormalItemArgument for B16U {}
+    impl<const N: usize> NormalItemArgument for FixedB16U<N> {}
 }
 
 // ============================================================
 
 /// Types for decoding curve25519 keys
 mod curve25519impl {
-    use super::B64;
-    use crate::{Error, NetdocErrorKind as EK, Pos, Result};
+    use super::*;
+
+    use crate::{Error, NormalItemArgument, Result, types::misc::FixedB64};
     use tor_llcrypto::pk::curve25519::PublicKey;
 
     /// A Curve25519 public key, encoded in base64 with optional padding
-    pub(crate) struct Curve25519Public(PublicKey);
+    #[derive(Debug, Clone, PartialEq, Eq, Deftly)]
+    #[derive_deftly(Transparent)]
+    #[allow(clippy::exhaustive_structs)]
+    pub struct Curve25519Public(pub PublicKey);
 
-    impl std::str::FromStr for Curve25519Public {
+    impl FromStr for Curve25519Public {
         type Err = Error;
         fn from_str(s: &str) -> Result<Self> {
-            let b64: B64 = s.parse()?;
-            let array: [u8; 32] = b64.as_bytes().try_into().map_err(|_| {
-                EK::BadArgument
-                    .at_pos(Pos::at(s))
-                    .with_msg("bad length for curve25519 key.")
-            })?;
-            Ok(Curve25519Public(array.into()))
+            let pk: FixedB64<32> = s.parse()?;
+            let pk: [u8; 32] = pk.into();
+            Ok(Curve25519Public(pk.into()))
         }
     }
 
-    impl From<Curve25519Public> for PublicKey {
-        fn from(w: Curve25519Public) -> PublicKey {
-            w.0
+    impl Display for Curve25519Public {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            FixedB64::from(self.0.to_bytes()).fmt(f)
         }
     }
+
+    impl NormalItemArgument for Curve25519Public {}
 }
 
 // ============================================================
 
 /// Types for decoding ed25519 keys
 mod ed25519impl {
-    use super::B64;
-    use crate::{Error, NetdocErrorKind as EK, Pos, Result};
-    use tor_llcrypto::pk::ed25519::Ed25519Identity;
+    use super::*;
+
+    use crate::{Error, NormalItemArgument, Result, types::misc::FixedB64};
+    use derive_deftly::Deftly;
+    use tor_llcrypto::pk::ed25519::{Ed25519Identity, Signature};
 
     /// An alleged ed25519 public key, encoded in base64 with optional
     /// padding.
-    pub(crate) struct Ed25519Public(Ed25519Identity);
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[allow(clippy::exhaustive_structs)]
+    pub struct Ed25519Public(pub Ed25519Identity);
 
-    impl std::str::FromStr for Ed25519Public {
+    impl FromStr for Ed25519Public {
         type Err = Error;
         fn from_str(s: &str) -> Result<Self> {
-            let b64: B64 = s.parse()?;
-            if b64.as_bytes().len() != 32 {
-                return Err(EK::BadArgument
-                    .at_pos(Pos::at(s))
-                    .with_msg("bad length for ed25519 key."));
-            }
-            let key = Ed25519Identity::from_bytes(b64.as_bytes()).ok_or_else(|| {
-                EK::BadArgument
-                    .at_pos(Pos::at(s))
-                    .with_msg("bad value for ed25519 key.")
-            })?;
-            Ok(Ed25519Public(key))
+            let pk: FixedB64<32> = s.parse()?;
+            Ok(Ed25519Public(Ed25519Identity::new(pk.into())))
         }
     }
+
+    impl Display for Ed25519Public {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let pk: [u8; 32] = self.0.into();
+            let pk = FixedB64::from(pk);
+            pk.fmt(f)
+        }
+    }
+
+    impl NormalItemArgument for Ed25519Public {}
 
     impl From<Ed25519Public> for Ed25519Identity {
         fn from(pk: Ed25519Public) -> Ed25519Identity {
             pk.0
+        }
+    }
+
+    /// Helper that checks for the presence of `ed25519`.
+    #[derive(Debug, Clone, PartialEq, Eq, derive_more::Display, derive_more::FromStr)]
+    #[display(rename_all = "lowercase")]
+    #[from_str(rename_all = "lowercase")]
+    #[allow(clippy::exhaustive_enums)]
+    pub enum Ed25519AlgorithmString {
+        /// Ed25519 encoded as `ed25519`.
+        Ed25519,
+    }
+
+    impl NormalItemArgument for Ed25519AlgorithmString {}
+
+    /// An Ed25519 public key found in a micro descriptor `id` line.
+    #[derive(Debug, Clone, PartialEq, Eq, Deftly)]
+    #[derive_deftly(ItemValueParseable)]
+    #[non_exhaustive]
+    pub struct Ed25519IdentityLine {
+        /// Fixed magic identifier (`ed25519`) for this line.
+        pub alg: Ed25519AlgorithmString,
+
+        /// The actual Ed25519 identity.
+        pub pk: Ed25519Public,
+    }
+
+    impl From<Ed25519Public> for Ed25519IdentityLine {
+        fn from(pk: Ed25519Public) -> Self {
+            Self {
+                alg: Ed25519AlgorithmString::Ed25519,
+                pk,
+            }
+        }
+    }
+
+    impl From<Ed25519Identity> for Ed25519IdentityLine {
+        fn from(pk: Ed25519Identity) -> Self {
+            Ed25519Public(pk).into()
+        }
+    }
+
+    impl ItemArgument for Signature {
+        fn write_arg_onto(&self, out: &mut ItemEncoder) -> StdResult<(), Bug> {
+            FixedB64::from(self.to_bytes()).write_arg_onto(out)
         }
     }
 }
@@ -256,7 +565,6 @@ mod ed25519impl {
 mod ignored_impl {
     use super::*;
 
-    #[cfg(feature = "parse2")]
     use crate::parse2::ErrorProblem as EP;
 
     /// Part of a network document, that isn't actually there.
@@ -287,11 +595,8 @@ mod ignored_impl {
     // TODO we'll need to implement ItemArgument etc., for encoding, too.
     #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
     #[allow(clippy::exhaustive_structs)]
-    #[cfg_attr(
-        feature = "parse2",
-        derive(Deftly),
-        derive_deftly(NetdocParseableFields)
-    )]
+    #[derive(Deftly)]
+    #[derive_deftly(NetdocParseableFields)]
     pub struct NotPresent;
 
     /// Ignored part of a network document.
@@ -308,12 +613,8 @@ mod ignored_impl {
     /// Argument, we need something to put into the output document to avoid generating
     /// a document with the arguments out of step.  If it *is* the last argument,
     /// it could simply be omitted, since additional arguments are in any case ignored.
-    #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
-    #[cfg_attr(
-        feature = "parse2",
-        derive(Deftly),
-        derive_deftly(ItemValueParseable, NetdocParseableFields)
-    )]
+    #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, Deftly)]
+    #[derive_deftly(ItemValueParseable, NetdocParseableFields)]
     #[allow(clippy::exhaustive_structs)]
     pub struct Ignored;
 
@@ -325,7 +626,6 @@ mod ignored_impl {
     /// This type is uninhabited.
     pub struct IgnoredItemOrObjectValue(Void);
 
-    #[cfg(feature = "parse2")]
     impl ItemSetMethods for P2MultiplicitySelector<NotPresent> {
         type Each = Ignored;
         type Field = NotPresent;
@@ -338,25 +638,28 @@ mod ignored_impl {
         fn finish(self, _acc: Option<NotPresent>, _: &'static str) -> Result<NotPresent, EP> {
             Ok(NotPresent)
         }
+        fn debug_core(self) -> &'static str {
+            "Ignored"
+        }
     }
 
-    #[cfg(feature = "parse2")]
     impl ItemArgumentParseable for NotPresent {
         fn from_args(_: &mut ArgumentStream) -> Result<NotPresent, ArgumentError> {
             Ok(NotPresent)
         }
     }
 
-    #[cfg(feature = "parse2")]
     impl ObjectSetMethods for P2MultiplicitySelector<NotPresent> {
         type Field = NotPresent;
         type Each = Void;
         fn resolve_option(self, _found: Option<Void>) -> Result<NotPresent, EP> {
             Ok(NotPresent)
         }
+        fn debug_core(self) -> &'static str {
+            "NotPresent"
+        }
     }
 
-    #[cfg(feature = "encode")]
     impl<'f> encode::MultiplicityMethods<'f> for EMultiplicitySelector<NotPresent> {
         type Field = NotPresent;
         type Each = Void;
@@ -365,7 +668,6 @@ mod ignored_impl {
         }
     }
 
-    #[cfg(feature = "encode")]
     impl encode::OptionalityMethods for EMultiplicitySelector<NotPresent> {
         type Field = NotPresent;
         type Each = Void;
@@ -381,14 +683,12 @@ mod ignored_impl {
         }
     }
 
-    #[cfg(feature = "parse2")]
     impl ItemArgumentParseable for Ignored {
         fn from_args(_: &mut ArgumentStream) -> Result<Ignored, ArgumentError> {
             Ok(Ignored)
         }
     }
 
-    #[cfg(feature = "parse2")]
     impl ItemObjectParseable for Ignored {
         fn check_label(_label: &str) -> Result<(), EP> {
             // allow any label
@@ -399,16 +699,17 @@ mod ignored_impl {
         }
     }
 
-    #[cfg(feature = "parse2")]
     impl ObjectSetMethods for P2MultiplicitySelector<Ignored> {
         type Field = Ignored;
         type Each = Ignored;
         fn resolve_option(self, _found: Option<Ignored>) -> Result<Ignored, EP> {
             Ok(Ignored)
         }
+        fn debug_core(self) -> &'static str {
+            "Ignored"
+        }
     }
 
-    #[cfg(feature = "encode")]
     impl<'f> encode::MultiplicityMethods<'f> for EMultiplicitySelector<Ignored> {
         type Field = Ignored;
         type Each = IgnoredItemOrObjectValue;
@@ -417,7 +718,6 @@ mod ignored_impl {
         }
     }
 
-    #[cfg(feature = "encode")]
     impl encode::OptionalityMethods for EMultiplicitySelector<Ignored> {
         type Field = Ignored;
         type Each = IgnoredItemOrObjectValue;
@@ -426,14 +726,12 @@ mod ignored_impl {
         }
     }
 
-    #[cfg(feature = "encode")]
     impl ItemValueEncodable for IgnoredItemOrObjectValue {
         fn write_item_value_onto(&self, _: ItemEncoder) -> Result<(), Bug> {
             void::unreachable(self.0)
         }
     }
 
-    #[cfg(feature = "encode")]
     impl ItemObjectEncodable for IgnoredItemOrObjectValue {
         fn label(&self) -> &str {
             void::unreachable(self.0)
@@ -474,7 +772,7 @@ mod ignored_impl {
 /// `Unknown` is not `Eq` or `Ord` because we won't want to relate a `Discarded`
 /// to a `Retained`.  That would be a logic error.  `partial_cmp` gives `None` for this.
 #[derive(Debug, PartialEq, Clone, Copy, Hash)]
-#[non_exhaustive]
+#[allow(clippy::exhaustive_enums)] // this isn't going to change
 pub enum Unknown<T> {
     /// The parsing discarded unknown values and they are no longer available.
     Discarded(PhantomData<T>),
@@ -505,7 +803,22 @@ impl<T> Unknown<T> {
     }
 
     /// Obtain an `Unknown` containing (maybe) a reference
-    pub fn as_ref(&self) -> Option<&T> {
+    pub fn as_ref(&self) -> Unknown<&T> {
+        match self {
+            Unknown::Discarded(_) => Unknown::Discarded(PhantomData),
+            #[cfg(feature = "retain-unknown")]
+            Unknown::Retained(t) => Unknown::Retained(t),
+        }
+    }
+
+    /// Return the retained unknown data, giving `None` if none was saved
+    ///
+    /// This is the function for disregarding the possible previously existence
+    /// of now-discarded unknown (unrecognised) information.
+    ///
+    /// Use [`into_retained`](Self::into_retained) if it would be a bug
+    /// if unrecognised information had been previously discarded.
+    pub fn only_known(self) -> Option<T> {
         match self {
             Unknown::Discarded(_) => None,
             #[cfg(feature = "retain-unknown")]
@@ -564,8 +877,72 @@ impl<T: PartialOrd> PartialOrd for Unknown<T> {
 
 // ============================================================
 
+/// Known keyword (enum) value, or arbitrary string
+///
+/// `T` should be a `Copy` enum with unit variants.
+/// It should have appropriate `FromStr` and `Display`,
+/// as well as [`NormalItemArgument`], impls.
+///
+/// Then `KeywordOrString` will implement the same traits.
+///
+/// Unlike [`Unknown`], unknown values are always retained as strings.
+//
+// `RelayFlags` has machinery for parsing flags and retaining unknown values,
+// but it uses `Unknown` to maybe discard unknown flags,
+// and it is generally quite a lot more complicated.
+#[derive(Debug, PartialEq, Clone, Hash)]
+#[allow(clippy::exhaustive_enums)] // this isn't going to change
+pub enum KeywordOrString<T: Copy> {
+    /// Known and recognised `T`
+    Known(T),
+
+    /// Unknown value in arbitrary syntax
+    Unknown(String),
+}
+
+impl<T: Copy + NormalItemArgument> NormalItemArgument for KeywordOrString<T> {}
+
+impl<T: Copy + Display> Display for KeywordOrString<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            KeywordOrString::Known(t) => Display::fmt(t, f),
+            KeywordOrString::Unknown(s) => Display::fmt(s, f),
+        }
+    }
+}
+
+impl<T: Copy + FromStr> FromStr for KeywordOrString<T> {
+    type Err = Void;
+    fn from_str(s: &str) -> Result<Self, Void> {
+        Ok(match s.parse() {
+            Ok(y) => KeywordOrString::Known(y),
+            Err(_) => KeywordOrString::Unknown(s.to_owned()),
+        })
+    }
+}
+
+// ============================================================
+
+/// A sequence of `T` items, with their order retained
+///
+/// Normally when a `Vec<T>` appears in a network document,
+/// we expect the items to be sortable - they must impl [`EncodeOrd`](encode::EncodeOrd).
+/// When encoding, the output is always sorted.
+///
+/// *This* type retains the ordering.
+///
+/// Implements the [`encode`] and [`parse2`] item multiplicity traits.
+#[derive(Debug, Clone, Hash, Deftly, Eq, PartialEq, Educe)]
+#[educe(Default)]
+#[derive_deftly(Transparent)]
+#[allow(clippy::exhaustive_structs)]
+pub struct RetainedOrderVec<T>(pub Vec<T>);
+
+// ============================================================
+
 /// Types for decoding times and dates
 mod timeimpl {
+    use super::*;
     use crate::{Error, NetdocErrorKind as EK, Pos, Result};
     use std::time::SystemTime;
     use time::{
@@ -577,8 +954,8 @@ mod timeimpl {
     /// space between the date and time.
     ///
     /// (Example: "2020-10-09 17:38:12")
-    #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)] //
-    #[derive(derive_more::Into, derive_more::From, derive_more::Deref)]
+    #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Deftly)]
+    #[derive_deftly(Transparent)]
     #[allow(clippy::exhaustive_structs)]
     pub struct Iso8601TimeSp(pub SystemTime);
 
@@ -586,7 +963,7 @@ mod timeimpl {
     const ISO_8601SP_FMT: &[FormatItem] =
         format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
 
-    impl std::str::FromStr for Iso8601TimeSp {
+    impl FromStr for Iso8601TimeSp {
         type Err = Error;
         fn from_str(s: &str) -> Result<Iso8601TimeSp> {
             let d = PrimitiveDateTime::parse(s, &ISO_8601SP_FMT).map_err(|e| {
@@ -600,19 +977,19 @@ mod timeimpl {
 
     /// Formats a SystemTime according to the given format description
     ///
-    /// Also converts any time::error::format to std::fmt::Error
+    /// Also converts any time::error::format to fmt::Error
     /// so that it can be unwrapped in the Display trait impl
     fn fmt_with(
         t: SystemTime,
         format_desc: &[FormatItem],
-    ) -> core::result::Result<String, std::fmt::Error> {
+    ) -> core::result::Result<String, fmt::Error> {
         OffsetDateTime::from(t)
             .format(format_desc)
-            .map_err(|_| std::fmt::Error)
+            .map_err(|_| fmt::Error)
     }
 
-    impl std::fmt::Display for Iso8601TimeSp {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl Display for Iso8601TimeSp {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "{}", fmt_with(self.0, ISO_8601SP_FMT)?)
         }
     }
@@ -626,8 +1003,8 @@ mod timeimpl {
     /// The timezone is not included in the string representation; `+0000` is implicit.
     ///
     /// (Example: "2020-10-09T17:38:12")
-    #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)] //
-    #[derive(derive_more::Into, derive_more::From, derive_more::Deref)]
+    #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Deftly)]
+    #[derive_deftly(Transparent)]
     #[allow(clippy::exhaustive_structs)]
     pub struct Iso8601TimeNoSp(pub SystemTime);
 
@@ -635,7 +1012,7 @@ mod timeimpl {
     const ISO_8601NOSP_FMT: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
 
-    impl std::str::FromStr for Iso8601TimeNoSp {
+    impl FromStr for Iso8601TimeNoSp {
         type Err = Error;
         fn from_str(s: &str) -> Result<Iso8601TimeNoSp> {
             let d = PrimitiveDateTime::parse(s, &ISO_8601NOSP_FMT).map_err(|e| {
@@ -647,8 +1024,8 @@ mod timeimpl {
         }
     }
 
-    impl std::fmt::Display for Iso8601TimeNoSp {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl Display for Iso8601TimeNoSp {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "{}", fmt_with(self.0, ISO_8601NOSP_FMT)?)
         }
     }
@@ -658,9 +1035,11 @@ mod timeimpl {
 
 /// Types for decoding RSA keys
 mod rsa {
+    use super::*;
     use crate::{NetdocErrorKind as EK, Pos, Result};
     use std::ops::RangeBounds;
     use tor_llcrypto::pk::rsa::PublicKey;
+    use tor_llcrypto::{d::Sha1, pk::rsa::KeyPair};
 
     /// The fixed exponent which we require when parsing any RSA key in a netdoc
     //
@@ -679,6 +1058,32 @@ mod rsa {
     #[allow(non_camel_case_types)]
     #[derive(Clone, Debug)]
     pub(crate) struct RsaPublicParse1Helper(PublicKey, Pos);
+
+    /// RSA signature using SHA-1 as per "Signing documents" in dir-spec
+    ///
+    /// <https://spec.torproject.org/dir-spec/netdoc.html#signing>
+    ///
+    /// Used for
+    /// [`AuthCert::dir-key-certification`](crate::doc::authcert::AuthCert::dir-key-certification),
+    /// for example.
+    ///
+    /// # Caveats
+    ///
+    /// This type MUST NOT be used for anomalous signatures
+    /// such as
+    /// [`AuthCert::dir_key_crosscert`](crate::doc::authcert::AuthCert::dir_key_crosscert);
+    /// in that case because `dir_key_crosscert`'s
+    /// set of allowed object labels includes `ID SIGNATURE` whereas this type
+    /// is always `SIGNATURE`
+    #[derive(Debug, Clone, PartialEq, Eq, Deftly)]
+    #[derive_deftly(ItemValueParseable, ItemValueEncodable)]
+    #[deftly(netdoc(no_extra_args, signature(hash_accu = Sha1WholeKeywordLine)))]
+    #[non_exhaustive]
+    pub struct RsaSha1Signature {
+        /// The bytes of the signature (base64-decoded).
+        #[deftly(netdoc(object(label = "SIGNATURE"), with = crate::types::raw_data_object))]
+        pub signature: Vec<u8>,
+    }
 
     impl From<RsaPublicParse1Helper> for PublicKey {
         fn from(k: RsaPublicParse1Helper) -> PublicKey {
@@ -720,14 +1125,87 @@ mod rsa {
             self.check_len(n..=n)
         }
     }
+
+    impl RsaSha1Signature {
+        /// Make a signature according to "Signing documents" in the netdoc spec
+        ///
+        /// <https://spec.torproject.org/dir-spec/netdoc.html#signing>
+        ///
+        /// `NetdocEncoder` should have had the body of the document
+        /// (everything except the signatures) already encoded.
+        ///
+        /// `item_keyword` is the keyword for the signature item.
+        /// This is needed because different documents use different keywords,
+        /// and the keyword is covered by the signature (an annoying is a layering violation).
+        /// See <https://gitlab.torproject.org/tpo/core/torspec/-/issues/322>.
+        ///
+        /// # Example
+        ///
+        /// ```
+        /// use derive_deftly::Deftly;
+        /// use tor_error::Bug;
+        /// use tor_llcrypto::pk::rsa;
+        /// use tor_netdoc::derive_deftly_template_NetdocEncodable;
+        /// use tor_netdoc::encode::{NetdocEncodable, NetdocEncoder};
+        /// use tor_netdoc::types::RsaSha1Signature;
+        ///
+        /// #[derive(Deftly, Default)]
+        /// #[derive_deftly(NetdocEncodable)]
+        /// pub struct Document {
+        ///     pub document_intro_keyword: (),
+        /// }
+        /// #[derive(Deftly)]
+        /// #[derive_deftly(NetdocEncodable)]
+        /// pub struct DocumentSignatures {
+        ///     pub document_signature: RsaSha1Signature,
+        /// }
+        /// impl Document {
+        ///     pub fn encode_sign(&self, k: &rsa::KeyPair) -> Result<String, Bug> {
+        ///         let mut encoder = NetdocEncoder::new();
+        ///         self.encode_unsigned(&mut encoder)?;
+        ///         let document_signature =
+        ///             RsaSha1Signature::new_sign_netdoc(k, &encoder, "document-signature")?;
+        ///         let sigs = DocumentSignatures { document_signature };
+        ///         sigs.encode_unsigned(&mut encoder)?;
+        ///         let encoded = encoder.finish()?;
+        ///         Ok(encoded)
+        ///     }
+        /// }
+        ///
+        /// # fn main() -> Result<(), anyhow::Error> {
+        /// let k = rsa::KeyPair::generate(&mut tor_basic_utils::test_rng::testing_rng())?;
+        /// let doc = Document::default();
+        /// let encoded = doc.encode_sign(&k)?;
+        /// assert!(encoded.starts_with(concat!(
+        ///     "document-intro-keyword\n",
+        ///     "document-signature\n",
+        ///     "-----BEGIN SIGNATURE-----\n",
+        /// )));
+        /// # Ok(())
+        /// # }
+        /// ```
+        pub fn new_sign_netdoc(
+            private_key: &KeyPair,
+            encoder: &NetdocEncoder,
+            item_keyword: &str,
+        ) -> StdResult<Self, Bug> {
+            let mut h = Sha1::new();
+            h.update(encoder.text_sofar()?);
+            h.update(item_keyword);
+            h.update("\n");
+            let h = h.finalize();
+            let signature = private_key
+                .sign(&h)
+                .map_err(into_internal!("RSA signing failed"))?;
+            Ok(RsaSha1Signature { signature })
+        }
+    }
 }
 
 /// Types for decoding Ed25519 certificates
-#[cfg(any(feature = "routerdesc", feature = "hs-common"))]
 mod edcert {
     use crate::{NetdocErrorKind as EK, Pos, Result};
     use tor_cert::{CertType, Ed25519Cert, KeyUnknownCert};
-    #[cfg(feature = "routerdesc")]
     use tor_llcrypto::pk::ed25519;
 
     /// An ed25519 certificate as parsed from a directory object, with
@@ -763,7 +1241,6 @@ mod edcert {
             Ok(self)
         }
         /// Give an error if this certificate's subject_key is not `pk`
-        #[cfg(feature = "routerdesc")]
         pub(crate) fn check_subject_key_is(self, pk: &ed25519::Ed25519Identity) -> Result<Self> {
             if self.0.peek_subject_key().as_ed25519() != Some(pk) {
                 return Err(EK::BadObjectVal
@@ -782,6 +1259,7 @@ mod edcert {
 /// Digest identifiers, and digests in the form `ALGORITHM=BASE64U`
 ///
 /// As found in a vote's `m` line.
+// TODO Use FixedB64 here.
 mod identified_digest {
     use super::*;
 
@@ -913,36 +1391,43 @@ mod identified_digest {
 
 /// Types for decoding RSA fingerprints
 mod fingerprint {
+    use super::*;
+    use crate::parse2::{ArgumentError, ArgumentStream, ItemArgumentParseable};
     use crate::{Error, NetdocErrorKind as EK, Pos, Result};
     use base64ct::{Base64Unpadded, Encoding as _};
-    use std::fmt::{self, Display};
     use tor_llcrypto::pk::rsa::RsaIdentity;
 
     /// A hex-encoded RSA key identity (fingerprint) with spaces in it.
     ///
+    /// <https://spec.torproject.org/dir-spec/server-descriptor-format.html?highlight=fingerprint#item:fingerprint>
+    ///
     /// Netdoc parsing adapter for [`RsaIdentity`]
-    #[derive(Debug, Clone, Eq, PartialEq, derive_more::Deref, derive_more::Into)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash, Deftly)]
+    #[derive_deftly(Transparent)]
     #[allow(clippy::exhaustive_structs)]
-    pub(crate) struct SpFingerprint(pub RsaIdentity);
+    pub struct SpFingerprint(pub RsaIdentity);
 
     /// A hex-encoded fingerprint with no spaces.
     ///
     /// Netdoc parsing adapter for [`RsaIdentity`]
-    #[derive(Debug, Clone, Eq, PartialEq, derive_more::Deref, derive_more::Into)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash, Deftly)]
+    #[derive_deftly(Transparent)]
     #[allow(clippy::exhaustive_structs)]
     pub struct Fingerprint(pub RsaIdentity);
 
     /// A base64-encoded fingerprint (unpadded)
     ///
     /// Netdoc parsing adapter for [`RsaIdentity`]
-    #[derive(Debug, Clone, Eq, PartialEq, derive_more::Deref, derive_more::Into)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash, Deftly)]
+    #[derive_deftly(Transparent)]
     #[allow(clippy::exhaustive_structs)]
     pub struct Base64Fingerprint(pub RsaIdentity);
 
     /// A "long identity" in the format used for Family members.
     ///
     /// Netdoc parsing adapter for [`RsaIdentity`]
-    #[derive(Debug, Clone, Eq, PartialEq, derive_more::Deref, derive_more::Into)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash, Deftly)]
+    #[derive_deftly(Transparent)]
     #[allow(clippy::exhaustive_structs)]
     pub(crate) struct LongIdent(pub RsaIdentity);
 
@@ -955,7 +1440,7 @@ mod fingerprint {
         })
     }
 
-    impl std::str::FromStr for SpFingerprint {
+    impl FromStr for SpFingerprint {
         type Err = Error;
         fn from_str(s: &str) -> Result<SpFingerprint> {
             let ident = parse_hex_ident(&s.replace(' ', "")).map_err(|e| e.at_pos(Pos::at(s)))?;
@@ -963,7 +1448,36 @@ mod fingerprint {
         }
     }
 
-    impl std::str::FromStr for Base64Fingerprint {
+    impl ItemArgumentParseable for SpFingerprint {
+        fn from_args<'s>(
+            args: &mut ArgumentStream<'s>,
+        ) -> std::result::Result<Self, ArgumentError> {
+            // Take the first 10 arguments because an SpFingerprint consists of
+            // 10 x 4 = 40 characters.
+            let fp = args.take(10).collect::<Vec<_>>();
+
+            // Less than 10 means missing arguments.
+            if fp.len() < 10 {
+                return Err(ArgumentError::Missing);
+            }
+
+            // More than 10 should be impossible due to .take(10).
+            debug_assert_eq!(fp.len(), 10);
+
+            // All arguments must be 4 characters long.
+            if fp.iter().any(|arg| arg.len() != 4) {
+                return Err(ArgumentError::Invalid);
+            }
+
+            // Convert it to a string without spaces, RsaIdentity::from_hex will
+            // verify the rest.
+            Ok(Self(
+                RsaIdentity::from_hex(fp.join("").as_str()).ok_or(ArgumentError::Invalid)?,
+            ))
+        }
+    }
+
+    impl FromStr for Base64Fingerprint {
         type Err = Error;
         fn from_str(s: &str) -> Result<Base64Fingerprint> {
             let b = s.parse::<super::B64>()?;
@@ -982,7 +1496,7 @@ mod fingerprint {
         }
     }
 
-    impl std::str::FromStr for Fingerprint {
+    impl FromStr for Fingerprint {
         type Err = Error;
         fn from_str(s: &str) -> Result<Fingerprint> {
             let ident = parse_hex_ident(s).map_err(|e| e.at_pos(Pos::at(s)))?;
@@ -996,7 +1510,7 @@ mod fingerprint {
         }
     }
 
-    impl std::str::FromStr for LongIdent {
+    impl FromStr for LongIdent {
         type Err = Error;
         fn from_str(mut s: &str) -> Result<LongIdent> {
             if s.starts_with('$') {
@@ -1010,13 +1524,20 @@ mod fingerprint {
         }
     }
 
+    impl Display for LongIdent {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "${}", self.0.as_hex_upper())
+        }
+    }
+
     impl crate::NormalItemArgument for Fingerprint {}
     impl crate::NormalItemArgument for Base64Fingerprint {}
+    impl crate::NormalItemArgument for LongIdent {}
 }
 
 /// A type for relay nicknames
 mod nickname {
-    use crate::{Error, NetdocErrorKind as EK, Pos, Result};
+    use super::*;
     use tinystr::TinyAsciiStr;
 
     /// This is a strange limit, but it comes from Tor.
@@ -1030,8 +1551,14 @@ mod nickname {
     ///
     /// Nicknames are required to be ASCII, alphanumeric, and between 1 and 19
     /// characters inclusive.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct Nickname(tinystr::TinyAsciiStr<MAX_NICKNAME_LEN>);
+
+    /// Invalid nickname
+    #[derive(Clone, Debug, thiserror::Error)]
+    #[error("invalid nickname")]
+    #[non_exhaustive]
+    pub struct InvalidNickname {}
 
     impl Nickname {
         /// Return a view of this nickname as a string slice.
@@ -1040,33 +1567,470 @@ mod nickname {
         }
     }
 
-    impl std::fmt::Display for Nickname {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl Display for Nickname {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             self.as_str().fmt(f)
         }
     }
 
-    impl std::str::FromStr for Nickname {
-        type Err = Error;
+    impl FromStr for Nickname {
+        type Err = InvalidNickname;
 
-        fn from_str(s: &str) -> Result<Self> {
-            let tiny = TinyAsciiStr::from_str(s).map_err(|_| {
-                EK::BadArgument
-                    .at_pos(Pos::at(s))
-                    .with_msg("Invalid nickname")
-            })?;
+        fn from_str(s: &str) -> Result<Self, InvalidNickname> {
+            let tiny = TinyAsciiStr::from_str(s).map_err(|_| InvalidNickname {})?;
 
             if tiny.is_ascii_alphanumeric() && !tiny.is_empty() {
                 Ok(Nickname(tiny))
             } else {
-                Err(EK::BadArgument
-                    .at_pos(Pos::at(s))
-                    .with_msg("Invalid nickname"))
+                Err(InvalidNickname {})
             }
         }
     }
 
     impl crate::NormalItemArgument for Nickname {}
+}
+
+/// Hostnames etc.
+//
+// TODO maybe move all this to tor-basic-utils
+mod hostname {
+    use super::*;
+    use std::net::IpAddr;
+
+    /// Internet hostname
+    ///
+    /// Valid according to Internet RFC1123,
+    /// with the additional restriction that there must be at least one letter.
+    /// (That means that anything accepted as a `Hostname`
+    /// won't be accepted as an address even by very relaxed IPv4 address parsers.
+    /// We presume that no TLD will ever exist that is entirely decimal digits.)
+    ///
+    /// Preserves case.
+    ///
+    /// Reserved hostname such as `example.come`, `tor.invalid` and `localhost`
+    /// are accepted.
+    ///
+    /// # Comparisons; `PartialEq`, `Eq`
+    ///
+    /// The `PartialEq` and `Eq` implementations are case sensitive,
+    /// even though internet hostnames are not case-sensitive.
+    ///
+    /// Comparing hostnames for identical apparent meaning is complicated.
+    /// If you need to do that, you (may) need to engage with punycode (IDN),
+    /// as well as arranging for a case-insensitive comparison.
+    ///
+    /// And of course, hostnames reference to the DNS.
+    /// A single host may have multiple names and it may change its address.
+    #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)] //
+    #[derive(derive_more::Into, derive_more::Deref, derive_more::AsRef, derive_more::Display)]
+    pub struct Hostname(String);
+
+    /// Hostname, or IP address (v4 or v6)
+    ///
+    /// Preserves hostname case.  See [`Hostname`].
+    ///
+    /// Reserved hostnames and addresses (eg `0.0.0.0` or `tor.invalid`) are accepted.
+    ///
+    /// IPv6 addresses are represented *without* surrounding `[ ]`.
+    ///
+    /// Therefore, you cannot make this into a host-and-port by appending `:port`.
+    /// To process name-and-port is complex.  `SRV` (or `MX`) records might be involved.
+    //
+    // This type is called `InternetHost` to emphasise that it is primarily for
+    // hosts on the public internet and, unlike arti-client's `Host`,
+    // has special handling of `.onion` addresses.
+    #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)] //
+    #[derive(derive_more::Display)]
+    #[allow(clippy::exhaustive_enums)]
+    // TODO derive .as_hostname(), .as_ip_addr(), From<Hostname>, From<IpAddr>
+    pub enum InternetHost {
+        /// Hostname
+        #[display("{_0}")]
+        Name(Hostname),
+        /// IP address (v4 or v6)
+        #[display("{_0}")]
+        IpAddr(IpAddr),
+    }
+
+    /// Invalid hostname
+    #[derive(Clone, Debug, thiserror::Error)]
+    #[error("invalid hostname")]
+    #[non_exhaustive]
+    pub struct InvalidHostname {}
+
+    /// Invalid Internet hostname/address
+    #[derive(Clone, Debug, thiserror::Error)]
+    #[error("invalid: not a valid hostname, nor a valid IPv4 or IPv6 address")]
+    #[non_exhaustive]
+    pub struct InvalidInternetHost {}
+
+    impl Hostname {
+        /// Obtain this hostname as a `str`
+        pub fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    impl AsRef<str> for Hostname {
+        fn as_ref(&self) -> &str {
+            self.as_str()
+        }
+    }
+
+    impl TryFrom<String> for Hostname {
+        type Error = InvalidHostname;
+        fn try_from(s: String) -> Result<Self, InvalidHostname> {
+            if hostname_validator::is_valid(&s) &&
+                // Reject hostnames that consist only of decimal digits and full stops.
+                // Some of those are accepted by some old IPv4 address parsers.
+                // If any fool makes a TLD that is only digits, they deserve everything they get.
+                !s.chars().all(|c| c.is_ascii_digit() || c == '.')
+            {
+                Ok(Hostname(s))
+            } else {
+                Err(InvalidHostname {})
+            }
+        }
+    }
+
+    impl FromStr for Hostname {
+        type Err = InvalidHostname;
+        fn from_str(s: &str) -> Result<Self, InvalidHostname> {
+            s.to_owned().try_into()
+        }
+    }
+
+    impl FromStr for InternetHost {
+        type Err = InvalidInternetHost;
+        fn from_str(s: &str) -> Result<Self, InvalidInternetHost> {
+            if let Ok(y) = s.parse() {
+                Ok(InternetHost::IpAddr(y))
+            } else if let Ok(y) = s.parse() {
+                Ok(InternetHost::Name(y))
+            } else {
+                // For simplicity, we  discard the errors from parsing the options
+                // rather than trying to reproduce them.  Why something isn't a valid
+                // address or hostname ought to be fairly obvious.
+                Err(InvalidInternetHost {})
+            }
+        }
+    }
+
+    impl NormalItemArgument for Hostname {}
+    impl NormalItemArgument for InternetHost {}
+}
+
+/// Contact information of the relay operator.
+mod contact_info {
+    use super::*;
+
+    /// `contact` item: contact information (eg of a relay dirauth operator)
+    ///
+    /// <https://spec.torproject.org/dir-spec/server-descriptor-format.html#item:contact>
+    ///
+    /// Also used for authority entries in netstatus documents.
+    #[derive(Clone, Debug, PartialEq, Eq, Deftly)] //
+    #[derive(derive_more::Into, derive_more::AsRef, derive_more::Deref, derive_more::Display)]
+    #[derive_deftly(ItemValueEncodable)]
+    #[non_exhaustive]
+    pub struct ContactInfo(#[deftly(netdoc(rest))] String);
+
+    /// Contact information (`contact` item value) has invalid syntax
+    #[derive(Clone, Debug, thiserror::Error)]
+    #[error("contact information (`contact` item value) has invalid syntax")]
+    #[non_exhaustive]
+    pub struct InvalidContactInfo {}
+
+    impl FromStr for ContactInfo {
+        type Err = InvalidContactInfo;
+
+        fn from_str(s: &str) -> Result<Self, InvalidContactInfo> {
+            // TODO torspec#396 we should probably impose more restrictions
+            // For now we forbid `\n` and initial whitespace, which is enough to ensure
+            // that all values will roundtrip unchanged through netdoc encoding and parsing.
+            if s.contains('\n') || s.starts_with(char::is_whitespace) {
+                Err(InvalidContactInfo {})
+            } else {
+                Ok(ContactInfo(s.to_owned()))
+            }
+        }
+    }
+
+    impl ItemValueParseable for ContactInfo {
+        fn from_unparsed(mut item: UnparsedItem<'_>) -> Result<Self, parse2::ErrorProblem> {
+            item.check_no_object()?;
+            item.args_mut()
+                .into_remaining()
+                .parse()
+                .map_err(|_e| item.args().handle_error("info", ArgumentError::Invalid))
+        }
+    }
+}
+
+/// Types for boolean-like types.
+mod boolean {
+    use std::{fmt::Display, str::FromStr};
+
+    use derive_more::{From, Into};
+
+    use crate::{Error, NetdocErrorKind as EK, NormalItemArgument, Pos};
+
+    /// A boolean that is represented by a `0` (false) or `1` (true).
+    // TODO DIRMIRROR: Derive Transparent
+    #[derive(Clone, Copy, Debug, Default, From, Into)]
+    #[allow(clippy::exhaustive_structs)]
+    pub struct NumericBoolean(pub bool);
+
+    impl FromStr for NumericBoolean {
+        type Err = Error;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            match s {
+                "0" => Ok(Self(false)),
+                "1" => Ok(Self(true)),
+                _ => Err(EK::BadArgument
+                    .at_pos(Pos::at(s))
+                    .with_msg("Invalid numeric boolean")),
+            }
+        }
+    }
+
+    impl Display for NumericBoolean {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", u8::from(self.0))
+        }
+    }
+
+    impl NormalItemArgument for NumericBoolean {}
+}
+
+/// Types for router descriptors.
+pub mod routerdesc {
+    use super::*;
+    use parse2::ErrorProblem as EP;
+    use tor_llcrypto::pk::ed25519;
+
+    /// Version argument found in an `overload-general` item.
+    ///
+    /// <https://spec.torproject.org/dir-spec/server-descriptor-format.html#item:overload-general>
+    #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, strum::EnumString, strum::Display)]
+    #[non_exhaustive]
+    pub enum OverloadGeneralVersion {
+        /// Version 1, currently the only supported and specified one.
+        #[strum(serialize = "1")]
+        V1,
+    }
+
+    impl NormalItemArgument for OverloadGeneralVersion {}
+
+    /// The overload general type found in router descriptors.
+    ///
+    /// <https://spec.torproject.org/dir-spec/server-descriptor-format.html#item:overload-general>
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Deftly)]
+    #[derive_deftly(ItemValueParseable)]
+    #[non_exhaustive]
+    pub struct OverloadGeneral {
+        /// The version of the item.
+        pub version: OverloadGeneralVersion,
+        /// The timestamp since when the relay is overloaded.
+        pub since: Iso8601TimeSp,
+    }
+
+    /// Introduction line of a router descriptor.
+    ///
+    /// <https://spec.torproject.org/dir-spec/server-descriptor-format.html#item:router>
+    #[derive(Clone, Debug, PartialEq, Eq, Deftly)]
+    #[derive_deftly(ItemValueParseable)]
+    #[non_exhaustive]
+    pub struct RouterDescIntroItem {
+        /// A valid router [`Nickname`].
+        pub nickname: Nickname,
+
+        /// An IPv4 address in dotted-squad format.
+        pub address: std::net::Ipv4Addr,
+
+        /// The TCP port of the onion router.
+        pub orport: u16,
+
+        /// Legacy.
+        pub socksport: u16,
+
+        /// Legacy.
+        pub dirport: u16,
+    }
+
+    /// Digest identifying the extra-info document.
+    ///
+    /// <https://spec.torproject.org/dir-spec/server-descriptor-format.html#item:extra-info-digest>
+    #[derive(Clone, Debug, PartialEq, Eq, Deftly)]
+    #[derive_deftly(ItemValueParseable)]
+    #[non_exhaustive]
+    pub struct ExtraInfoDigests {
+        /// Mandatory SHA-1 of the signed data in base 16.
+        pub sha1: FixedB16U<20>,
+
+        /// Optional SHA-256 of the entire extra-info in base 64.
+        pub sha2: Option<FixedB64<32>>,
+    }
+
+    /// Accumulator for router descriptor hash signatures.
+    #[derive(Debug, Clone, Default, Deftly)]
+    #[derive_deftly(AsMutSelf)]
+    #[allow(clippy::exhaustive_structs)]
+    pub struct RouterHashAccu {
+        /// Potentially the SHA-1 for the signature.
+        pub sha1: Option<[u8; 20]>,
+        /// Potentially the SHA-256 for the signature.
+        pub sha256: Option<[u8; 32]>,
+    }
+
+    /// SHA-256 router descriptor signature including magic and the keyword.
+    #[derive(Debug, Clone, PartialEq, Eq, Deftly)]
+    #[derive_deftly(ItemValueEncodable)]
+    #[allow(clippy::exhaustive_structs)]
+    // TODO SPEC is RouterSigEd25519 not a standard-ish kind of signature?
+    // TODO DIRAUTH is RouterSigEd25519 not a standard-ish kind of signature?
+    pub struct RouterSigEd25519(pub ed25519::Signature);
+
+    impl RouterSigEd25519 {
+        /// The magic prefix for hashing this type of signature.
+        const HASH_PREFIX_MAGIC: &str = "Tor router descriptor signature v1";
+
+        /// Calculate the hash for signature
+        ///
+        /// `signature_item_kw_spc` is the keyword *with a trailing space*.
+        /// It's `&[&str]` for the convenience of the two call sites.
+        fn hash(document_sofar: &str, signature_item_kw_spc: &[&str]) -> [u8; 32] {
+            debug_assert!(
+                signature_item_kw_spc
+                    .last()
+                    .expect("signature_item_kw_spc")
+                    .ends_with(" ")
+            );
+            let mut h = tor_llcrypto::d::Sha256::new();
+            h.update(Self::HASH_PREFIX_MAGIC);
+            h.update(document_sofar);
+            for b in signature_item_kw_spc {
+                h.update(b);
+            }
+            h.finalize().into()
+        }
+
+        /// Make a signature during document encoding
+        ///
+        /// `item_keyword` is the keyword for the signature item.
+        ///
+        /// # Example
+        ///
+        /// ```
+        /// use derive_deftly::Deftly;
+        /// use tor_error::Bug;
+        /// use tor_llcrypto::pk::ed25519;
+        /// use tor_netdoc::derive_deftly_template_NetdocEncodable;
+        /// use tor_netdoc::encode::{NetdocEncodable, NetdocEncoder};
+        /// use tor_netdoc::types::routerdesc::RouterSigEd25519;
+        ///
+        /// #[derive(Deftly, Default)]
+        /// #[derive_deftly(NetdocEncodable)]
+        /// pub struct Document {
+        ///     pub document_intro_keyword: (),
+        /// }
+        /// #[derive(Deftly)]
+        /// #[derive_deftly(NetdocEncodable)]
+        /// pub struct DocumentSignatures {
+        ///     pub document_signature: RouterSigEd25519,
+        /// }
+        /// impl Document {
+        ///     pub fn encode_sign(&self, k: &ed25519::Keypair) -> Result<String, Bug> {
+        ///         let mut encoder = NetdocEncoder::new();
+        ///         self.encode_unsigned(&mut encoder)?;
+        ///         let document_signature =
+        ///             RouterSigEd25519::new_sign_netdoc(k, &encoder, "document-signature")?;
+        ///         let sigs = DocumentSignatures { document_signature };
+        ///         sigs.encode_unsigned(&mut encoder)?;
+        ///         let encoded = encoder.finish()?;
+        ///         Ok(encoded)
+        ///     }
+        /// }
+        ///
+        /// # fn main() -> Result<(), anyhow::Error> {
+        /// let k = ed25519::Keypair::generate(&mut tor_basic_utils::test_rng::testing_rng());
+        /// let doc = Document::default();
+        /// let encoded = doc.encode_sign(&k)?;
+        /// assert!(encoded.starts_with(concat!(
+        ///     "document-intro-keyword\n",
+        ///     "document-signature ",
+        /// )));
+        /// # Ok(())
+        /// # }
+        /// ```
+        pub fn new_sign_netdoc(
+            private_key: &ed25519::Keypair,
+            encoder: &NetdocEncoder,
+            item_keyword: &str,
+        ) -> StdResult<Self, Bug> {
+            let signature = private_key
+                .sign(&Self::hash(encoder.text_sofar()?, &[item_keyword, " "]))
+                .to_bytes()
+                .into();
+            Ok(RouterSigEd25519(signature))
+        }
+    }
+
+    impl SignatureItemParseable for RouterSigEd25519 {
+        type HashAccu = RouterHashAccu;
+
+        fn from_unparsed_and_body(
+            mut item: UnparsedItem<'_>,
+            hash_inputs: &SignatureHashInputs<'_>,
+            hash: &mut Self::HashAccu,
+        ) -> Result<Self, EP> {
+            // TODO DIRMIRROR break this out into impl ItemArgumentParseable for Signature
+            let args = item.args_mut();
+            let sig = FixedB64::<64>::from_args(args)
+                .map_err(|e| args.handle_error("router-sig-ed25519", e))?
+                .0;
+            let sig = ed25519::Signature::from(sig);
+            hash.sha256 = Some(Self::hash(
+                hash_inputs.document_sofar,
+                &[hash_inputs.signature_item_kw_spc],
+            ));
+            Ok(Self(sig))
+        }
+    }
+
+    /// SHA-1 router descriptor signature over `router-sig-ed25519`.
+    // TODO DIRMIRROR Is this not the same as RsaSha1Signature ?
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[allow(clippy::exhaustive_structs)]
+    pub struct RouterSignature(pub Vec<u8>);
+
+    impl SignatureItemParseable for RouterSignature {
+        type HashAccu = RouterHashAccu;
+
+        fn from_unparsed_and_body(
+            mut item: UnparsedItem<'_>,
+            hash_inputs: &SignatureHashInputs<'_>,
+            hash: &mut Self::HashAccu,
+        ) -> Result<Self, EP> {
+            // There must be no additonal arguments.
+            let args = item.args_mut();
+            if args.next().is_some() {
+                return Err(EP::UnexpectedArgument {
+                    column: args.prev_arg_column(),
+                });
+            }
+            let obj = item.object().ok_or(EP::MissingObject)?.decode_data()?;
+
+            let mut h = tor_llcrypto::d::Sha1::new();
+            h.update(hash_inputs.document_sofar);
+            h.update(hash_inputs.signature_item_line);
+            h.update("\n");
+            hash.sha1 = Some(h.finalize().into());
+
+            Ok(Self(obj))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1203,10 +2167,22 @@ mod test {
     }
 
     #[test]
-    fn base16() -> Result<()> {
-        assert_eq!("332e313432".parse::<B16>()?.as_bytes(), &b"3.142"[..]);
-        assert_eq!("332E313432".parse::<B16>()?.as_bytes(), &b"3.142"[..]);
-        assert_eq!("332E3134".parse::<B16>()?.as_bytes(), &b"3.14"[..]);
+    fn base16() -> anyhow::Result<()> {
+        let chk = |s: &str, b: &[u8]| -> anyhow::Result<()> {
+            let parsed = s.parse::<B16>()?;
+            assert_eq!(parsed.as_bytes(), b, "{s:?}");
+            assert_eq!(parsed.to_string(), s.to_ascii_lowercase());
+
+            let parsed = s.parse::<B16U>()?;
+            assert_eq!(parsed.as_bytes(), b, "{s:?}");
+            assert_eq!(parsed.to_string(), s.to_ascii_uppercase());
+            Ok(())
+        };
+
+        chk("332e313432", b"3.142")?;
+        chk("332E313432", b"3.142")?;
+        chk("332E3134", b"3.14")?;
+
         assert!("332E313".parse::<B16>().is_err());
         assert!("332G3134".parse::<B16>().is_err());
         Ok(())
@@ -1352,7 +2328,6 @@ mod test {
         assert!(failure.is_err());
     }
 
-    #[cfg(feature = "routerdesc")]
     #[test]
     fn ed_cert() {
         use tor_llcrypto::pk::ed25519::Ed25519Identity;
@@ -1434,7 +2409,7 @@ mod test {
     }
 
     #[test]
-    fn nickname() -> Result<()> {
+    fn nickname() -> anyhow::Result<()> {
         let n: Nickname = "Foo".parse()?;
         assert_eq!(n.as_str(), "Foo");
         assert_eq!(n.to_string(), "Foo");
@@ -1455,5 +2430,188 @@ mod test {
         assert!(other_invalid.parse::<Nickname>().is_err());
 
         Ok(())
+    }
+
+    /// Test for both `Hostname` and `InternetHost`
+    #[test]
+    fn hostname() {
+        use std::net::IpAddr;
+
+        // Test a string that we should treat as a valid hostname.
+        let chk_name = |s: &str| {
+            let n: Hostname = s.parse().expect(s);
+            assert_eq!(n.as_str(), s);
+            assert_eq!(n.to_string(), s);
+            assert_eq!(s.parse::<InternetHost>().expect(s), InternetHost::Name(n));
+        };
+
+        // Test a string that looks like it could be an address or a hostname.
+        // We parse those as addresses.
+        let chk_either = |s: &str| {
+            let h: InternetHost = s.parse().expect(s);
+            let a: IpAddr = s.parse().expect(s);
+            assert_eq!(h, InternetHost::IpAddr(a), "{s:?}");
+            assert_eq!(h.to_string(), a.to_string(), "{s:?}");
+        };
+
+        // Test a string that's an address, and isn't a valid hostname.
+        let chk_addr = |s: &str| {
+            let _: InvalidHostname = s.parse::<Hostname>().expect_err(s);
+            chk_either(s);
+        };
+
+        // Test a string that we should reject.
+        let chk_bad = |s: &str| {
+            let _: InvalidHostname = s.parse::<Hostname>().expect_err(s);
+            let _: InvalidInternetHost = s.parse::<InternetHost>().expect_err(s);
+        };
+
+        chk_name("foo.bar");
+        chk_name("localhost");
+        chk_name("tor.invalid");
+        chk_name("example.com");
+
+        // Unarguably invalid.
+        chk_bad("");
+        chk_bad("foo bar");
+        chk_bad("foo..bar");
+        chk_bad("foo.-bar");
+        chk_bad(" foo.bar ");
+        chk_bad("[::1]");
+
+        // Strings that some IP address parsers accept as addresses,
+        // but which are also valid hostnames according to RFC1123.
+        //
+        // We reject them rather than processing of them as hostnames,
+        // exposing downstream software to possible strangeness.
+        chk_bad("1");
+        chk_bad("127.0.0.023");
+
+        // No-one thinks this is a valid IP address but we reject it as a hostname too,
+        // even though it's syntactically legal per RFC1123, because it's quite bad.
+        chk_bad("1.2.3.4.5");
+
+        chk_either("0.0.0.0");
+        chk_either("127.0.0.1");
+        chk_addr("::");
+        chk_addr("::1");
+        chk_addr("2001:0db8:85a3:0000:0000:8a2e:0370:7334");
+        chk_addr("::ffff:192.0.2.3"); // IPv6-mapped IPv4 address
+    }
+
+    #[test]
+    fn contact_info() -> anyhow::Result<()> {
+        use encode::NetdocEncodable;
+        use parse2::{ParseInput, parse_netdoc};
+
+        const S: &str = "some relay operator";
+        let n: ContactInfo = S.parse()?;
+        assert_eq!(n.as_str(), S);
+        assert_eq!(n.to_string(), S);
+
+        let bad = |s: &str| {
+            let _: InvalidContactInfo = s.parse::<ContactInfo>().unwrap_err();
+        };
+
+        bad(" starts with space");
+        bad("contains\nnewline");
+
+        #[derive(PartialEq, Debug, Deftly)]
+        #[derive_deftly(NetdocParseable, NetdocEncodable)]
+        struct TestDoc {
+            pub intro: (),
+            pub contact: ContactInfo,
+        }
+
+        let roundtrip = |s: &str| -> anyhow::Result<()> {
+            let doc = TestDoc {
+                intro: (),
+                contact: s.parse()?,
+            };
+            let mut enc = NetdocEncoder::new();
+            doc.encode_unsigned(&mut enc)?;
+            let enc = enc.finish()?;
+            let reparsed = parse_netdoc::<TestDoc>(&ParseInput::new(&enc, "<test>"))?;
+            assert_eq!(doc, reparsed);
+            Ok(())
+        };
+
+        roundtrip("normal")?;
+        roundtrip("trailing  white space  ")?;
+        roundtrip("wtf is this allowed in \x03 netdocs\r")?; // TODO torspec#396
+
+        Ok(())
+    }
+
+    /// Round trip test for [`NumericBoolean`] ensuring that `0` is false,
+    /// `1` is true, and other things fail.
+    #[test]
+    fn numeric_boolean() {
+        let chk = |s: &str| {
+            assert_eq!(NumericBoolean::from_str(s).expect(s).to_string(), s);
+        };
+        chk("0");
+        chk("1");
+        // Testing this because it is not a u8.
+        assert!(NumericBoolean::from_str("10000").is_err());
+    }
+
+    /// Test that ensures SpFingerprint matches the 10x4 requirement.
+    #[test]
+    fn sp_fingerprint() {
+        use derive_deftly::Deftly;
+        use tor_llcrypto::pk::rsa::RsaIdentity;
+
+        use crate::parse2::ErrorProblem;
+
+        #[derive(Deftly)]
+        #[derive_deftly(NetdocParseable)]
+        struct Wrapper {
+            #[deftly(netdoc(single_arg))]
+            fingerprint: SpFingerprint,
+        }
+
+        /// Small helper to parse an [`SpFingerprint`].
+        fn parse2(s: &str) -> std::result::Result<SpFingerprint, ErrorProblem> {
+            use crate::parse2::{self, ParseInput};
+
+            let s = format!("fingerprint {s}\n");
+            parse2::parse_netdoc::<Wrapper>(&ParseInput::new(&s, ""))
+                .map(|x| x.fingerprint)
+                .map_err(|x| x.problem)
+        }
+
+        // Test a valid one.
+        assert_eq!(
+            parse2(&vec!["ABAB"; 10].join(" ")).unwrap(),
+            SpFingerprint(RsaIdentity::from_bytes(&[0xAB; 20]).unwrap())
+        );
+
+        // Test a valid one with tail.
+        assert_eq!(
+            parse2(&vec!["ABAB"; 11].join(" ")).unwrap(),
+            SpFingerprint(RsaIdentity::from_bytes(&[0xAB; 20]).unwrap())
+        );
+
+        // Missing argument
+        assert!(matches!(
+            parse2(&vec!["ABAB"; 9].join(" ")).unwrap_err(),
+            ErrorProblem::MissingArgument { .. }
+        ));
+
+        // Invalid argument.
+        // In this case, we have string with a total length of 40 but with
+        // one pair having 6 characters and another one having 2 as a proof
+        // of that.
+        assert!(matches!(
+            parse2("0000 000000 00 0000 0000 0000 0000 0000 0000 0000").unwrap_err(),
+            ErrorProblem::InvalidArgument { .. }
+        ));
+
+        // And of course invalid hex should fail too.
+        assert!(matches!(
+            parse2(&vec!["ZZZZ"; 10].join(" ")).unwrap_err(),
+            ErrorProblem::InvalidArgument { .. }
+        ));
     }
 }

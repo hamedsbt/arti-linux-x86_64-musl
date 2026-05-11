@@ -263,6 +263,7 @@ impl Sub<Timestamp> for Timestamp {
 
     /// Performs a saturating duration_since wrapping to [`Duration::ZERO`].
     fn sub(self, rhs: Timestamp) -> Self::Output {
+        #[allow(unstable_name_collisions)]
         self.0.saturating_duration_since(rhs.0)
     }
 }
@@ -277,6 +278,7 @@ impl FromSql for Timestamp {
 
 impl ToSql for Timestamp {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        #[allow(unstable_name_collisions)]
         Ok(ToSqlOutput::from(
             self.0
                 .saturating_duration_since(SystemTime::UNIX_EPOCH)
@@ -428,6 +430,7 @@ impl ConsensusMeta {
               LEFT JOIN router_descriptor AS server ON cr.unsigned_sha1 = server.unsigned_sha1
             WHERE
               cr.consensus_docid = :docid
+              AND cr.unsigned_sha1 IS NOT NULL
               AND server.unsigned_sha1 IS NULL
             "
         ))?;
@@ -475,6 +478,7 @@ impl ConsensusMeta {
               LEFT JOIN router_extra_info AS extra ON server.extra_unsigned_sha1 = extra.unsigned_sha1
             WHERE
               cr.consensus_docid = :docid
+              AND server.extra_unsigned_sha1 IS NOT NULL
               AND extra.unsigned_sha1 IS NULL
             "
         ))?;
@@ -514,6 +518,7 @@ impl ConsensusMeta {
               LEFT JOIN router_descriptor AS micro ON cr.unsigned_sha2 = micro.unsigned_sha2
             WHERE
               cr.consensus_docid = :docid
+              AND cr.unsigned_sha2 IS NOT NULL
               AND micro.unsigned_sha2 IS NULL
             "
         ))?;
@@ -1126,15 +1131,13 @@ mod test {
                 INSERT INTO consensus_router_descriptor_member
                 (consensus_docid, unsigned_sha1, unsigned_sha2)
                 VALUES
-                (?1, ?2, ?3),
-                (?1, ?4, ?5)
+                (?1, ?2, NULL),
+                (?1, ?3, NULL)
                 "
             ), params![
                 *CONSENSUS_DOCID,
                 Sha1::digest(include_bytes!("../testdata/descriptor1-ns-unsigned")),
-                Sha256::digest(include_bytes!("../testdata/descriptor1-ns-unsigned")),
                 Sha1::digest(include_bytes!("../testdata/descriptor2-ns-unsigned")),
-                Sha256::digest(include_bytes!("../testdata/descriptor2-ns-unsigned")),
             ]).unwrap();
 
             tx.execute(sql!(
@@ -1142,14 +1145,12 @@ mod test {
                 INSERT INTO consensus_router_descriptor_member
                 (consensus_docid, unsigned_sha1, unsigned_sha2)
                 VALUES
-                (?1, ?2, ?3),
-                (?1, ?4, ?5)
+                (?1, NULL, ?2),
+                (?1, NULL, ?3)
                 "
             ), params![
                 *CONSENSUS_MD_DOCID,
-                Sha1::digest(include_bytes!("../testdata/descriptor1-md")),
                 Sha256::digest(include_bytes!("../testdata/descriptor1-md")),
-                Sha1::digest(include_bytes!("../testdata/descriptor2-md")),
                 Sha256::digest(include_bytes!("../testdata/descriptor2-md")),
             ]).unwrap();
 

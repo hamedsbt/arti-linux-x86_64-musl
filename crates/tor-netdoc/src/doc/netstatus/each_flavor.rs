@@ -31,7 +31,7 @@ pub struct Consensus {
     /// The preamble, except for the intro item.
     pub preamble: Preamble,
     /// List of voters whose votes contributed to this consensus.
-    pub voters: Vec<ConsensusVoterInfo>,
+    pub voters: Vec<ConsensusAuthorityEntry>,
     /// A list of routerstatus entries for the relays on the network,
     /// with one entry per relay.
     ///
@@ -113,7 +113,7 @@ impl Consensus {
     /// Ok(None) when we are out of voter-info sections.
     fn take_voterinfo(
         r: &mut NetDocReader<'_, NetstatusKwd>,
-    ) -> Result<Option<ConsensusVoterInfo>> {
+    ) -> Result<Option<ConsensusAuthorityEntry>> {
         use NetstatusKwd::*;
 
         match r.peek() {
@@ -140,7 +140,7 @@ impl Consensus {
         });
 
         let voter_sec = NS_VOTERINFO_RULES_CONSENSUS.parse(&mut p)?;
-        let voter = ConsensusVoterInfo::from_section(&voter_sec)?;
+        let voter = ConsensusAuthorityEntry::from_section(&voter_sec)?;
 
         Ok(Some(voter))
     }
@@ -408,11 +408,13 @@ impl Preamble {
             proto_statuses,
             params,
             voting_delay,
-            consensus_method,
+            consensus_method: (consensus_method,),
             published: NotPresent,
             consensus_methods: NotPresent,
+            known_flags: DocRelayFlags::new_empty_unknown_discarded(),
             shared_rand_previous_value,
             shared_rand_current_value,
+            __non_exhaustive: (),
         };
 
         Ok((flavor, preamble))

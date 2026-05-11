@@ -22,7 +22,7 @@ define_derive_deftly! {
     ///
     ///  * Each field must impl `Default` or be annotated `#[deftly(constructor)]`
     ///
-    ///  * `Thing` should contain `#[doc(hidden)] __non_exhaustive: ()`
+    ///  * `Thing` should contain `#[doc(hidden)] pub __non_exhaustive: ()`
     ///    rather than being `#[non_exhaustive]`.
     ///    (Because struct literal syntax is not available otherwise.)
     ///
@@ -45,7 +45,7 @@ define_derive_deftly! {
     ///    Include this field in `ThingConstructor`.
     ///    The caller must provide a value.
     ///
-    ///  * **`#[deftly(constructor(default = "EXPR"))]`**:
+    ///  * **`#[deftly(constructor(default = EXPR))]`**:
     ///    Instead of `Default::default()`, the default value is EXPR.
     ///    EXPR cannot refer to anything in `ThingConstructor`.
     //     If we want that we would need to invent a feature for it.
@@ -58,7 +58,7 @@ define_derive_deftly! {
     ///
     /// #[derive(Deftly, PartialEq, Debug)]
     /// #[derive_deftly(Constructor)]
-    /// #[allow(clippy::manual_non_exhaustive)]
+    /// #[allow(clippy::exhaustive_structs)]
     /// pub struct Thing {
     ///     /// Required field
     ///     #[deftly(constructor)]
@@ -68,11 +68,11 @@ define_derive_deftly! {
     ///     pub optional: Option<i32>,
     ///
     ///     /// Optional field with fixed default
-    ///     #[deftly(constructor(default = "7"))]
+    ///     #[deftly(constructor(default = 7))]
     ///     pub defaulted: i32,
     ///
     ///     #[doc(hidden)]
-    ///     __non_exhaustive: (),
+    ///     pub __non_exhaustive: (),
     /// }
     ///
     /// let thing = Thing {
@@ -94,7 +94,7 @@ define_derive_deftly! {
     /// ```
     ///
     /// # Note
-    export Constructor for struct, beta_deftly:
+    export Constructor for struct, meta_quoted rigorous, beta_deftly:
 
     ${define CONSTRUCTOR_NAME $<$tname Constructor>}
     ${define CONSTRUCTOR $<$ttype Constructor>}
@@ -103,36 +103,29 @@ define_derive_deftly! {
     ${defcond F_DEFAULT_TRAIT not(fmeta(constructor))}
     ${defcond F_REQUIRED not(any(F_DEFAULT_EXPR, F_DEFAULT_TRAIT))}
 
-    #[doc = ${concat "Constructor (required fields) for " $tname}]
-    ///
-    #[doc = ${concat "See [`" $tname "`]."}]
-    ///
-    /// This constructor struct contains precisely the required fields.
-    #[doc = ${concat "You can make a `" $tname
-              "` out of it with [`.construct()`](" $CONSTRUCTOR_NAME "::construct),"}]
-    /// or the `From` impl,
-    /// and use the result as a basis for further modifications.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    #[doc = ${concat "let " ${snake_case $tname} " = " $tname "{"}]
-    #[doc = ${concat ${for fields {
-        ${if any(fmeta(constructor(default)), not(fmeta(constructor))) {
-            "    " $fname ": /* optional field value */,\n"
-        } else {
-        }}
-    }}}]
-    #[doc = ${concat "    .." $CONSTRUCTOR_NAME " {"}]
-    #[doc = ${concat ${for fields {
-        ${if not(any(fmeta(constructor(default)), not(fmeta(constructor)))) {
-            "        " $fname ": /* required field value */,\n"
-        } else {
-        }}
-    }}}]
-    #[doc = ${concat "    }.construct()"}]
-    #[doc = ${concat "};"}]
-    /// ```
+    $/// Constructor (required fields) for `$tname`
+    $///
+    $/// See [`$tname`].
+    $///
+    $/// This constructor struct contains precisely the required fields.
+    $/// You can make a `$tname` out of it with [`.construct()`]($CONSTRUCTOR_NAME::construct),
+    $/// or the `From` impl,
+    $/// and use the result as a basis for further modifications.
+    $///
+    $/// # Example
+    $///
+    $/// ```rust,ignore
+    $/// let ${snake_case $tname} = $tname {
+  ${for fields { ${when any(fmeta(constructor(default)), not(fmeta(constructor)))}
+    $///     $fname: /* optional field value */,
+  }}
+    $///     ..$CONSTRUCTOR_NAME {
+  ${for fields { ${when not(any(fmeta(constructor(default)), not(fmeta(constructor))))}
+    $///         $fname: /* required field value */,
+  }}
+    $///     }.construct()
+    $/// };
+    $/// ```
     #[allow(clippy::exhaustive_structs)]
     $tvis struct $CONSTRUCTOR_NAME<$tdefgens> where $twheres { $(
         ${when F_REQUIRED}
@@ -142,10 +135,10 @@ define_derive_deftly! {
     ) }
 
     impl<$tgens> $CONSTRUCTOR where $twheres {
-        #[doc = ${concat "Construct a minimal [`" $tname "`]"}]
-        ///
-        #[doc = ${concat "In the returned " $tname ","}]
-        /// optional fields all get the default values.
+        $/// Construct a minimal `$tname`
+        $///
+        $/// In the returned [`$tname`],
+        $/// optional fields all get the default values.
         $tvis fn construct(self) -> $ttype {
             $tname { $(
                 $fname: ${select1
@@ -153,7 +146,7 @@ define_derive_deftly! {
                         self.$fname
                     }
                     F_DEFAULT_TRAIT {
-                        ::std::default::Default::default()
+                        <$ftype as ::std::default::Default>::default()
                     }
                     F_DEFAULT_EXPR {
                         ${fmeta(constructor(default)) as expr}
@@ -212,6 +205,8 @@ define_derive_deftly_module! {
     // where someone leaves a (debug) in where it's not implemented, and we later implement it.
     ${define EMIT_DEBUG_PLACEHOLDER {
         ${if tmeta(netdoc(debug)) {
+            use std::io::Write as _;
+
             // This messing about with std::io::stderr() mirrors netdoc_parseable_derive_debug.
             // (We could use eprintln! #[test] captures eprintln! but not io::stderr.)
             writeln!(
@@ -295,7 +290,7 @@ define_derive_deftly_module! {
     ${defcond T_SIGNATURES false}
 
     // Predicates for the field kinds
-    ${defcond F_INTRO all(not(T_SIGNATURES), approx_equal($findex, 0))}
+    ${defcond F_INTRO approx_equal($findex, 0)}
     ${defcond F_SUBDOC fmeta(netdoc(subdoc))}
     ${defcond F_SIGNATURE T_SIGNATURES} // signatures section documents have only signature fields
 
@@ -339,7 +334,7 @@ define_derive_deftly_module! {
         ///    `#[deftly(netdoc(keyword = STR))]`
         ///    `#[deftly(netdoc(default))]`
         ///    `#[deftly(netdoc(single_arg))]`
-        ///    `#[deftly(netdoc(with = "MODULE"))]`
+        ///    `#[deftly(netdoc(with = MODULE))]`
         ///    `#[deftly(netdoc(flatten))]`
         ///    `#[deftly(netdoc(skip))]`
     }}
@@ -355,7 +350,8 @@ define_derive_deftly_module! {
 
     ${defcond F_REST fmeta(netdoc(rest))}
     ${defcond F_OBJECT fmeta(netdoc(object))}
-    ${defcond F_NORMAL not(any(F_REST, F_OBJECT))}
+    ${defcond F_SKIP fmeta(netdoc(skip))}
+    ${defcond F_NORMAL not(any(F_REST, F_OBJECT, F_SKIP))}
 
     ${defcond T_IS_SIGNATURE tmeta(netdoc(signature))}
 }

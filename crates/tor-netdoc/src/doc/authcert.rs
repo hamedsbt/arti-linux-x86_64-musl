@@ -7,14 +7,20 @@
 //! signing keys to sign votes and consensuses.
 
 use crate::batching_split_before::IteratorExt as _;
+use crate::encode::{Bug, ItemObjectEncodable, NetdocEncodable, NetdocEncoder};
 use crate::parse::keyword::Keyword;
 use crate::parse::parser::{Section, SectionRules};
 use crate::parse::tokenize::{ItemResult, NetDocReader};
-use crate::types::misc::{Fingerprint, Iso8601TimeSp, RsaPublicParse1Helper};
+use crate::parse2::{
+    self, ItemObjectParseable, NetdocUnverified as _, sig_hashes::Sha1WholeKeywordLine,
+};
+use crate::types::misc::{Fingerprint, Iso8601TimeSp, RsaPublicParse1Helper, RsaSha1Signature};
 use crate::util::str::Extent;
 use crate::{NetdocErrorKind as EK, NormalItemArgument, Result};
 
+use tor_basic_utils::impl_debug_hex;
 use tor_checkable::{signed, timed};
+use tor_error::into_internal;
 use tor_llcrypto::pk::rsa;
 use tor_llcrypto::{d, pk, pk::rsa::RsaIdentity};
 
@@ -33,15 +39,9 @@ mod build;
 #[allow(deprecated)]
 pub use build::AuthCertBuilder;
 
-#[cfg(feature = "parse2")]
-use crate::parse2::{
-    self, ItemObjectParseable, SignatureHashInputs, sig_hashes::Sha1WholeKeywordLine,
-};
-
-// TODO DIRAUTH untangle these feature(s)
-#[cfg(all(feature = "parse2", feature = "plain-consensus"))]
+#[cfg(feature = "incomplete")]
 mod encoded;
-#[cfg(all(feature = "parse2", feature = "plain-consensus"))]
+#[cfg(feature = "incomplete")]
 pub use encoded::EncodedAuthCert;
 
 decl_keyword! {
@@ -92,18 +92,16 @@ static AUTHCERT_RULES: LazyLock<SectionRules<AuthCertKwd>> = LazyLock::new(|| {
 /// To make a fresh `AuthCert`, use [`AuthCertConstructor`].
 #[derive(Clone, Debug, Deftly)]
 #[derive_deftly(Constructor)]
-#[cfg_attr(feature = "parse2", derive_deftly(NetdocParseableUnverified))]
-// derive_deftly_adhoc disables unused deftly attribute checking, so we needn't cfg_attr them all
-#[cfg_attr(not(feature = "parse2"), derive_deftly_adhoc)]
+#[derive_deftly(NetdocParseableUnverified, NetdocEncodable)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
-#[allow(clippy::manual_non_exhaustive)]
+#[allow(clippy::exhaustive_structs)]
 pub struct AuthCert {
     /// Intro line
     ///
     /// Currently must be version 3.
     ///
     /// <https://spec.torproject.org/dir-spec/creating-key-certificates.html#item:dir-key-certificate-version>
-    #[deftly(constructor(default = "AuthCertVersion::V3"))]
+    #[deftly(constructor(default = AuthCertVersion::V3))]
     #[deftly(netdoc(single_arg))]
     pub dir_key_certificate_version: AuthCertVersion,
 
@@ -156,7 +154,7 @@ pub struct AuthCert {
 
     #[doc(hidden)]
     #[deftly(netdoc(skip))]
-    __non_exhaustive: (),
+    pub __non_exhaustive: (),
 }
 
 /// Represents the version of an [`AuthCert`].
@@ -447,20 +445,15 @@ impl AuthCert {
 /// As `CrossCert` does not sign a full document, it implements only
 /// `ItemValueParseable`, instead.
 ///
-/// Verification of this signature is done in `AuthCertUnverified::verify_self_signed`,
+/// Verification of this signature is done in `AuthCertUnverified::verify`,
 /// and during parsing by the old parser.
 /// So a `CrossCert` in [`AuthCert::dir_key_crosscert`] in a bare `AuthCert` has been validated.
 //
 // TODO SPEC (Diziet): it is far from clear to me that this cert serves any useful purpose.
 // However, we are far too busy now with rewriting the universe to consider transitioning it away.
 #[derive(Debug, Clone, PartialEq, Eq, Deftly)]
-#[cfg_attr(
-    feature = "parse2",
-    derive_deftly(ItemValueParseable),
-    deftly(netdoc(no_extra_args))
-)]
-// derive_deftly_adhoc disables unused deftly attribute checking, so we needn't cfg_attr them all
-#[cfg_attr(not(feature = "parse2"), derive_deftly_adhoc)]
+#[derive_deftly(ItemValueParseable, ItemValueEncodable)]
+#[deftly(netdoc(no_extra_args))]
 #[non_exhaustive]
 pub struct CrossCert {
     /// The bytes of the signature (base64-decoded).
@@ -486,9 +479,25 @@ pub struct CrossCert {
 /// # Specifications
 ///
 /// <https://spec.torproject.org/dir-spec/creating-key-certificates.html#item:dir-key-crosscert>
-#[derive(Debug, Clone, PartialEq, Eq, derive_more::Deref)]
+#[derive(Clone, PartialEq, Eq, derive_more::Deref)]
 #[non_exhaustive]
 pub struct CrossCertObject(pub Vec<u8>);
+impl_debug_hex! { CrossCertObject . 0 }
+
+impl CrossCert {
+    /// Make a `CrossCert`
+    pub fn new(
+        k_auth_sign_rsa: &rsa::KeyPair,
+        h_kp_auth_id_rsa: &RsaIdentity,
+    ) -> StdResult<Self, Bug> {
+        let signature = k_auth_sign_rsa
+            .sign(h_kp_auth_id_rsa.as_bytes())
+            .map_err(into_internal!("failed to sign cross-cert"))?;
+        Ok(CrossCert {
+            signature: CrossCertObject(signature),
+        })
+    }
+}
 
 /// Signatures for [`AuthCert`]
 ///
@@ -500,42 +509,22 @@ pub struct CrossCertObject(pub Vec<u8>);
 /// * <https://spec.torproject.org/dir-spec/creating-key-certificates.html#item:dir-key-certification>
 /// * <https://spec.torproject.org/dir-spec/netdoc.html#signing>
 #[derive(Debug, Clone, PartialEq, Eq, Deftly)]
-#[cfg_attr(
-    feature = "parse2",
-    derive_deftly(NetdocParseableSignatures),
-    deftly(netdoc(signatures(hashes_accu = "Sha1WholeKeywordLine")))
-)]
+#[derive_deftly(NetdocParseableSignatures, NetdocEncodable)]
+#[deftly(netdoc(signatures(hashes_accu = Sha1WholeKeywordLine)))]
 #[non_exhaustive]
 pub struct AuthCertSignatures {
     /// Contains the actual signature, see [`AuthCertSignatures`].
-    pub dir_key_certification: AuthCertSignature,
+    pub dir_key_certification: RsaSha1Signature,
 }
 
-/// RSA signature for data in [`AuthCert`] and related structures
+/// RSA signature for data in [`AuthCert`]
 ///
 /// <https://spec.torproject.org/dir-spec/netdoc.html#signing>
 ///
-/// # Caveats
-///
-/// This type **MUST NOT** be used for [`AuthCert::dir_key_crosscert`]
-/// because its set of object labels is a strict superset of the object
-/// labels used by this type.
-#[derive(Debug, Clone, PartialEq, Eq, Deftly)]
-#[cfg_attr(
-    feature = "parse2",
-    derive_deftly(ItemValueParseable),
-    deftly(netdoc(no_extra_args, signature(hash_accu = "Sha1WholeKeywordLine")))
-)]
-// derive_deftly_adhoc disables unused deftly attribute checking, so we needn't cfg_attr them all
-#[cfg_attr(not(feature = "parse2"), derive_deftly_adhoc)]
-#[non_exhaustive]
-pub struct AuthCertSignature {
-    /// The bytes of the signature (base64-decoded).
-    #[deftly(netdoc(object(label = "SIGNATURE"), with = "crate::parse2::raw_data_object"))]
-    pub signature: Vec<u8>,
-}
+/// Compatibility type alias for [`RsaSha1Signature`].
+#[deprecated = "use RsaSha1Signature"]
+pub type AuthCertSignature = RsaSha1Signature;
 
-#[cfg(feature = "parse2")]
 impl ItemObjectParseable for CrossCertObject {
     fn check_label(label: &str) -> StdResult<(), parse2::EP> {
         match label {
@@ -546,6 +535,17 @@ impl ItemObjectParseable for CrossCertObject {
 
     fn from_bytes(input: &[u8]) -> StdResult<Self, parse2::EP> {
         Ok(Self(input.to_vec()))
+    }
+}
+
+impl ItemObjectEncodable for CrossCertObject {
+    fn label(&self) -> &str {
+        "ID SIGNATURE"
+    }
+
+    fn write_object_onto(&self, b: &mut Vec<u8>) -> StdResult<(), Bug> {
+        b.extend(&self.0);
+        Ok(())
     }
 }
 
@@ -560,7 +560,6 @@ impl tor_checkable::SelfSigned<timed::TimerangeBound<AuthCert>> for UncheckedAut
     }
 }
 
-#[cfg(feature = "parse2")]
 impl AuthCertUnverified {
     /// Verifies the signature of a [`AuthCert`]
     ///
@@ -579,7 +578,7 @@ impl AuthCertUnverified {
     ///
     /// TODO: Consider whether to try to deduplicate this signature checking
     /// somehow, wrt to [`UncheckedAuthCert`].
-    pub fn verify_self_signed(
+    pub fn verify(
         self,
         v3idents: &[RsaIdentity],
         pre_tolerance: Duration,
@@ -615,6 +614,88 @@ impl AuthCertUnverified {
         )?;
 
         Ok(body)
+    }
+
+    /// Verify the signatures (and check validity times)
+    ///
+    /// The pre and post tolerance (time check allowances) used are both zero.
+    ///
+    /// # Security considerations
+    ///
+    /// The caller must check that the KP_auth_id is correct/relevant.
+    pub fn verify_selfcert(self, now: SystemTime) -> StdResult<AuthCert, parse2::VerifyFailed> {
+        let h_kp_auth_id_rsa = self.inspect_unverified().0.fingerprint.0;
+        self.verify(&[h_kp_auth_id_rsa], Duration::ZERO, Duration::ZERO, now)
+    }
+}
+
+impl AuthCert {
+    /// Make the base for a new `AuthCert`
+    ///
+    /// This contains only the mandatory fields (the ones in `AuthCertConstructor`).
+    /// This method is an alternative to providing a `AuthCertConstructor` value display,
+    /// and is convenient because an authcert contains much recapitulated information.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # fn main() -> Result<(), anyhow::Error> {
+    /// use tor_netdoc::doc::authcert::AuthCert;
+    /// let (k_auth_id_rsa, k_auth_sign_rsa, published, expires) = todo!();
+    /// let authcert = AuthCert {
+    ///     dir_address: Some("192.0.2.17:7000".parse()?),
+    ///     ..AuthCert::new_base(&k_auth_id_rsa, &k_auth_sign_rsa, published, expires)?
+    /// };
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn new_base(
+        k_auth_id_rsa: &rsa::KeyPair,
+        k_auth_sign_rsa: &rsa::KeyPair,
+        published: SystemTime,
+        expires: SystemTime,
+    ) -> StdResult<Self, Bug> {
+        let fingerprint = k_auth_id_rsa.to_public_key().to_rsa_identity();
+        let dir_key_crosscert = CrossCert::new(k_auth_sign_rsa, &fingerprint)?;
+
+        let base = AuthCertConstructor {
+            fingerprint: fingerprint.into(),
+            dir_key_published: published.into(),
+            dir_key_expires: expires.into(),
+            dir_identity_key: k_auth_id_rsa.to_public_key(),
+            dir_signing_key: k_auth_sign_rsa.to_public_key(),
+            dir_key_crosscert,
+        }
+        .construct();
+
+        Ok(base)
+    }
+
+    /// Encode this `AuthCert` and sign it with `k_auth_id_rsa`
+    ///
+    /// Yields the string representation of the signed, encoded, document,
+    /// as an [`EncodedAuthCert`].
+    // TODO these features are quite tangled
+    // `EncodedAuthCert` is only available with `parse2` and `plain-consensus`
+    #[cfg(feature = "incomplete")] // Needs EncodedAuthCert
+    pub fn encode_sign(&self, k_auth_id_rsa: &rsa::KeyPair) -> StdResult<EncodedAuthCert, Bug> {
+        let mut encoder = NetdocEncoder::new();
+        self.encode_unsigned(&mut encoder)?;
+
+        let signature =
+            RsaSha1Signature::new_sign_netdoc(k_auth_id_rsa, &encoder, "dir-key-certification")?;
+        let sigs = AuthCertSignatures {
+            dir_key_certification: signature,
+        };
+        sigs.encode_unsigned(&mut encoder)?;
+
+        let encoded = encoder.finish()?;
+        // This rechecks the invariants which ought to be true by construction.
+        // That is convenient for the code here, and the perf implications are irrelevant.
+        let encoded = encoded
+            .try_into()
+            .map_err(into_internal!("generated broken authcert"))?;
+        Ok(encoded)
     }
 }
 
@@ -732,14 +813,11 @@ mod test {
         assert_eq!(res.len(), 2);
     }
 
-    #[cfg(feature = "parse2")]
     mod parse2_test {
         use super::{AuthCert, AuthCertUnverified, AuthCertVersion, CrossCert, CrossCertObject};
 
         use std::{
-            fs::File,
-            io::Read,
-            path::Path,
+            net::{Ipv4Addr, SocketAddrV4},
             str::FromStr,
             time::{Duration, SystemTime},
         };
@@ -749,33 +827,79 @@ mod test {
             types::{self, Iso8601TimeSp},
         };
 
-        use base64ct::{Base64, Encoding};
         use derive_deftly::Deftly;
         use tor_llcrypto::pk::rsa::{self, RsaIdentity};
 
-        /// Reads a b64 encoded file and returns its content encoded and decoded.
-        fn read_b64<P: AsRef<Path>>(path: P) -> (String, Vec<u8>) {
-            let mut encoded = String::new();
-            File::open(path)
-                .unwrap()
-                .read_to_string(&mut encoded)
-                .unwrap();
-            let mut decoded = Vec::new();
-            base64ct::Decoder::<Base64>::new_wrapped(encoded.as_bytes(), 64)
-                .unwrap()
-                .decode_to_end(&mut decoded)
-                .unwrap();
+        // === AUTHCERT D190BF3B00E311A9AEB6D62B51980E9B2109BAD1 ===
+        // These values come from testdata2/keys/authority_certificate.
+        const DIR_KEY_PUBLISHED: &str = "2000-01-01 00:00:05";
+        const DIR_KEY_EXPIRES: &str = "2001-01-01 00:00:05";
+        const FINGERPRINT: &str = "D190BF3B00E311A9AEB6D62B51980E9B2109BAD1";
+        const DIR_ADDRESS: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 7100);
+        const DIR_IDENTITY_KEY: &str = "
+-----BEGIN RSA PUBLIC KEY-----
+MIIBigKCAYEAt0rXD+1gYwKFAxrO4uNHQ9dQVUOGx5FxkioYNSct5Z3JU00dTKNJ
+jt4OGkFYwixWwk6KLDOiB+I/q9YIdA1NlQ5R3Hz8jjvFPVl0JQQm2LYzdSzv7/CZ
+U1qq5rYeeoYKx8qMQg4q3WgR251GEnOG+rVqzFSs0oyC+SDfYn9iMt00/pmN3HXf
+wmasY6BescVrYoDbnpkwKATizd4lzx5K8V8aXUXtd8qnYzSyHLlhiO1eufVX07YC
++AVHV7W7qCTY/4I5Sm0dQ9jF/r04JBHnpH+aae48JOjWDCZj9AINi3rCKS8XClGb
+BB/LJidoQAZraQEEtu3Ql1mjdLreeyWfXpfZFvwKuYn44FtQsOT2TVAVNqNF8N4v
+yfwfiPN6FQWlPyMCEB81HerCn03Zi5WgQLGo7PAeO4LFrLrU16DUC5/oJENeHs0T
+27FZQyrlf0rAxiHh7TJKcjLmzeyxCQVQlr2AXXs28gKHV0AQnEcdrVOpTrquSCQQ
+hWBehR+ct4OJAgMBAAE=
+-----END RSA PUBLIC KEY-----
+    ";
+        const DIR_SIGNING_KEY: &str = "
+-----BEGIN RSA PUBLIC KEY-----
+MIIBCgKCAQEAtPF94+bThLI28kn6e+MmUECMMJ5UBlnQ+Mvwn8Zd85awPQTDz5Wu
+13sZDN3nWnhgSuP5q/WDYc5GPPtQdSWBiG1nJA2XLgEHTHf29iGZ+jAoGfIMJvBV
+1xN8baTnsha5LGx5BQ4UqzlUmoaPzwbjehnPd00FgVkpcCvKZu1HU7fGMVwn4MMh
+zuxJTqTgfcuFWTEu0H0ukOFX+51ih6WO3GWYqRiqgU0Q5/Ets8ccCTq7ND9d2u1P
+d7kQzUHbVP0KmYGK4qYntGDfP4g9SmpBoUUHyP3j9en9S6PMYv8m1YFO7M7JKu6Q
+dQZfGTxj9C/0b/jRklgn5JlKAl9eJQvCdwIDAQAB
+-----END RSA PUBLIC KEY-----
+";
+        const DIR_CROSS_CERT_OBJECT: &str = "
+-----BEGIN ID SIGNATURE-----
+NBaPdBNCNMah6cklrALzj0RdHymF/jPGOv9NmeqaXc0uTN06S/BlVM/xTjilu+dj
+sjPuT0BQL4/ZWyZR+R+gJJojKYILSId4IQ1elzRSxpFN+u2u/ZEmS6SR2SwpA05A
+btOYBKAmYkY6rLsTCbXGx3lAH2kAXfcrltCNKZXV6gqW7X379fiOnSId1OWhKPe1
+/1p3pQGZxgb8FOT1kpHxOMRBClF9Ulm3d9fQZr80Wn73gZ2Bp1RXn9c7c/71HD1c
+mzMT023bleZ574az+117yNAr6XbIgqQfzbySzVLPXM8ZN9BrGR40KDZ2638ZJjRu
+8HK5TzuknWlkRv3hCyRX+g==
+-----END ID SIGNATURE-----
+";
+        const AUTHCERT_RAW: &str = include_str!("../../testdata2/keys/authority_certificate");
+        /// A system time in the range of [`DIR_KEY_PUBLISHED`] and [`DIR_KEY_EXPIRES`].
+        ///
+        /// Constructed by ourselves to have a time point we can use for testing
+        /// timestamp verification.
+        const VALID_SYSTEM_TIME: &str = "2000-06-01 00:00:00";
 
-            (encoded, decoded)
+        // === AUTHCERT 0B8997614EC647C1C6B6A044E2B5408F0B823FB0 ===
+        // This values come from ../../testdata2/cached-certs--1
+        // A different authority certificate different from the one above.
+        const ALTERNATIVE_AUTHCERT_RAW: &str = include_str!("../../testdata2/cached-certs--1");
+
+        /// Converts a string in the [`Iso8601TimeSp`] format to [`SystemTime`].
+        ///
+        /// This functions panics in the case the input is malformatted.
+        fn to_system_time(s: &str) -> SystemTime {
+            Iso8601TimeSp::from_str(s).unwrap().0
         }
 
-        /// Converts PEM to DER (without BEGIN and END lines).
-        fn to_der(s: &str) -> Vec<u8> {
-            let mut r = Vec::new();
-            for line in s.lines() {
-                r.extend(Base64::decode_vec(line).unwrap());
-            }
-            r
+        /// Converts a PEM encoded RSA Public key to an [`rsa::PublicKey`].
+        ///
+        /// This function panics in the case the input is malformatted.
+        fn pem_to_rsa_pk(s: &str) -> rsa::PublicKey {
+            rsa::PublicKey::from_der(pem::parse(s).unwrap().contents()).unwrap()
+        }
+
+        /// Converts a hex-encoded RSA identity to an [`RsaIdentity`].
+        ///
+        /// This function panics in the case the input is malformatted.
+        fn to_rsa_id(s: &str) -> RsaIdentity {
+            RsaIdentity::from_hex(s).unwrap()
         }
 
         /// Tests whether a [`DirKeyCrossCert`] can be parsed properly.
@@ -787,7 +911,18 @@ mod test {
                 dir_key_crosscert: CrossCert,
             }
 
-            let (encoded, decoded) = read_b64("testdata2/authcert-longclaw-crosscert-b64");
+            // "Encodes" a DIR_CROSS_CERT_OBJECT by simply removing the lines
+            // indicating the BEGIN and END, as the purpose is to test multiple
+            // labels.
+            let encoded = DIR_CROSS_CERT_OBJECT
+                .lines()
+                .filter(|line| !line.starts_with("-----"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let decoded = pem::parse(DIR_CROSS_CERT_OBJECT)
+                .unwrap()
+                .contents()
+                .to_vec();
 
             // Try with `SIGNATURE`.
             let cert = format!(
@@ -851,37 +986,25 @@ mod test {
 
         #[test]
         fn dir_auth_cert() {
-            // This is longclaw.
-
-            let mut input = String::new();
-            File::open("testdata2/authcert-longclaw-full")
-                .unwrap()
-                .read_to_string(&mut input)
-                .unwrap();
-
             let res =
-                parse2::parse_netdoc::<AuthCertUnverified>(&ParseInput::new(&input, "")).unwrap();
+                parse2::parse_netdoc::<AuthCertUnverified>(&ParseInput::new(AUTHCERT_RAW, ""))
+                    .unwrap();
             assert_eq!(
                 *res.inspect_unverified().0,
                 AuthCert {
                     dir_key_certificate_version: AuthCertVersion::V3,
-                    dir_address: None,
-                    fingerprint: types::Fingerprint(
-                        RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66").unwrap()
-                    ),
-                    dir_key_published: Iso8601TimeSp::from_str("2025-08-17 20:34:03").unwrap(),
-                    dir_key_expires: Iso8601TimeSp::from_str("2026-08-17 20:34:03").unwrap(),
-                    dir_identity_key: rsa::PublicKey::from_der(&to_der(include_str!(
-                        "../../testdata2/authcert-longclaw-id-rsa"
-                    )))
-                    .unwrap(),
-                    dir_signing_key: rsa::PublicKey::from_der(&to_der(include_str!(
-                        "../../testdata2/authcert-longclaw-sign-rsa"
-                    )))
-                    .unwrap(),
+                    dir_address: Some(DIR_ADDRESS),
+                    fingerprint: types::Fingerprint(to_rsa_id(FINGERPRINT)),
+                    dir_key_published: Iso8601TimeSp(to_system_time(DIR_KEY_PUBLISHED)),
+                    dir_key_expires: Iso8601TimeSp(to_system_time(DIR_KEY_EXPIRES)),
+                    dir_identity_key: pem_to_rsa_pk(DIR_IDENTITY_KEY),
+                    dir_signing_key: pem_to_rsa_pk(DIR_SIGNING_KEY),
                     dir_key_crosscert: CrossCert {
                         signature: CrossCertObject(
-                            read_b64("testdata2/authcert-longclaw-crosscert-b64").1
+                            pem::parse(DIR_CROSS_CERT_OBJECT)
+                                .unwrap()
+                                .contents()
+                                .to_vec()
                         )
                     },
                     __non_exhaustive: (),
@@ -891,34 +1014,28 @@ mod test {
 
         #[test]
         fn dir_auth_signature() {
-            let res = parse2::parse_netdoc::<AuthCertUnverified>(&ParseInput::new(
-                include_str!("../../testdata2/authcert-longclaw-full"),
-                "",
-            ))
-            .unwrap();
+            let res =
+                parse2::parse_netdoc::<AuthCertUnverified>(&ParseInput::new(AUTHCERT_RAW, ""))
+                    .unwrap();
 
             // Test a valid signature.
             res.clone()
-                .verify_self_signed(
-                    &[RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66").unwrap()],
+                .verify(
+                    &[to_rsa_id(FINGERPRINT)],
                     Duration::ZERO,
                     Duration::ZERO,
-                    SystemTime::UNIX_EPOCH
-                        .checked_add(Duration::from_secs(1762946693)) // Wed Nov 12 12:24:53 CET 2025
-                        .unwrap(),
+                    to_system_time(VALID_SYSTEM_TIME),
                 )
                 .unwrap();
 
             // Test with an invalid authority.
             assert_eq!(
                 res.clone()
-                    .verify_self_signed(
+                    .verify(
                         &[],
                         Duration::ZERO,
                         Duration::ZERO,
-                        SystemTime::UNIX_EPOCH
-                            .checked_add(Duration::from_secs(1762946693)) // Wed Nov 12 12:24:53 CET 2025
-                            .unwrap(),
+                        to_system_time(VALID_SYSTEM_TIME),
                     )
                     .unwrap_err(),
                 VerifyFailed::InsufficientTrustedSigners
@@ -927,11 +1044,8 @@ mod test {
             // Test a key too far in the future.
             assert_eq!(
                 res.clone()
-                    .verify_self_signed(
-                        &[
-                            RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66")
-                                .unwrap()
-                        ],
+                    .verify(
+                        &[to_rsa_id(FINGERPRINT)],
                         Duration::ZERO,
                         Duration::ZERO,
                         SystemTime::UNIX_EPOCH,
@@ -942,29 +1056,22 @@ mod test {
 
             // Test an almost too new.
             res.clone()
-                .verify_self_signed(
-                    &[RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66").unwrap()],
+                .verify(
+                    &[to_rsa_id(FINGERPRINT)],
                     Duration::ZERO,
                     Duration::ZERO,
-                    SystemTime::UNIX_EPOCH
-                        .checked_add(Duration::from_secs(1755462843)) // 2025-08-17 20:34:03
-                        .unwrap(),
+                    to_system_time(DIR_KEY_PUBLISHED),
                 )
                 .unwrap();
 
             // Now fail when we are 1s below ...
             assert_eq!(
                 res.clone()
-                    .verify_self_signed(
-                        &[
-                            RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66")
-                                .unwrap()
-                        ],
+                    .verify(
+                        &[to_rsa_id(FINGERPRINT)],
                         Duration::ZERO,
                         Duration::ZERO,
-                        SystemTime::UNIX_EPOCH
-                            .checked_add(Duration::from_secs(1755462842)) // 2025-08-17 20:34:02
-                            .unwrap(),
+                        to_system_time(DIR_KEY_PUBLISHED) - Duration::from_secs(1),
                     )
                     .unwrap_err(),
                 VerifyFailed::TooNew
@@ -972,24 +1079,19 @@ mod test {
 
             // ... but succeed again with a clock skew tolerance.
             res.clone()
-                .verify_self_signed(
-                    &[RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66").unwrap()],
+                .verify(
+                    &[to_rsa_id(FINGERPRINT)],
                     Duration::from_secs(1),
                     Duration::ZERO,
-                    SystemTime::UNIX_EPOCH
-                        .checked_add(Duration::from_secs(1755462842)) // 2025-08-17 20:34:02
-                        .unwrap(),
+                    to_system_time(DIR_KEY_PUBLISHED) - Duration::from_secs(1),
                 )
                 .unwrap();
 
             // Test a key too old.
             assert_eq!(
                 res.clone()
-                    .verify_self_signed(
-                        &[
-                            RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66")
-                                .unwrap()
-                        ],
+                    .verify(
+                        &[to_rsa_id(FINGERPRINT)],
                         Duration::ZERO,
                         Duration::ZERO,
                         SystemTime::UNIX_EPOCH
@@ -1002,29 +1104,22 @@ mod test {
 
             // Test an almost too old.
             res.clone()
-                .verify_self_signed(
-                    &[RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66").unwrap()],
+                .verify(
+                    &[to_rsa_id(FINGERPRINT)],
                     Duration::ZERO,
                     Duration::ZERO,
-                    SystemTime::UNIX_EPOCH
-                        .checked_add(Duration::from_secs(1786998843)) // 2026-08-17 20:34:03
-                        .unwrap(),
+                    to_system_time(DIR_KEY_EXPIRES),
                 )
                 .unwrap();
 
             // Now fail when we are 1s above ...
             assert_eq!(
                 res.clone()
-                    .verify_self_signed(
-                        &[
-                            RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66")
-                                .unwrap()
-                        ],
+                    .verify(
+                        &[to_rsa_id(FINGERPRINT)],
                         Duration::ZERO,
                         Duration::ZERO,
-                        SystemTime::UNIX_EPOCH
-                            .checked_add(Duration::from_secs(1786998844)) // 2026-08-17 20:34:04
-                            .unwrap(),
+                        to_system_time(DIR_KEY_EXPIRES) + Duration::from_secs(1),
                     )
                     .unwrap_err(),
                 VerifyFailed::TooOld
@@ -1032,72 +1127,109 @@ mod test {
 
             // ... but succeed again with a clock skew tolerance.
             res.clone()
-                .verify_self_signed(
-                    &[RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66").unwrap()],
+                .verify(
+                    &[to_rsa_id(FINGERPRINT)],
                     Duration::ZERO,
                     Duration::from_secs(1),
-                    SystemTime::UNIX_EPOCH
-                        .checked_add(Duration::from_secs(1786998844)) // 2026-08-17 20:34:04
-                        .unwrap(),
+                    to_system_time(DIR_KEY_EXPIRES) + Duration::from_secs(1),
                 )
                 .unwrap();
 
             // Check with non-matching fingerprint and long-term identity key.
-            let res = parse2::parse_netdoc::<AuthCertUnverified>(&ParseInput::new(
-                include_str!("../../testdata2/authcert-longclaw-full-invalid-id-rsa"),
+            let mut cert =
+                parse2::parse_netdoc::<AuthCertUnverified>(&ParseInput::new(AUTHCERT_RAW, ""))
+                    .unwrap();
+            let alternative_cert = parse2::parse_netdoc::<AuthCertUnverified>(&ParseInput::new(
+                ALTERNATIVE_AUTHCERT_RAW,
                 "",
             ))
             .unwrap();
+            cert.body.dir_identity_key = alternative_cert.body.dir_identity_key.clone();
             assert_eq!(
-                res.verify_self_signed(
-                    &[RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66").unwrap()],
+                cert.verify(
+                    &[to_rsa_id(FINGERPRINT)],
                     Duration::ZERO,
                     Duration::ZERO,
-                    SystemTime::UNIX_EPOCH
-                        .checked_add(Duration::from_secs(1762946693)) // Wed Nov 12 12:24:53 CET 2025
-                        .unwrap(),
+                    to_system_time(VALID_SYSTEM_TIME),
                 )
                 .unwrap_err(),
                 VerifyFailed::Inconsistent
             );
 
             // Check invalid cross-cert.
-            let res = parse2::parse_netdoc::<AuthCertUnverified>(&ParseInput::new(
-                include_str!("../../testdata2/authcert-longclaw-full-invalid-cross"),
-                "",
-            ))
-            .unwrap();
+            let mut cert =
+                parse2::parse_netdoc::<AuthCertUnverified>(&ParseInput::new(AUTHCERT_RAW, ""))
+                    .unwrap();
+            cert.body.dir_key_crosscert = alternative_cert.body.dir_key_crosscert.clone();
             assert_eq!(
-                res.verify_self_signed(
-                    &[RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66").unwrap()],
+                cert.verify(
+                    &[to_rsa_id(FINGERPRINT)],
                     Duration::ZERO,
                     Duration::ZERO,
-                    SystemTime::UNIX_EPOCH
-                        .checked_add(Duration::from_secs(1762946693)) // Wed Nov 12 12:24:53 CET 2025
-                        .unwrap(),
+                    to_system_time(VALID_SYSTEM_TIME),
                 )
                 .unwrap_err(),
                 VerifyFailed::VerifyFailed
             );
 
             // Check outer signature.
-            let res = parse2::parse_netdoc::<AuthCertUnverified>(&ParseInput::new(
-                include_str!("../../testdata2/authcert-longclaw-full-invalid-certification"),
-                "",
-            ))
-            .unwrap();
+            let mut cert =
+                parse2::parse_netdoc::<AuthCertUnverified>(&ParseInput::new(AUTHCERT_RAW, ""))
+                    .unwrap();
+            cert.sigs = alternative_cert.sigs.clone();
             assert_eq!(
-                res.verify_self_signed(
-                    &[RsaIdentity::from_hex("23D15D965BC35114467363C165C4F724B64B4F66").unwrap()],
+                cert.verify(
+                    &[to_rsa_id(FINGERPRINT)],
                     Duration::ZERO,
                     Duration::ZERO,
-                    SystemTime::UNIX_EPOCH
-                        .checked_add(Duration::from_secs(1762946693)) // Wed Nov 12 12:24:53 CET 2025
-                        .unwrap(),
+                    to_system_time(VALID_SYSTEM_TIME),
                 )
                 .unwrap_err(),
                 VerifyFailed::VerifyFailed
             );
+        }
+    }
+
+    #[cfg(feature = "incomplete")]
+    mod encode_test {
+        use super::*;
+        use crate::parse2::{ParseInput, parse_netdoc};
+        use humantime::parse_rfc3339;
+        use std::result::Result;
+        use tor_basic_utils::test_rng;
+
+        #[test]
+        fn roundtrip() -> Result<(), anyhow::Error> {
+            let mut rng = test_rng::testing_rng();
+            let k_auth_id_rsa = rsa::KeyPair::generate(&mut rng)?;
+            let k_auth_sign_rsa = rsa::KeyPair::generate(&mut rng)?;
+
+            let secs = |s| Duration::from_secs(s);
+            let now = parse_rfc3339("1993-01-01T00:00:00Z")?;
+            let published = now - secs(1000);
+            let expires = published + secs(86400);
+            let tolerance = secs(10);
+
+            let input_value = AuthCert {
+                dir_address: Some("192.0.2.17:7000".parse()?),
+                ..AuthCert::new_base(&k_auth_id_rsa, &k_auth_sign_rsa, published, expires)?
+            };
+            dbg!(&input_value);
+
+            let encoded = input_value.encode_sign(&k_auth_id_rsa)?;
+
+            let reparsed_uv: AuthCertUnverified =
+                parse_netdoc(&ParseInput::new(encoded.as_ref(), "<encoded>"))?;
+            let reparsed_value = reparsed_uv.verify(
+                &[k_auth_id_rsa.to_public_key().to_rsa_identity()],
+                tolerance,
+                tolerance,
+                now,
+            )?;
+            dbg!(&reparsed_value);
+
+            assert_eq!(input_value, reparsed_value);
+            Ok(())
         }
     }
 }

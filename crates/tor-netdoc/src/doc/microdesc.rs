@@ -15,7 +15,7 @@
 use crate::parse::keyword::Keyword;
 use crate::parse::parser::SectionRules;
 use crate::parse::tokenize::{ItemResult, NetDocReader};
-use crate::types::family::{RelayFamily, RelayFamilyId};
+use crate::types::family::{RelayFamily, RelayFamilyId, RelayFamilyIds};
 use crate::types::misc::*;
 use crate::types::policy::PortPolicy;
 use crate::util;
@@ -26,12 +26,14 @@ use tor_error::internal;
 use tor_llcrypto::d;
 use tor_llcrypto::pk::{curve25519, ed25519, rsa};
 
+use derive_deftly::Deftly;
 use digest::Digest;
 use std::str::FromStr as _;
 use std::sync::Arc;
 use std::sync::LazyLock;
-
 use std::time;
+
+use crate::parse2::ItemObjectParseable;
 
 #[cfg(feature = "build_docs")]
 mod build;
@@ -56,31 +58,54 @@ pub struct MicrodescAnnotation {
 pub type MdDigest = [u8; DOC_DIGEST_LEN];
 
 /// A single microdescriptor.
-#[derive(Clone, Debug)]
+///
+/// <https://spec.torproject.org/dir-spec/computing-microdescriptors.html>
+#[derive(Clone, Debug, Deftly, PartialEq, Eq)]
+#[derive_deftly(NetdocParseable)]
 #[non_exhaustive]
 pub struct Microdesc {
+    /// The legacy onion key, whose object is optional but whose item serves
+    /// as the intro line for these kind of descriptors.
+    ///
+    /// Let's keep this private for now to prevent interfacing applications
+    /// from generating microdesc's with an onion-key; they are not necessary
+    /// anymore and just waste space.
+    onion_key: OnionKeyIntro,
+
+    /// Public key used for the ntor circuit extension protocol.
+    #[deftly(netdoc(single_arg))]
+    pub ntor_onion_key: Curve25519Public,
+
+    /// Declared family for this relay.
+    #[deftly(netdoc(default))]
+    pub family: Arc<RelayFamily>,
+
+    /// Family identities for this relay.
+    #[deftly(netdoc(default))]
+    pub family_ids: RelayFamilyIds,
+
+    /// List of IPv4 ports to which this relay will exit
+    #[deftly(netdoc(keyword = "p", default))]
+    pub ipv4_policy: Arc<PortPolicy>,
+
+    /// List of IPv6 ports to which this relay will exit
+    #[deftly(netdoc(keyword = "p6", default))]
+    pub ipv6_policy: Arc<PortPolicy>,
+
+    /// Ed25519 identity for this relay
+    // TODO SPEC: Set this to "exactly once".
+    #[deftly(netdoc(keyword = "id", with = "Ed25519IdentityLine"))]
+    pub ed25519_id: Ed25519IdentityLine,
+
+    // addr is obsolete and doesn't go here any more
+    // pr is obsolete and doesn't go here any more.
     /// The SHA256 digest of the text of this microdescriptor.  This
     /// value is used to identify the microdescriptor when downloading
     /// it, and when listing it in a consensus document.
     // TODO: maybe this belongs somewhere else. Once it's used to store
     // correlate the microdesc to a consensus, it's never used again.
+    #[deftly(netdoc(skip))]
     pub sha256: MdDigest,
-    /// Public key used for the ntor circuit extension protocol.
-    pub ntor_onion_key: curve25519::PublicKey,
-    /// Declared family for this relay.
-    pub family: Arc<RelayFamily>,
-    /// List of IPv4 ports to which this relay will exit
-    pub ipv4_policy: Arc<PortPolicy>,
-    /// List of IPv6 ports to which this relay will exit
-    pub ipv6_policy: Arc<PortPolicy>,
-    /// Ed25519 identity for this relay
-    pub ed25519_id: ed25519::Ed25519Identity,
-    /// Family identities for this relay.
-    pub family_ids: Vec<RelayFamilyId>,
-    // addr is obsolete and doesn't go here any more
-    // pr is obsolete and doesn't go here any more.
-    // The legacy "tap" onion-key is obsolete, and though we parse it, we don't
-    // save it.
 }
 
 impl Microdesc {
@@ -106,7 +131,7 @@ impl Microdesc {
     }
     /// Return the ntor onion key for this microdesc
     pub fn ntor_key(&self) -> &curve25519::PublicKey {
-        &self.ntor_onion_key
+        &self.ntor_onion_key.0
     }
     /// Return the ipv4 exit policy for this microdesc
     pub fn ipv4_policy(&self) -> &Arc<PortPolicy> {
@@ -123,13 +148,21 @@ impl Microdesc {
     /// Return the ed25519 identity for this microdesc, if its
     /// Ed25519 identity is well-formed.
     pub fn ed25519_id(&self) -> &ed25519::Ed25519Identity {
-        &self.ed25519_id
+        &self.ed25519_id.pk.0
     }
     /// Return a list of family ids for this microdesc.
     pub fn family_ids(&self) -> &[RelayFamilyId] {
-        &self.family_ids[..]
+        self.family_ids.as_ref()
     }
 }
+
+/// Intro line for a [`Microdesc`].
+///
+/// The object (the onion key) is deprecated and optional, but the item itself
+/// must be present, because it is used to mark the start of the netdoc.
+#[derive(Debug, Clone, Default, Deftly, PartialEq, Eq)]
+#[derive_deftly(ItemValueParseable)]
+struct OnionKeyIntro(#[deftly(netdoc(object))] Option<rsa::PublicKey>);
 
 /// A microdescriptor annotated with additional data
 ///
@@ -296,8 +329,7 @@ impl Microdesc {
         // Ntor onion key
         let ntor_onion_key = body
             .required(NTOR_ONION_KEY)?
-            .parse_arg::<Curve25519Public>(0)?
-            .into();
+            .parse_arg::<Curve25519Public>(0)?;
 
         // family
         //
@@ -316,7 +348,7 @@ impl Microdesc {
             .unwrap_or("")
             .split_ascii_whitespace()
             .map(RelayFamilyId::from_str)
-            .collect::<Result<_>>()?;
+            .collect::<Result<RelayFamilyIds>>()?;
 
         // exit policies.
         let ipv4_policy = body
@@ -338,7 +370,10 @@ impl Microdesc {
                 None => {
                     return Err(EK::MissingToken.with_msg("id ed25519"));
                 }
-                Some(tok) => tok.parse_arg::<Ed25519Public>(1)?.into(),
+                Some(tok) => Ed25519IdentityLine {
+                    alg: Ed25519AlgorithmString::Ed25519,
+                    pk: tok.parse_arg::<Ed25519Public>(1)?,
+                },
             }
         };
 
@@ -359,6 +394,7 @@ impl Microdesc {
         let location = Extent::new(s, text);
 
         let md = Microdesc {
+            onion_key: Default::default(),
             sha256,
             ntor_onion_key,
             family,
@@ -558,7 +594,7 @@ mod test {
         assert_eq!(mds.len(), 2);
         let md0 = mds[0].md();
         let md1 = mds[1].md();
-        assert_eq!(md0.family_ids().len(), 0);
+        assert!(md0.family_ids().is_empty());
         assert_eq!(
             md1.family_ids(),
             &[
@@ -613,5 +649,93 @@ mod test {
         assert!(res[1].is_ok());
         assert!(res[2].is_err());
         Ok(())
+    }
+
+    /// Checks whether parse2 works on [`Microdesc`].
+    ///
+    /// Certain values such as public keys are hardcoded and can be simply
+    /// replaced by a copy and paste in the case one replaces the testdata2
+    /// vector's in the future.
+    #[test]
+    fn parse2() {
+        use tor_llcrypto::pk::ed25519::Ed25519Identity;
+
+        use crate::parse2;
+
+        let md = include_str!("../../testdata2/cached-microdescs.new");
+        let mds = parse2::parse_netdoc_multiple::<Microdesc>(&parse2::ParseInput::new(
+            md,
+            "../../testdata2/cached-microdescs.new",
+        ))
+        .unwrap();
+
+        assert_eq!(mds.len(), 7);
+        assert_eq!(
+            mds[0],
+            Microdesc {
+                onion_key: OnionKeyIntro(rsa::PublicKey::from_der(
+                    pem::parse(
+                        "
+-----BEGIN RSA PUBLIC KEY-----
+MIGJAoGBANF8Zgxp8amY1esYdPj2Ada1ORiVB/A4sgKLQ5ij/wsasO3yjjLcvHRB
+UJ0mAQWql/nauvjnKUeZFcGm3t7q0v3F9uUsOGTAZ/IKh31UQAm5OS/TJyf8IHky
+Yl0wCKpUZFHs5CHsajLSfXZKHkwfqRXFEJu9aMtmQdQFfqE9JOJHAgMBAAE=
+-----END RSA PUBLIC KEY-----
+                        "
+                    )
+                    .unwrap()
+                    .contents()
+                )),
+                sha256: [0; 32],
+                ntor_onion_key: curve25519::PublicKey::from(<[u8; 32]>::from(
+                    FixedB64::<32>::from_str("I1S8JfcqPPHWVTxfjq/eGmGiu/OtR+fF0Z86Ge1mq3s")
+                        .unwrap()
+                ))
+                .into(),
+                family: Default::default(),
+                ipv4_policy: Default::default(),
+                ipv6_policy: Default::default(),
+                ed25519_id: Ed25519Identity::from(<[u8; 32]>::from(
+                    FixedB64::<32>::from_str("yhO6nETO5AUdvJbLgPnw4mFjozGXWMCqOp30nY6nM8E")
+                        .unwrap()
+                ))
+                .into(),
+                family_ids: Default::default(),
+            }
+        );
+    }
+
+    /// Manual test for happy families.
+    // TODO: This should be included in testdata2/ but that would require the
+    // chutney/shadow integration test to actually do families at all.
+    #[test]
+    fn parse2_happy_family() {
+        use tor_llcrypto::pk::ed25519::Ed25519Identity;
+
+        use crate::parse2::{self, ParseInput};
+        use std::iter;
+
+        // A microdescriptor taken from the wild containing happy families.
+        const MICRODESC: &str = "\
+onion-key
+-----BEGIN RSA PUBLIC KEY-----
+MIGJAoGBAMk57F7qGHVadBJ6m4028w13I1Qk67Ee0JU88w7NObKBph3DQYjgYs4e
+eUdiW4Gdsx8w/xOuK0foCo0O8Iqq5MXtVcpUP/N+5uB7SVvGdJFsKw21KdIc6v8g
+ACZAijw5ZPOdhLbyLQyFHNV8zXUov1dlx/Fb9M3lPMVevnDbuKM5AgMBAAE=
+-----END RSA PUBLIC KEY-----
+ntor-onion-key fhhP23UKD4L2jehA5gopAo5b6NSoB+kZN5Q4ULv3Zww
+family $4CFFD403DAB89A689F3FDB80B5366E46D879E736 $4D6C1486939A42D7FFE69BCD9F3FDAA86C743433 $73955E6A69BA5E0827F48206CAD78C045BBE8873 $8DBA9ADCA5B3A3AB6D2B4F88AC2F96614D33DAB3 $B29E3E30443F897F48B86765F1BC1DB917F5DF46 $CD642E7E722979580B6D631697772C0B72BCF25C $D9E7B6A73C8278274081B77D373ECCE4552E75FB $F2515315FE0DB7456194CABC503B526B49951415
+family-ids ed25519:b54cKgML0ykRyhdIRcq1xtW19iEVsMYnGNbdY+vvcas
+id ed25519 /MU/FVKRGcZAy8XFnzLS6Dgcg6s1VpYeFjkwb6+CVhw
+";
+
+        let md = parse2::parse_netdoc::<Microdesc>(&ParseInput::new(MICRODESC, "")).unwrap();
+        assert_eq!(
+            md.family_ids,
+            RelayFamilyIds::from_iter(iter::once(RelayFamilyId::Ed25519(
+                Ed25519Identity::from_base64("b54cKgML0ykRyhdIRcq1xtW19iEVsMYnGNbdY+vvcas")
+                    .unwrap()
+            )))
+        );
     }
 }

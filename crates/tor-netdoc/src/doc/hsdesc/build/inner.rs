@@ -172,7 +172,7 @@ impl<'a> NetdocBuilder for HsDescInner<'a> {
 
             // For compatibility with c-tor, the introduction point authentication key is signed by
             // the descriptor signing key.
-            let signed_auth_key = Ed25519Cert::constructor()
+            let signed_auth_key = Ed25519Cert::builder()
                 .cert_type(CertType::HS_IP_V_SIGNING)
                 .expiration(intro_auth_key_cert_expiry)
                 .signing_key(ed25519::Ed25519Identity::from(hs_desc_sign.verifying_key()))
@@ -182,7 +182,7 @@ impl<'a> NetdocBuilder for HsDescInner<'a> {
 
             encoder
                 .item(AUTH_KEY)
-                .object("ED25519 CERT", signed_auth_key.as_ref());
+                .object_bytes("ED25519 CERT", signed_auth_key.as_ref());
 
             // "The key is a base64 encoded curve25519 public key used to encrypt the introduction
             // request to service. (`KP_hss_ntor`)"
@@ -213,7 +213,7 @@ impl<'a> NetdocBuilder for HsDescInner<'a> {
 
             // For compatibility with c-tor, the encryption key is signed with the descriptor
             // signing key.
-            let signed_enc_key = Ed25519Cert::constructor()
+            let signed_enc_key = Ed25519Cert::builder()
                 .cert_type(CertType::HS_IP_CC_SIGNING)
                 .expiration(intro_enc_key_cert_expiry)
                 .signing_key(ed25519::Ed25519Identity::from(hs_desc_sign.verifying_key()))
@@ -227,7 +227,7 @@ impl<'a> NetdocBuilder for HsDescInner<'a> {
 
             encoder
                 .item(ENC_KEY_CERT)
-                .object("ED25519 CERT", signed_enc_key.as_ref());
+                .object_bytes("ED25519 CERT", signed_enc_key.as_ref());
         }
 
         encoder.finish().map_err(|e| e.into())

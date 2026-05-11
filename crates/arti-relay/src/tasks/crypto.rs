@@ -12,19 +12,22 @@ use tor_error::internal;
 use tor_key_forge::ToEncodableCert;
 use tor_keymgr::{
     CertSpecifierPattern, KeyCertificateSpecifier, KeyMgr, KeyPath, KeySpecifier,
-    KeySpecifierPattern, Keygen, KeystoreSelector, ToEncodableKey,
+    KeySpecifierPattern, Keygen, KeystoreEntry, KeystoreSelector, ToEncodableKey,
 };
-use tor_proto::RelayIdentities;
-use tor_relay_crypto::{
-    RelaySigningKeyCert, gen_link_cert, gen_signing_cert, gen_tls_cert,
-    pk::{
-        RelayIdentityKeypair, RelayIdentityKeypairSpecifier, RelayIdentityRsaKeypair,
-        RelayIdentityRsaKeypairSpecifier, RelayLinkSigningKeypair,
-        RelayLinkSigningKeypairSpecifier, RelayLinkSigningKeypairSpecifierPattern,
-        RelaySigningKeyCertSpecifier, RelaySigningKeyCertSpecifierPattern, RelaySigningKeypair,
-        RelaySigningKeypairSpecifier, RelaySigningKeypairSpecifierPattern,
-        RelaySigningPublicKeySpecifier, Timestamp,
-    },
+use tor_proto::RelayChannelAuthMaterial;
+use tor_proto::relay::CreateRequestHandler;
+use tor_relay_crypto::{RelaySigningKeyCert, gen_link_cert, gen_signing_cert, gen_tls_cert};
+
+use crate::keys::{
+    RelayIdentityKeypairSpecifier, RelayIdentityRsaKeypairSpecifier,
+    RelayLinkSigningKeypairSpecifier, RelayLinkSigningKeypairSpecifierPattern,
+    RelayNtorKeypairSpecifier, RelayNtorKeypairSpecifierPattern, RelaySigningKeyCertSpecifier,
+    RelaySigningKeyCertSpecifierPattern, RelaySigningKeypairSpecifier,
+    RelaySigningKeypairSpecifierPattern, RelaySigningPublicKeySpecifier, Timestamp,
+};
+use tor_relay_crypto::pk::{
+    RelayIdentityKeypair, RelayIdentityRsaKeypair, RelayLinkSigningKeypair, RelayNtorKeypair,
+    RelayNtorKeys, RelaySigningKeypair,
 };
 use tor_rtcompat::{Runtime, SleepProviderExt};
 
@@ -35,19 +38,60 @@ use tor_rtcompat::{Runtime, SleepProviderExt};
 /// it should be plenty to make it happen even if hiccups happen.
 const KEY_ROTATION_EXPIRE_BUFFER: Duration = Duration::from_secs(3 * 60 * 60);
 
-/// Key lifefime duration of 2 days
-const KEY_DURATION_2DAYS: Duration = Duration::from_secs(2 * 24 * 60 * 60);
-/// Key lifefime duration of 30 days
-const KEY_DURATION_30DAYS: Duration = Duration::from_secs(30 * 24 * 60 * 60);
-/// Key lifefime duration of 6 months
-const KEY_DURATION_6MONTHS: Duration = Duration::from_secs(6 * 30 * 24 * 60 * 60);
+// The following expiry durations have been taken from C-tor.
 
-/// Build a fresh [`RelayIdentities`] object using a [`KeyMgr`].
+/// Lifetime of the link authentication key (KP_link_ed) certificate.
+const LINK_CERT_LIFETIME: Duration = Duration::from_secs(2 * 24 * 60 * 60);
+/// Lifetime of the relay signing key (KP_relaysign_ed) certificate.
+const SIGNING_KEY_CERT_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// Lifetime of the RSA identity key certificate.
+const RSA_CROSSCERT_LIFETIME: Duration = Duration::from_secs(6 * 30 * 24 * 60 * 60);
+/// Lifetime of the ntor circuit extension key (KP_ntor).
 ///
-/// Every single certificate is generated in this function.
+// TODO(relay): we should be using the "onion-key-rotation-days" consensus param
+// instead of this hard-coded value.
+const NTOR_KEY_LIFETIME: Duration = Duration::from_secs(28 * 24 * 60 * 60);
+
+/// Default grace period for acceptance of an onion key (KP_ntor).
 ///
-/// This function assumes that all required keys are in the keymgr.
-fn build_proto_identities(now: SystemTime, keymgr: &KeyMgr) -> anyhow::Result<RelayIdentities> {
+/// This represents the amount of time we are still willing to use this key
+/// after it expires.
+///
+// TODO(relay): we should be using the "onion-key-grace-period-days" consensus param
+// instead of this hard-coded value.
+const NTOR_KEY_GRACE_PERIOD: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// The result of an action that affects the relay keys in the keystore.
+#[derive(Copy, Clone, Debug)]
+struct KeyChange {
+    /// Whether the chan auth material has changed.
+    chan_auth: bool,
+    /// Whether the ntor keys have changed.
+    ntor: bool,
+}
+
+impl KeyChange {
+    /// The combined result of two [`KeyChange`]s.
+    fn or(&self, other: &KeyChange) -> KeyChange {
+        KeyChange {
+            chan_auth: self.chan_auth || other.chan_auth,
+            ntor: self.ntor || other.ntor,
+        }
+    }
+}
+
+/// Build a fresh [`RelayChannelAuthMaterial`] object using a [`KeyMgr`].
+///
+/// The link cert and TLS certs are created in this function.
+/// The signing key certificate is retrieved from the keymgr.
+///
+/// This function assumes that all required keys,
+/// as well as the signing key certificate,
+/// are already in the keystore.
+fn build_proto_relay_auth_material(
+    now: SystemTime,
+    keymgr: &KeyMgr,
+) -> anyhow::Result<RelayChannelAuthMaterial> {
     let mut rng = tor_llcrypto::rng::CautiousRng;
 
     // Get the identity keypairs.
@@ -79,6 +123,16 @@ fn build_proto_identities(now: SystemTime, keymgr: &KeyMgr) -> anyhow::Result<Re
         )
         .context("Failed to get signing key from key manager")?
         .context("Missing signing key")?;
+    let cert_id_sign_ed: RelaySigningKeyCert = keymgr
+        .get_cert_entry::<RelaySigningKeyCertSpecifier, _, _>(
+            keymgr
+                .list_matching(&RelaySigningKeyCertSpecifierPattern::new_any().arti_pattern()?)?
+                .first()
+                .context("No store entry for signing key cert")?,
+            &RelayIdentityKeypairSpecifier::new(),
+        )
+        .context("Failed to get signing key cert from key manager")?
+        .context("Missing signing key cert")?;
 
     // TLS key and cert. Random hostname like C-tor. We re-use the issuer_hostname for the RSA
     // legacy cert.
@@ -97,29 +151,22 @@ fn build_proto_identities(now: SystemTime, keymgr: &KeyMgr) -> anyhow::Result<Re
     )
     .context("Failed to create legacy RSA identity certificate")?;
 
-    // The following expiry duration have been taken from C-tor.
-
     let cert_id_rsa = tor_cert::rsa::EncodedRsaCrosscert::encode_and_sign(
         rsa_id_kp.keypair(),
         &ed_id_kp.to_ed25519_id(),
-        now + KEY_DURATION_6MONTHS,
+        now + RSA_CROSSCERT_LIFETIME,
     )?;
 
-    // Create the signing key cert, link cert and tls cert.
-    //
-    // TODO(relay): We need to check the KeyMgr for the signing cert but for now the KeyMgr API
-    // doesn't allow us to get it out. We will do a re-design of the cert API there. This is fine
-    // as long as we don't support offline keys.
-    let cert_id_sign_ed = gen_signing_cert(&ed_id_kp, &kp_relaysign_id, now + KEY_DURATION_30DAYS)?;
+    // Create the link cert and tls cert.
     let cert_sign_link_auth_ed =
-        gen_link_cert(&kp_relaysign_id, &link_sign_kp, now + KEY_DURATION_2DAYS)?;
+        gen_link_cert(&kp_relaysign_id, &link_sign_kp, now + LINK_CERT_LIFETIME)?;
     let cert_sign_tls_ed = gen_tls_cert(
         &kp_relaysign_id,
         *tls_key_and_cert.link_cert_sha256(),
-        now + KEY_DURATION_2DAYS,
+        now + LINK_CERT_LIFETIME,
     )?;
 
-    Ok(RelayIdentities::new(
+    Ok(RelayChannelAuthMaterial::new(
         &rsa_id_kp.public().into(),
         ed_id_kp.to_ed25519_id(),
         link_sign_kp,
@@ -153,20 +200,22 @@ where
     Ok(())
 }
 
-/// Go through keystore entries matching `pattern` and remove any that are within
-/// [`KEY_ROTATION_EXPIRE_BUFFER`] of expiry.
+/// Go through keystore entries matching `pattern` and remove any that are
+/// expired according to `is_expired`.
 ///
 /// Returns `(removed, min_remaining)` where `removed` indicates whether any entry was deleted and
 /// `min_remaining` is the minimum `valid_until` of the entries that were kept (if any).
-fn remove_expired<F>(
+fn remove_expired<F, E>(
     now: SystemTime,
     keymgr: &KeyMgr,
     pattern: &tor_keymgr::KeyPathPattern,
     label: &'static str,
     expiry_from_keypath: F,
+    is_expired: E,
 ) -> anyhow::Result<(bool, Option<SystemTime>)>
 where
     F: Fn(&KeyPath) -> anyhow::Result<Timestamp>,
+    E: Fn(&Timestamp, SystemTime) -> bool,
 {
     let entries = keymgr.list_matching(pattern)?;
     let mut removed = false;
@@ -174,7 +223,7 @@ where
 
     for entry in entries {
         let valid_until = expiry_from_keypath(entry.key_path())?;
-        if valid_until <= Timestamp::from(now + KEY_ROTATION_EXPIRE_BUFFER) {
+        if is_expired(&valid_until, now) {
             tracing::debug!("Expired {} in keymgr. Removing it.", label);
             keymgr.remove_entry(&entry)?;
             removed = true;
@@ -190,16 +239,21 @@ where
 /// Attempt to generate a key using the given [`KeySpecifier`].
 ///
 /// Return true if generated else false.
-fn try_generate_key<K, P>(keymgr: &KeyMgr, spec: &dyn KeySpecifier) -> anyhow::Result<bool>
+fn try_generate_key<K, P, F>(
+    keymgr: &KeyMgr,
+    spec: &dyn KeySpecifier,
+    should_generate: F,
+) -> anyhow::Result<bool>
 where
     K: ToEncodableKey,
     K::Key: Keygen,
     P: KeySpecifierPattern,
+    F: Fn(&[KeystoreEntry]) -> anyhow::Result<bool>,
 {
     let mut generated = false;
     let mut rng = tor_llcrypto::rng::CautiousRng;
     let entries = keymgr.list_matching(&P::new_any().arti_pattern()?)?;
-    if entries.is_empty() {
+    if should_generate(&entries)? {
         let _ = keymgr.get_or_generate::<K>(spec, KeystoreSelector::default(), &mut rng)?;
         generated = true;
     }
@@ -251,23 +305,29 @@ where
 ///
 /// Returns the minimum valid until value if a key was generated. Else, a None value indicates that
 /// no key was generated.
-fn try_generate_all(now: SystemTime, keymgr: &KeyMgr) -> anyhow::Result<Option<SystemTime>> {
-    let link_expiry = now + KEY_DURATION_2DAYS;
+fn try_generate_all(
+    now: SystemTime,
+    keymgr: &KeyMgr,
+) -> anyhow::Result<(KeyChange, Option<SystemTime>)> {
+    let link_expiry = now + LINK_CERT_LIFETIME;
     let link_spec = RelayLinkSigningKeypairSpecifier::new(Timestamp::from(link_expiry));
-    let link_generated = try_generate_key::<
-        RelayLinkSigningKeypair,
-        RelayLinkSigningKeypairSpecifierPattern,
-    >(keymgr, &link_spec)?;
+    let link_generated =
+        try_generate_key::<RelayLinkSigningKeypair, RelayLinkSigningKeypairSpecifierPattern, _>(
+            keymgr,
+            &link_spec,
+            |entries: &[KeystoreEntry<'_>]| Ok(entries.is_empty()),
+        )?;
+
+    let cert_expiry = now + SIGNING_KEY_CERT_LIFETIME;
 
     // The make certificate function needed for the get_or_generate_key_and_cert(). It is a closure
     // so we can capture the runtime wallclock.
     let make_signing_cert = |subject_key: &RelaySigningKeypair,
                              signing_key: &RelayIdentityKeypair| {
-        gen_signing_cert(signing_key, subject_key, now + KEY_DURATION_30DAYS)
+        gen_signing_cert(signing_key, subject_key, cert_expiry)
             .expect("failed to generate relay signing cert")
     };
 
-    let cert_expiry = now + KEY_DURATION_30DAYS;
     // We either get the existing one or generate this new one.
     let cert_spec = RelaySigningKeyCertSpecifier::new(RelaySigningPublicKeySpecifier::new(
         Timestamp::from(cert_expiry),
@@ -283,13 +343,55 @@ fn try_generate_all(now: SystemTime, keymgr: &KeyMgr) -> anyhow::Result<Option<S
         make_signing_cert,
     )?;
 
-    Ok([
-        link_generated.then_some(link_expiry),
-        cert_generated.then_some(cert_expiry),
-    ]
-    .into_iter()
-    .flatten()
-    .min())
+    let ntor_expiry = now + NTOR_KEY_LIFETIME;
+    let ntor_spec = RelayNtorKeypairSpecifier::new(Timestamp::from(ntor_expiry));
+
+    // We generate a new ntor key if all existing keys are expired `now`
+    // (without taking into account the grace period)
+    let should_generate_ntor = |entries: &[KeystoreEntry<'_>]| {
+        let mut all_expired = true;
+        for entry in entries {
+            let key_path = entry.key_path();
+            let valid_until =
+                SystemTime::from(RelayNtorKeypairSpecifier::try_from(key_path)?.valid_until);
+
+            // If *all* the ntor keys are expired (but still within the grace period),
+            // we want to generate a new ntor key.
+            //
+            // Note: this needs to take the KEY_ROTATION_EXPIRE_BUFFER into account
+            // because the main loop will wake us KEY_ROTATION_EXPIRE_BUFFER
+            // *before* the valid_until elapses
+            if valid_until > now + KEY_ROTATION_EXPIRE_BUFFER {
+                all_expired = false;
+                break;
+            }
+        }
+
+        Ok(all_expired)
+    };
+
+    let ntor_generated = try_generate_key::<RelayNtorKeypair, RelayNtorKeypairSpecifierPattern, _>(
+        keymgr,
+        &ntor_spec,
+        should_generate_ntor,
+    )?;
+
+    let change = KeyChange {
+        chan_auth: link_generated || cert_generated,
+        ntor: ntor_generated,
+    };
+
+    Ok((
+        change,
+        [
+            link_generated.then_some(link_expiry),
+            cert_generated.then_some(cert_expiry),
+            ntor_generated.then_some(ntor_expiry),
+        ]
+        .into_iter()
+        .flatten()
+        .min(),
+    ))
 }
 
 /// Remove any expired keys (and certs) that are expired.
@@ -300,20 +402,25 @@ fn try_generate_all(now: SystemTime, keymgr: &KeyMgr) -> anyhow::Result<Option<S
 fn remove_expired_keys(
     now: SystemTime,
     keymgr: &KeyMgr,
-) -> anyhow::Result<(bool, Option<SystemTime>)> {
+) -> anyhow::Result<(KeyChange, Option<SystemTime>)> {
+    let is_expired_with_buffer = |valid_until: &Timestamp, now| {
+        *valid_until <= Timestamp::from(now + KEY_ROTATION_EXPIRE_BUFFER)
+    };
     let (relaysign_removed, relaysign_expiry) = remove_expired(
         now,
         keymgr,
         &RelaySigningKeypairSpecifierPattern::new_any().arti_pattern()?,
         "key KP_relaysign_ed",
-        |key_path| Ok(RelaySigningKeypairSpecifier::try_from(key_path)?.valid_until()),
+        |key_path| Ok(RelaySigningKeypairSpecifier::try_from(key_path)?.valid_until),
+        is_expired_with_buffer,
     )?;
     let (link_removed, link_expiry) = remove_expired(
         now,
         keymgr,
         &RelayLinkSigningKeypairSpecifierPattern::new_any().arti_pattern()?,
         "key KP_link_ed",
-        |key_path| Ok(RelayLinkSigningKeypairSpecifier::try_from(key_path)?.valid_until()),
+        |key_path| Ok(RelayLinkSigningKeypairSpecifier::try_from(key_path)?.valid_until),
+        is_expired_with_buffer,
     )?;
 
     // This should always be removed if the signing key above has been removed. However, we still
@@ -329,17 +436,105 @@ fn remove_expired_keys(
             let subject_key_path = KeyPath::Arti(spec.subject_key_specifier().arti_path()?);
             let subject_key_spec: RelaySigningPublicKeySpecifier =
                 (&subject_key_path).try_into()?;
-            Ok(subject_key_spec.valid_until())
+            Ok(subject_key_spec.valid_until)
         },
+        is_expired_with_buffer,
+    )?;
+
+    // When deciding whether to remove the key,
+    // we need to take into account the special grace period ntor keys have
+    // (we need to keep the key around even if it's "expired",
+    // because some clients might still be using an older consensus
+    // and hence might not know about our new key yet).
+    let is_expired_ntor = |valid_until: &Timestamp, now| {
+        // Note: we need to take into account KEY_ROTATION_EXPIRE_BUFFER
+        // because the main loop always subtracts KEY_ROTATION_EXPIRE_BUFFER
+        // from the returned next_expiry, but ideally,
+        // I don't think we should be using this buffer for the ntor keys,
+        // because they have a grace period and don't get removed immediately
+        // anyway
+        *valid_until <= Timestamp::from(now - NTOR_KEY_GRACE_PERIOD + KEY_ROTATION_EXPIRE_BUFFER)
+    };
+
+    let (ntor_key_removed, ntor_key_expiry) = remove_expired(
+        now,
+        keymgr,
+        &RelayNtorKeypairSpecifierPattern::new_any().arti_pattern()?,
+        "key KP_ntor",
+        |key_path| Ok(RelayNtorKeypairSpecifier::try_from(key_path)?.valid_until),
+        is_expired_ntor,
     )?;
 
     // Have we at least removed one?
-    let removed = relaysign_removed || link_removed || sign_cert_removed;
+    let removed = KeyChange {
+        chan_auth: relaysign_removed || link_removed || sign_cert_removed,
+        ntor: ntor_key_removed,
+    };
 
-    let next_expiry = [relaysign_expiry, link_expiry, sign_cert_expiry]
-        .into_iter()
-        .flatten()
-        .min();
+    // TODO: we could, in theory, return this from remove_expired(),
+    // but I don't want to make it any more complicated than it already is,
+    // especially for an operation that runs relatively infrequently.
+    let ntor_key_count = keymgr
+        .list_matching(&RelayNtorKeypairSpecifierPattern::new_any().arti_pattern()?)?
+        .len();
+
+    // This is a best effort check. There is no guarantee the
+    // second key is the "successor" of this key,
+    // but in general, it will be, unless an external process
+    // is concurrently modifying the keystore
+    // (which something we explicitly don't try to protect against).
+    //
+    // We could, in theory, check that the valid_until of the two
+    // keys are adequately spaced, but in practice I don't think
+    // it matters much.
+    let next_key_exists = ntor_key_count >= 2;
+
+    // Note: for each ntor key, we need to wake up twice
+    //
+    //   * at its expiry time, to generate the next ntor key
+    //   * at its expiry time + GRACE_PERIOD, to remove the old ntor key
+    let ntor_key_expiry = match ntor_key_expiry {
+        None => {
+            // We removed the last ntor key, the wakeup time will be
+            // determined by try_generate_key() later
+            None
+        }
+        // This special case may seem strange, but it's needed for
+        // the specific scenario where there is only one ntor key
+        // in the keystore with valid_until < now.
+        //
+        // Without it, there is no guarantee we will wake up at valid_until
+        // to generate the new ntor key (when the key is generated,
+        // we try to schedule a rotation task wakeup at valid_until,
+        // but if the other keys have "sooner" `valid_until`s,
+        // that wakeup will be lost.
+        Some(valid_until) if !next_key_exists => {
+            // The next key doesn't exist yet,
+            // wake up at valid_until to generate it
+            Some(valid_until)
+        }
+        Some(valid_until) => {
+            // The next key exists, we only need to wake up
+            // to garbage collect this one, after the grace period
+            //
+            // This avoids busy looping in the [valid_until, valid_until + grace_period]
+            // time interval (if we don't add the grace period here, when
+            // now = valid_until, we will keep waking up the main loop of the
+            // key rotation task, and then not actually removing the key because
+            // it's still within the grace period).
+            Some(valid_until + NTOR_KEY_GRACE_PERIOD)
+        }
+    };
+
+    let next_expiry = [
+        relaysign_expiry,
+        link_expiry,
+        sign_cert_expiry,
+        ntor_key_expiry,
+    ]
+    .into_iter()
+    .flatten()
+    .min();
 
     Ok((removed, next_expiry))
 }
@@ -348,14 +543,14 @@ fn remove_expired_keys(
 ///
 /// Returns (rotated, next_expiry) where `rotated` indicates if any key was rotated and
 /// `next_expiry` is the earliest expiry time across all keys.
-fn try_rotate_keys(now: SystemTime, keymgr: &KeyMgr) -> anyhow::Result<(bool, SystemTime)> {
+fn try_rotate_keys(now: SystemTime, keymgr: &KeyMgr) -> anyhow::Result<(KeyChange, SystemTime)> {
     // First do a pass to remove every expired key(s) or/and cert(s).
-    let (have_rotated, min_expiry) = remove_expired_keys(now, keymgr)?;
+    let (have_removed, min_expiry) = remove_expired_keys(now, keymgr)?;
 
     // Then attempt to generate keys. If at least one was generated, we'll get the min expiry time
     // which we need to consider "rotated" so the caller can know that a new key appeared.
-    let gen_min_expiry = try_generate_all(now, keymgr)?;
-    let have_rotated = have_rotated || gen_min_expiry.is_some();
+    let (generated, gen_min_expiry) = try_generate_all(now, keymgr)?;
+    let have_rotated = have_removed.or(&generated);
 
     // We should never get no expiry time.
     let next_expiry = [min_expiry, gen_min_expiry]
@@ -373,13 +568,14 @@ fn try_rotate_keys(now: SystemTime, keymgr: &KeyMgr) -> anyhow::Result<(bool, Sy
 /// * Identity RSA [`RelayIdentityRsaKeypair`].
 /// * Relay signing keypair [`RelaySigningKeypair`].
 /// * Relay link signing keypair [`RelayLinkSigningKeypair`].
+/// * Relay ntor keypair [`RelayNtorKeypair`].
 ///
 /// This function is only called when our relay bootstraps in order to attempt to generate any
 /// missing keys or/and rotate expired keys.
 pub(crate) fn try_generate_keys<R: Runtime>(
     runtime: &R,
     keymgr: &KeyMgr,
-) -> anyhow::Result<RelayIdentities> {
+) -> anyhow::Result<RelayChannelAuthMaterial> {
     let now = runtime.wallclock();
     // Attempt to generate our identity keys (ed and RSA). Those keys DO NOT rotate. It won't be
     // replaced if they already exists.
@@ -389,24 +585,71 @@ pub(crate) fn try_generate_keys<R: Runtime>(
     // Attempt to rotate the keys. Any missing keys (and cert) will be generated.
     let _ = try_rotate_keys(now, keymgr)?;
 
-    // Now that we have our up-to-date keys, build the RelayIdentities object.
-    build_proto_identities(now, keymgr)
+    // Now that we have our up-to-date keys, build the relay channel auth material object.
+    build_proto_relay_auth_material(now, keymgr)
 }
+/// Return the current ntor keypairs from the keystore as [`RelayNtorKeys`].
+pub(crate) fn get_ntor_keys(keymgr: &KeyMgr) -> anyhow::Result<RelayNtorKeys> {
+    let mut entries = keymgr
+        .list_matching(&RelayNtorKeypairSpecifierPattern::new_any().arti_pattern()?)?
+        .into_iter()
+        .map(|entry| {
+            let valid_until = RelayNtorKeypairSpecifier::try_from(entry.key_path())?.valid_until;
+            Ok((valid_until, entry))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    // Sort in ascending order and then reverse so we get the descending order as in the newest
+    // keys first.
+    entries.sort_by_key(|(valid_until, _)| *valid_until);
+    entries.reverse();
+
+    let mut iter = entries.into_iter();
+    // Get newest and if none, return an error.
+    let (_, newest_entry) = iter
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no ntor keys found"))?;
+    let latest = keymgr
+        .get_entry::<RelayNtorKeypair>(&newest_entry)?
+        .context("failed to retrieve newest ntor key")?;
+    let previous: Option<RelayNtorKeypair> = iter
+        .next()
+        .map(|(_, entry)| -> anyhow::Result<RelayNtorKeypair> {
+            keymgr
+                .get_entry::<RelayNtorKeypair>(&entry)?
+                .context("ntor key disappeared")
+        })
+        .transpose()?;
+    let mut keys = RelayNtorKeys::new(latest);
+    if let Some(prev) = previous {
+        keys = keys.with_previous(prev);
+    }
+    Ok(keys)
+}
+
 /// Task to rotate keys when they need to be rotated.
 pub(crate) async fn rotate_keys_task<R: Runtime>(
     runtime: R,
     keymgr: Arc<KeyMgr>,
     chanmgr: Arc<ChanMgr<R>>,
+    create_request_handler: Arc<CreateRequestHandler>,
 ) -> anyhow::Result<void::Void> {
     loop {
         let now = runtime.wallclock();
         // Attempt a rotation of all keys.
         let (have_rotated, next_expiry) = try_rotate_keys(now, &keymgr)?;
-        if have_rotated {
-            let ids = build_proto_identities(now, &keymgr)?;
+        if have_rotated.chan_auth {
+            let auth_material = build_proto_relay_auth_material(now, &keymgr)?;
             chanmgr
-                .set_relay_identities(Arc::new(ids))
-                .context("Failed to set relay identities on ChanMgr")?;
+                .set_relay_auth_material(Arc::new(auth_material))
+                .context("Failed to set relay auth material on ChanMgr")?;
+        }
+
+        if have_rotated.ntor {
+            // Any keys left in the keystore at this point are considered to be usable
+            // (either because they are newly generated, or because they are still
+            // within the grace period).
+            let ntor_keys = get_ntor_keys(&keymgr)?;
+            create_request_handler.update_ntor_keys(ntor_keys);
         }
 
         // Sleep until the earliest key expiry minus buffer so we rotate before it expires.
@@ -436,19 +679,17 @@ mod test {
 
     use super::*;
 
-    use tor_keymgr::{ArtiEphemeralKeystore, KeyMgrBuilder};
-    use tor_relay_crypto::pk::{
+    use crate::keys::{
         RelayLinkSigningKeypairSpecifierPattern, RelaySigningKeypairSpecifierPattern,
     };
+    use tor_keymgr::{ArtiEphemeralKeystore, KeyMgrBuilder, KeySpecifierPattern};
     use tor_rtcompat::SleepProvider;
     use tor_rtmock::MockRuntime;
 
     /// Generate the non-rotating identity keys so the rest of the key machinery can run.
     fn setup_identity_keys(keymgr: &KeyMgr) {
-        use tor_relay_crypto::pk::{
-            RelayIdentityKeypair, RelayIdentityKeypairSpecifier, RelayIdentityRsaKeypair,
-            RelayIdentityRsaKeypairSpecifier,
-        };
+        use crate::keys::{RelayIdentityKeypairSpecifier, RelayIdentityRsaKeypairSpecifier};
+        use tor_relay_crypto::pk::{RelayIdentityKeypair, RelayIdentityRsaKeypair};
         generate_key::<RelayIdentityKeypair>(keymgr, &RelayIdentityKeypairSpecifier::new())
             .unwrap();
         generate_key::<RelayIdentityRsaKeypair>(keymgr, &RelayIdentityRsaKeypairSpecifier::new())
@@ -480,41 +721,40 @@ mod test {
         Timestamp::from(UNIX_EPOCH + Duration::from_secs(seconds))
     }
 
-    /// Return the number of link keys in the given KeyMgr.
-    fn count_link_keys(keymgr: &KeyMgr) -> usize {
+    /// Return the number of keys matching the specified pattern
+    fn count_keys(keymgr: &KeyMgr, pat: &dyn KeySpecifierPattern) -> usize {
         keymgr
-            .list_matching(
-                &RelayLinkSigningKeypairSpecifierPattern::new_any()
-                    .arti_pattern()
-                    .unwrap(),
-            )
+            .list_matching(&pat.arti_pattern().unwrap())
             .unwrap()
             .len()
+    }
+
+    /// Return the number of link keys in the given KeyMgr.
+    fn count_link_keys(keymgr: &KeyMgr) -> usize {
+        count_keys(keymgr, &RelayLinkSigningKeypairSpecifierPattern::new_any())
     }
 
     /// Return the number of signing keys in the given KeyMgr.
     fn count_signing_keys(keymgr: &KeyMgr) -> usize {
-        keymgr
-            .list_matching(
-                &RelaySigningKeypairSpecifierPattern::new_any()
-                    .arti_pattern()
-                    .unwrap(),
-            )
-            .unwrap()
-            .len()
+        count_keys(keymgr, &RelaySigningKeypairSpecifierPattern::new_any())
+    }
+
+    /// Return the number of ntor keys in the given KeyMgr.
+    fn count_ntor_keys(keymgr: &KeyMgr) -> usize {
+        count_keys(keymgr, &RelayNtorKeypairSpecifierPattern::new_any())
     }
 
     /// Test the actual bootstrap function, `try_generate_keys()` which is in charge of
-    /// initializing the identities.
+    /// initializing the auth material.
     #[test]
     fn test_bootstrap() {
         MockRuntime::test_with_various(|runtime| async move {
             let keymgr = new_keymgr();
 
-            let _identities = match try_generate_keys(&runtime, &keymgr) {
-                Ok(ident) => ident,
+            let _auth_material = match try_generate_keys(&runtime, &keymgr) {
+                Ok(a) => a,
                 Err(e) => {
-                    panic!("Unable to bootstrap keys and generate RelayIdentities: {e}");
+                    panic!("Unable to bootstrap keys and generate RelayChannelAuthMaterial: {e}");
                 }
             };
         });
@@ -531,17 +771,18 @@ mod test {
             let (rotated, next_expiry) = try_rotate_keys(now, &keymgr).unwrap();
 
             assert!(
-                rotated,
+                rotated.chan_auth && rotated.ntor,
                 "keys should be reported as generated on first rotation"
             );
             assert_eq!(count_link_keys(&keymgr), 1, "expected one link key");
             assert_eq!(count_signing_keys(&keymgr), 1, "expected one signing key");
+            assert_eq!(count_ntor_keys(&keymgr), 1, "expected one ntor key");
 
             // The earliest expiry should be the link key (~2 days out).
-            let expected = runtime.wallclock() + KEY_DURATION_2DAYS;
+            let expected = runtime.wallclock() + LINK_CERT_LIFETIME;
             assert_eq!(
                 next_expiry, expected,
-                "next expiry should be ~{KEY_DURATION_2DAYS:?} from now, got {next_expiry:?}"
+                "next expiry should be ~{LINK_CERT_LIFETIME:?} from now, got {next_expiry:?}"
             );
         });
     }
@@ -559,9 +800,13 @@ mod test {
 
             let (rotated, _) = try_rotate_keys(now, &keymgr).unwrap();
 
-            assert!(!rotated, "fresh keys must not trigger a rotation");
+            assert!(
+                !rotated.chan_auth && !rotated.ntor,
+                "fresh keys must not trigger a rotation"
+            );
             assert_eq!(count_link_keys(&keymgr), 1, "expected one link key");
             assert_eq!(count_signing_keys(&keymgr), 1, "expected one signing key");
+            assert_eq!(count_ntor_keys(&keymgr), 1, "expected one ntor key");
         });
     }
 
@@ -576,26 +821,28 @@ mod test {
             // Advance to 1 second _before_ the rotation-buffer threshold. We should not rotate
             // with this.
             let just_before =
-                KEY_DURATION_2DAYS - KEY_ROTATION_EXPIRE_BUFFER - Duration::from_secs(1);
+                LINK_CERT_LIFETIME - KEY_ROTATION_EXPIRE_BUFFER - Duration::from_secs(1);
             runtime.advance_by(just_before).await;
 
             let (rotated, _) = try_rotate_keys(runtime.wallclock(), &keymgr).unwrap();
 
             assert!(
-                !rotated,
+                !rotated.chan_auth,
                 "link key MUST NOT rotate before the expiry buffer threshold"
+            );
+            assert!(
+                !rotated.ntor,
+                "ntor key MUST NOT rotate before the expiry buffer threshold"
             );
             assert_eq!(count_link_keys(&keymgr), 1, "expected one link key");
             assert_eq!(count_signing_keys(&keymgr), 1, "expected one signing key");
 
             // Move it just after the expiry buffer and expect a rotation.
-            let just_after =
-                KEY_DURATION_2DAYS - KEY_ROTATION_EXPIRE_BUFFER + Duration::from_secs(1);
-            runtime.advance_by(just_after).await;
+            runtime.advance_by(Duration::from_secs(1)).await;
 
             let (rotated, _) = try_rotate_keys(runtime.wallclock(), &keymgr).unwrap();
             assert!(
-                rotated,
+                rotated.chan_auth,
                 "link key should rotate inside the expiry buffer threshold"
             );
         });
@@ -626,15 +873,15 @@ mod test {
             // Advance to 1 second _before_ the rotation-buffer threshold. We should not rotate
             // with this.
             let just_before =
-                KEY_DURATION_30DAYS - KEY_ROTATION_EXPIRE_BUFFER - Duration::from_secs(1);
+                SIGNING_KEY_CERT_LIFETIME - KEY_ROTATION_EXPIRE_BUFFER - Duration::from_secs(1);
             runtime.advance_by(just_before).await;
 
             let (rotated, _) = try_rotate_keys(runtime.wallclock(), &keymgr).unwrap();
-            assert!(rotated, "Rotation must happen after 30 days");
+            assert!(rotated.chan_auth, "Rotation must happen after 30 days");
 
             let spec = get_key_spec();
             assert_eq!(
-                spec.valid_until(),
+                spec.valid_until,
                 to_timestamp_in_secs(
                     runtime.wallclock() + KEY_ROTATION_EXPIRE_BUFFER + Duration::from_secs(1)
                 ),
@@ -645,18 +892,69 @@ mod test {
             assert_eq!(count_signing_keys(&keymgr), 1, "expected one signing key");
 
             // Move it just after the expiry buffer and expect a rotation.
-            let just_after =
-                KEY_DURATION_30DAYS - KEY_ROTATION_EXPIRE_BUFFER + Duration::from_secs(1);
-            runtime.advance_by(just_after).await;
+            runtime.advance_by(Duration::from_secs(1)).await;
 
             let (rotated, _) = try_rotate_keys(runtime.wallclock(), &keymgr).unwrap();
-            assert!(rotated, "Rotation must happen after 30 days");
+            assert!(rotated.chan_auth, "Rotation must happen after 30 days");
 
             let spec = get_key_spec();
             assert_eq!(
-                spec.valid_until(),
-                to_timestamp_in_secs(runtime.wallclock() + KEY_DURATION_30DAYS),
+                spec.valid_until,
+                to_timestamp_in_secs(runtime.wallclock() + SIGNING_KEY_CERT_LIFETIME),
                 "RelaySigningKeypairSpecifier should have rotated"
+            );
+        });
+    }
+
+    /// Test rotation before and after rotation expiry buffer for the ntor key.
+    #[test]
+    fn test_rotation_ntor_key() {
+        MockRuntime::test_with_various(|runtime| async move {
+            let keymgr = setup();
+            // First rotation creates the keys.
+            try_rotate_keys(runtime.wallclock(), &keymgr).unwrap();
+
+            // Advance to 1 second _before_ the rotation-buffer threshold. We should not rotate
+            // with this.
+            let just_before =
+                NTOR_KEY_LIFETIME - KEY_ROTATION_EXPIRE_BUFFER - Duration::from_secs(1);
+            runtime.advance_by(just_before).await;
+
+            let (rotated, _) = try_rotate_keys(runtime.wallclock(), &keymgr).unwrap();
+
+            assert!(
+                !rotated.ntor,
+                "Ntor key MUST NOT rotate before the expiry buffer threshold"
+            );
+            assert_eq!(count_ntor_keys(&keymgr), 1, "expected one ntor key");
+
+            // Move it just after the expiry buffer and expect a rotation.
+            runtime.advance_by(Duration::from_secs(1)).await;
+
+            let (rotated, _) = try_rotate_keys(runtime.wallclock(), &keymgr).unwrap();
+            assert!(
+                rotated.ntor,
+                "ntor key should rotate inside the expiry buffer threshold"
+            );
+
+            assert_eq!(
+                count_ntor_keys(&keymgr),
+                2,
+                "there should be 2 ntor keys in the grace period"
+            );
+
+            runtime.advance_by(NTOR_KEY_GRACE_PERIOD).await;
+
+            let (rotated, _) = try_rotate_keys(runtime.wallclock(), &keymgr).unwrap();
+            assert!(
+                rotated.ntor,
+                "ntor key should rotate after the grace period"
+            );
+
+            assert_eq!(
+                count_ntor_keys(&keymgr),
+                1,
+                "the old ntor key should have been removed after the grace period"
             );
         });
     }

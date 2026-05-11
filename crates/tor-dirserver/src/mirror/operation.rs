@@ -593,7 +593,7 @@ impl StaticEngine {
                     return None;
                 }
 
-                let verified = unverified.verify_self_signed(
+                let verified = unverified.verify(
                     self.authorities.v3idents(),
                     self.tolerance.pre_valid_tolerance(),
                     self.tolerance.post_valid_tolerance(),
@@ -850,16 +850,14 @@ mod test {
                 INSERT INTO consensus_router_descriptor_member
                 (consensus_docid, unsigned_sha1, unsigned_sha2)
                 VALUES
-                (:cons_docid, :ns1_sha1, :ns1_sha2),
-                (:cons_docid, :ns2_sha1, :ns2_sha2)
+                (:cons_docid, :ns1_sha1, NULL),
+                (:cons_docid, :ns2_sha1, NULL)
                 "
             ),
             named_params! {
                 ":cons_docid": cons_docid,
                 ":ns1_sha1": db::Sha1::digest(include_bytes!("../../testdata/descriptor1-ns-unsigned")),
-                ":ns1_sha2": db::Sha256::digest(include_bytes!("../../testdata/descriptor1-ns-unsigned")),
                 ":ns2_sha1": db::Sha1::digest(include_bytes!("../../testdata/descriptor2-ns-unsigned")),
-                ":ns2_sha2": db::Sha256::digest(include_bytes!("../../testdata/descriptor2-ns-unsigned")),
             },
         )
         .unwrap();

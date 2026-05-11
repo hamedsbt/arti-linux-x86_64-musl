@@ -8,21 +8,36 @@
 //! NOTE: Several of these modules may eventually move elsewhere,
 //! or become their own crates.
 
+pub(crate) mod embedded_cert;
 pub mod family;
 pub(crate) mod misc;
 pub mod policy;
 pub mod relay_flags;
 pub mod version;
 
-pub use misc::{Nickname, NotPresent, Unknown};
+pub use embedded_cert::*;
 
-pub use misc::B64;
-pub use misc::{Base64Fingerprint, Fingerprint, Ignored, IgnoredItemOrObjectValue};
+pub use misc::KeywordOrString;
+pub use misc::RetainedOrderVec;
+pub use misc::{ContactInfo, InvalidNickname, Nickname, NotPresent, NumericBoolean, Unknown};
+pub use misc::{Hostname, InternetHost, InvalidHostname, InvalidInternetHost};
+
+pub use misc::RsaSha1Signature;
+pub use misc::{B16, B16U, B64, FixedB16U, FixedB64};
+pub use misc::{Base64Fingerprint, Fingerprint, Ignored, IgnoredItemOrObjectValue, SpFingerprint};
+pub use misc::{Curve25519Public, Ed25519AlgorithmString, Ed25519IdentityLine, Ed25519Public};
 pub use misc::{DigestName, IdentifiedDigest};
 pub use misc::{Iso8601TimeNoSp, Iso8601TimeSp};
 
+pub use misc::routerdesc;
+
+mod parse2_encode;
+pub use parse2_encode::raw_data_object;
+
 use crate::NormalItemArgument;
 
+/// We do not expect `[ ]` around IPv6 addresses when parsing this type
+impl NormalItemArgument for std::net::IpAddr {}
 impl NormalItemArgument for std::net::Ipv4Addr {}
 impl NormalItemArgument for std::net::SocketAddr {}
 impl NormalItemArgument for std::net::SocketAddrV4 {}

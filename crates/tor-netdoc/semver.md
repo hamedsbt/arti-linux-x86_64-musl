@@ -1,1 +1,1 @@
-BREAKING: `NetdocSigned` and `SomeDocSigned` renamed to `*Unverified`
+ADDED: `HsDesc::revision()`

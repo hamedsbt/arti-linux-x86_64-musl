@@ -17,6 +17,40 @@ use crate::{channel::msg::LinkVersion, util::err::Error as ChanError};
 
 use super::{ChannelType, msg::MessageFilter};
 
+/// An authentication rolling digest value.
+pub(crate) type AuthLogDigest = [u8; 32];
+/// The rolling digest for the bytes sent on a channel. (Received by the responder).
+#[derive(Debug, PartialEq)]
+pub(crate) struct ClogDigest(AuthLogDigest);
+/// The rolling digest for the bytes received on a channel. (Sent by the responder).
+#[derive(Debug, PartialEq)]
+pub(crate) struct SlogDigest(AuthLogDigest);
+
+impl ClogDigest {
+    /// Constructor from a `AuthLogDigest`
+    pub(crate) fn new(digest: AuthLogDigest) -> Self {
+        Self(digest)
+    }
+}
+
+impl SlogDigest {
+    /// Constructor from a `AuthLogDigest`
+    pub(crate) fn new(digest: AuthLogDigest) -> Self {
+        Self(digest)
+    }
+}
+
+impl AsRef<[u8]> for ClogDigest {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+impl AsRef<[u8]> for SlogDigest {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 /// Channel cell handler which is always in three state.
 ///
 /// This ALWAYS starts the handler at New. This can only be constructed from a [ChannelType] which
@@ -103,7 +137,7 @@ impl ChannelCellHandler {
     /// - The channel is not recording the send log.
     /// - The send log digest has already been taken.
     /// - This cell handler is not using a handshake handler.
-    pub(crate) fn take_send_log_digest(&mut self) -> Result<[u8; 32], ChanError> {
+    pub(crate) fn take_send_log_digest(&mut self) -> Result<AuthLogDigest, ChanError> {
         if let Self::Handshake(handler) = self {
             handler
                 .take_send_log_digest()
@@ -125,7 +159,7 @@ impl ChannelCellHandler {
     /// - The channel is not recording the receive log.
     /// - The receive log digest has already been taken.
     /// - This cell handler is not using a handshake handler.
-    pub(crate) fn take_recv_log_digest(&mut self) -> Result<[u8; 32], ChanError> {
+    pub(crate) fn take_recv_log_digest(&mut self) -> Result<AuthLogDigest, ChanError> {
         if let Self::Handshake(handler) = self {
             handler
                 .take_recv_log_digest()
@@ -395,7 +429,7 @@ impl HandshakeChannelHandler {
     /// This will return `None` if one of:
     /// - The channel is not recording the send log.
     /// - The send log digest has already been taken.
-    pub(crate) fn take_send_log_digest(&mut self) -> Option<[u8; 32]> {
+    pub(crate) fn take_send_log_digest(&mut self) -> Option<AuthLogDigest> {
         Self::finalize_log(self.send_log.take())
     }
 
@@ -406,7 +440,7 @@ impl HandshakeChannelHandler {
     /// This will return `None` if one of:
     /// - The channel is not recording the receive log.
     /// - The receive log digest has already been taken.
-    pub(crate) fn take_recv_log_digest(&mut self) -> Option<[u8; 32]> {
+    pub(crate) fn take_recv_log_digest(&mut self) -> Option<AuthLogDigest> {
         Self::finalize_log(self.recv_log.take())
     }
 

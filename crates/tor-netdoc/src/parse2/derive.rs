@@ -25,19 +25,8 @@ pub fn netdoc_parseable_derive_debug(ttype: &str, msg: &str, vals: &[&dyn Debug]
 }
 
 define_derive_deftly_module! {
-    /// Common definitions for `NetdocParseable`, `NetdocParseableFields`,
-    /// and `NetdocParseableSignatures`
-    ///
-    /// The including macro is expected to define:
-    ///
-    ///  * **`THIS_ITEM`**: consumes the next item and evaluates to it as an `UnparsedItem`.
-    ///    See the definition in `NetdocParseable`.
-    ///
-    ///  * **`F_ACCUMULATE_VAR`** the variable or field into which to accumulate
-    ///    normal items for this field.  Must be of type `&mut $F_ACCUMULATE_TYPE`.
-    ///
-    /// Importer must also import `NetdocSomeItemsDeriveCommon` and `NetdocDeriveAnyCommon`.
-    NetdocSomeItemsParseableCommon beta_deftly:
+    /// Common definitions for all parsing macros.
+    NetdocParseAnyCommon beta_deftly:
 
     // Convenience alias for our prelude
     ${define P { $crate::parse2::internal_prelude }}
@@ -55,6 +44,22 @@ define_derive_deftly_module! {
           }}
         }}
     }}
+}
+
+define_derive_deftly_module! {
+    /// Common definitions for `NetdocParseable`, `NetdocParseableFields`,
+    /// and `NetdocParseableSignatures`
+    ///
+    /// The including macro is expected to define:
+    ///
+    ///  * **`THIS_ITEM`**: consumes the next item and evaluates to it as an `UnparsedItem`.
+    ///    See the definition in `NetdocParseable`.
+    ///
+    ///  * **`F_ACCUMULATE_VAR`** the variable or field into which to accumulate
+    ///    normal items for this field.  Must be of type `&mut $F_ACCUMULATE_TYPE`.
+    ///
+    /// Importer must also import `NetdocSomeItemsDeriveCommon` and `NetdocDeriveAnyCommon`.
+    NetdocSomeItemsParseableCommon beta_deftly:
 
     // The effective field type for parsing.
     //
@@ -172,6 +177,7 @@ define_derive_deftly_module! {
 
     // Accumulates `item` (which must be `ItemSetMethods::Each`) into `$F_ACCUMULATE_VAR`
     ${define ACCUMULATE_ITEM_VALUE { {
+        dtrace!($"accumulating $fname", $F_SELECTOR.item_set_debug());
         $F_SELECTOR.${paste_spanned $fname accumulate}($F_ACCUMULATE_VAR, item)?;
     } }}
 
@@ -280,6 +286,7 @@ define_derive_deftly_module! {
     NetdocParseable beta_deftly:
 
     use NetdocDeriveAnyCommon;
+    use NetdocParseAnyCommon;
     use NetdocEntireDeriveCommon;
     use NetdocSomeItemsDeriveCommon;
     use NetdocSomeItemsParseableCommon;
@@ -298,6 +305,7 @@ define_derive_deftly_module! {
 
             ${for fields {
                 ${when F_INTRO}
+                ${loop_exactly_1 "internal error, somehow not exactly one intro item!"}
                 kw == $F_KEYWORD
             }}
         }
@@ -504,7 +512,7 @@ define_derive_deftly! {
     ///
     /// ### Top-level attributes:
     ///
-    /// * **`#[deftly(netdoc(doctype_for_error = "EXPRESSION"))]`**:
+    /// * **`#[deftly(netdoc(doctype_for_error = EXPRESSION))]`**:
     ///
     ///   Specifies the value to be returned from
     ///   [`NetdocParseable::doctype_for_error`].
@@ -531,7 +539,7 @@ define_derive_deftly! {
     ///   instead of `ItemValueParseable`,
     ///   and is parsed as if `(FIELD_TYPE,)` had been written.
     ///
-    /// * **`#[deftly(netdoc(with = "MODULE"))]`**:
+    /// * **`#[deftly(netdoc(with = MODULE))]`**:
     ///
     ///   Instead of `ItemValueParseable`, the item is parsed with `MODULE::from_unparsed`,
     ///   which must have the same signature as [`ItemValueParseable::from_unparsed`].
@@ -595,14 +603,14 @@ define_derive_deftly! {
     ///
     /// #[derive(Deftly, Debug, Clone)]
     /// #[derive_deftly(NetdocParseableSignatures)]
-    /// #[deftly(netdoc(signatures(hashes_accu = "UseLengthAsFoolishHash")))]
+    /// #[deftly(netdoc(signatures(hashes_accu = UseLengthAsFoolishHash)))]
     /// pub struct NdThingSignatures {
     ///     pub signature: FoolishSignature,
     /// }
     ///
     /// #[derive(Deftly, Debug, Clone)]
     /// #[derive_deftly(ItemValueParseable)]
-    /// #[deftly(netdoc(signature(hash_accu = "UseLengthAsFoolishHash")))]
+    /// #[deftly(netdoc(signature(hash_accu = UseLengthAsFoolishHash)))]
     /// pub struct FoolishSignature {
     ///     pub doc_len: usize,
     /// }
@@ -647,7 +655,7 @@ define_derive_deftly! {
     /// let doc = doc.verify_foolish_timeless().unwrap();
     /// assert_eq!(doc.value.0, "something");
     /// ```
-    export NetdocParseable for struct, expect items, beta_deftly:
+    export NetdocParseable for struct, meta_quoted rigorous, expect items, beta_deftly:
 
     ${define NETDOC_PARSEABLE_TTYPE { $ttype }}
     ${define FINISH_RESOLVE_PARSEABLE $FINISH_RESOLVE}
@@ -667,6 +675,7 @@ define_derive_deftly! {
 
 define_derive_deftly! {
     use NetdocDeriveAnyCommon;
+    use NetdocParseAnyCommon;
     use NetdocSomeItemsDeriveCommon;
     use NetdocSomeItemsParseableCommon;
 
@@ -696,7 +705,7 @@ define_derive_deftly! {
     ///    `#[deftly(netdoc(keyword = STR))]`
     ///    `#[deftly(netdoc(default))]`
     ///    `#[deftly(netdoc(single_arg))]`
-    ///    `#[deftly(netdoc(with = "MODULE"))]`
+    ///    `#[deftly(netdoc(with = MODULE))]`
     ///    `#[deftly(netdoc(flatten))]`
     ///    `#[deftly(netdoc(skip))]`
     ///
@@ -749,7 +758,7 @@ define_derive_deftly! {
     /// relying parties *verify* the signatures but do not treat them as trusted data.
     /// So there is no engineered safeguard against failing to implement
     /// signature item ordering checks.
-    export NetdocParseableSignatures for struct, expect items, beta_deftly:
+    export NetdocParseableSignatures for struct, meta_quoted rigorous, expect items, beta_deftly:
 
     ${defcond F_INTRO false}
     ${defcond F_SUBDOC false}
@@ -823,6 +832,7 @@ define_derive_deftly! {
 
 define_derive_deftly! {
     use NetdocDeriveAnyCommon;
+    use NetdocParseAnyCommon;
     use NetdocFieldsDeriveCommon;
     use NetdocSomeItemsDeriveCommon;
     use NetdocSomeItemsParseableCommon;
@@ -839,7 +849,7 @@ define_derive_deftly! {
     ///  * Derives [`NetdocParseableFields`]
     $DOC_NETDOC_FIELDS_DERIVE_SUPPORTED
     ///
-    export NetdocParseableFields for struct , expect items, beta_deftly:
+    export NetdocParseableFields for struct , meta_quoted rigorous, expect items, beta_deftly:
 
     ${define THIS_ITEM item}
     ${define F_ACCUMULATE_VAR { (&mut acc.$fname) }}
@@ -864,10 +874,12 @@ define_derive_deftly! {
 
           ${for fields {
             ${when not(F_FLATTEN)}
+            ${when not(F_SKIP)}
             kw == $F_KEYWORD ||
           }}
           ${for fields {
             ${when F_FLATTEN}
+            ${when not(F_SKIP)}
             <$ftype as NetdocParseableFields>::is_item_keyword(kw) ||
           }}
             false
@@ -911,7 +923,10 @@ define_derive_deftly! {
 
             $ITEM_SET_SELECTORS
 
-         $( let $fpatname = acc.$fname; )
+         $(
+            ${when not(F_SKIP)}
+            let $fpatname = acc.$fname;
+         )
             $FINISH_RESOLVE
         }
     }
@@ -967,7 +982,7 @@ define_derive_deftly! {
     ///
     /// ### Required top-level attributes:
     ///
-    /// * **`#[deftly(netdoc(signature = "TYPE"))]`**:
+    /// * **`#[deftly(netdoc(signature = TYPE))]`**:
     ///   Type of the signature(s) section.
     ///
     ///   TYPE must implement `NetdocParseable`,
@@ -983,7 +998,7 @@ define_derive_deftly! {
     //  - the defining module (crate) will want to add verification methods,
     //    which means they must define the struct
     //  - that lets the actual `body` field be private to the defining module.
-    export NetdocParseableUnverified for struct, expect items, beta_deftly:
+    export NetdocParseableUnverified for struct, meta_quoted rigorous, expect items, beta_deftly:
 
     ${define NETDOC_PARSEABLE_TTYPE { $<$ttype UnverifiedParsedBody> }}
     ${define FINISH_RESOLVE_PARSEABLE {
@@ -998,12 +1013,12 @@ define_derive_deftly! {
     ${define SIGS_DATA_TYPE { $P::SignaturesData<$<$ttype Unverified>> }}
     ${define SIGS_HASHES_ACCU_TYPE { <$SIGS_TYPE as $P::NetdocParseableSignatures>::HashesAccu }}
 
-    #[doc = ${concat "Signed (unverified) form of [`" $tname "`]"}]
+   $///Signed (unverified) form of [`$tname`]
     ///
     /// Embodies:
     ///
-    #[doc = ${concat "  * **[`" $tname "`]**: document body"}]
-    #[doc = ${concat "  * **[`" $SIGS_TYPE "`]**: signatures"}]
+   $///  * **[`$tname`]**: document body
+   $///  * **[`$SIGS_TYPE`]**: signatures
     ///
     /// If this type was parsed from a document text,
     /// the signatures have *not* yet been verified.
@@ -1023,7 +1038,7 @@ define_derive_deftly! {
 
     /// The parsed but unverified body part of a signed network document (working type)
     ///
-    #[doc = ${concat "Contains a " $tname " which has been parsed"}]
+   $/// Contains a $tname which has been parsed
     /// as part of a signed document,
     /// but the signatures aren't embodied here, and have not been verified.
     ///
@@ -1060,8 +1075,10 @@ define_derive_deftly! {
         }
 
         fn is_structural_keyword(kw: $P::KeywordRef<'_>) -> Option<$P::IsStructural> {
-            $NETDOC_PARSEABLE_TTYPE::is_structural_keyword(kw)
-                .or_else(|| <$SIGS_TYPE as $P::NetdocParseableSignatures>::is_item_keyword(kw).then_some($P::IsStructural))
+            $NETDOC_PARSEABLE_TTYPE::is_structural_keyword(kw).or_else(
+                || <$SIGS_TYPE as $P::NetdocParseableSignatures>
+                    ::is_item_keyword(kw).then_some($P::IsStructural)
+            )
         }
 
         fn from_items<'s>(
@@ -1105,6 +1122,7 @@ define_derive_deftly! {
 
 define_derive_deftly! {
     use NetdocDeriveAnyCommon;
+    use NetdocParseAnyCommon;
     use NetdocItemDeriveCommon;
 
     /// Derive `ItemValueParseable` (or `SignatureItemParseable`)
@@ -1146,7 +1164,7 @@ define_derive_deftly! {
     ///    Reject, rather than ignore, additional arguments found in the document
     ///    which aren't described by the struct.
     ///
-    ///  * **`#[deftly(netdoc(signature(hash_accu = "HASH_ACCU"))]**:
+    ///  * **`#[deftly(netdoc(signature(hash_accu = HASH_ACCU))]**:
     ///
     ///    This item is a signature item.
     ///    [`SignatureItemParseable`] will be implemented instead of [`ItemValueParseable`].
@@ -1190,7 +1208,7 @@ define_derive_deftly! {
     ///    Sets the expected label for an Object.
     ///    If not supplied, uses [`ItemObjectParseable::check_label`].
     ///
-    ///  * **`#[deftly(netdoc(with = "MODULE")]**:
+    ///  * **`#[deftly(netdoc(with = MODULE)]**:
     ///
     ///    Instead of `ItemArgumentParseable`, the argument is parsed with `MODULE::from_args`,
     ///    which must have the same signature as [`ItemArgumentParseable::from_args`].
@@ -1207,9 +1225,11 @@ define_derive_deftly! {
     ///    unless the object also implements `ItemObjectParseable`.
     ///    Errors from parsing will all be collapsed into
     ///    [`ErrorProblem::ObjectInvalidData`].
-    export ItemValueParseable for struct, expect items, beta_deftly:
-
-    ${define P { $crate::parse2::internal_prelude }}
+    ///
+    ///  * **`#[deftly(netdoc(skip))]**:
+    ///
+    ///    Do not parse this field; fill it in with `Default::default()` instead.
+    export ItemValueParseable for struct, meta_quoted rigorous, expect items, beta_deftly:
 
     ${define TRAIT ${if T_IS_SIGNATURE { SignatureItemParseable } else { ItemValueParseable }}}
     ${define METHOD ${if T_IS_SIGNATURE { from_unparsed_and_body } else { from_unparsed }}}
@@ -1233,7 +1253,14 @@ define_derive_deftly! {
             #[allow(unused_imports)] // false positive when macro is used with prelude in scope
             use $P::*;
 
-            $EMIT_DEBUG_PLACEHOLDER
+            $DEFINE_DTRACE
+
+            dtrace!(
+                "item start",
+                input.keyword().as_str(),
+                input.args_copy().into_remaining(),
+                input.object().map(|o| o.label()),
+            );
 
             ${if T_IS_SIGNATURE {
                 <$SIG_HASH_ACCU_TYPE as SignatureHashesAccumulator>::update_from_netdoc_body(
@@ -1246,9 +1273,15 @@ define_derive_deftly! {
             #[allow(unused)]
             let mut args = input.args_mut();
           $(
+            #[allow(non_snake_case)]
             let $fpatname = ${select1
               F_NORMAL { {
                   let selector = MultiplicitySelector::<$ftype>::default();
+                  dtrace!(
+                      $"field $fname, normal",
+                      selector.argument_set_debug(),
+                      args.clone().into_remaining(),
+                  );
                 ${if not(fmeta(netdoc(with))) {
                   selector.${paste_spanned $fname check_argument_value_parseable}();
                 }}
@@ -1261,6 +1294,11 @@ define_derive_deftly! {
               } }
               F_OBJECT { {
                   let selector = MultiplicitySelector::<$ftype>::default();
+                  dtrace!(
+                      $"field $fname, object",
+                      selector.object_set_debug(),
+                      object.as_ref().map(|o| (o.label(), o.decode_data().map(|d| d.len()))),
+                  );
                   let object = object.map(|object| {
                       let data = object.decode_data()?;
                       ${if fmeta(netdoc(object(label))) {
@@ -1282,6 +1320,7 @@ define_derive_deftly! {
                   selector.resolve_option(object)?
               } }
               F_REST { {
+                  dtrace!($"field $fname, rest", args.clone().into_remaining());
                   // consumes `args`, leading to compile error if the rest field
                   // isn't last (or is combined with no_extra_args).
                   let args_consume = args;
@@ -1294,6 +1333,9 @@ define_derive_deftly! {
                       .map_err(|_| AE::Invalid)
                       .map_err(args_consume.error_handler(stringify!($fname)))?
               } }
+              F_SKIP { {
+                  <$ftype as Default>::default()
+              } }
             };
           )
           ${if approx_equal({}, $( ${when F_OBJECT} $fname )) {
@@ -1304,6 +1346,7 @@ define_derive_deftly! {
           ${if tmeta(netdoc(no_extra_args)) {
             args.reject_extra_args()?;
           }}
+            dtrace!("item complete Ok");
             Ok($tname { $( $fname: $fpatname, ) })
         }
     }

@@ -147,14 +147,15 @@ impl<R: Runtime> Reactor<R> {
         // but we might need it if we start using it for more than just EXTENDED2 events
         #[allow(clippy::disallowed_methods)]
         let (fwd_ev_tx, fwd_ev_rx) = mpsc::channel(0);
-        let forward_foo = Forward::new(
+        let forward = Forward::new(
+            channel,
             unique_id,
             crypto_out,
             chan_provider,
             fwd_ev_tx,
             memquota.clone(),
         );
-        let backward_foo = Backward::new(crypto_in);
+        let backward = Backward::new(crypto_in);
 
         let (inner, handle) = BaseReactor::new(
             runtime,
@@ -162,8 +163,8 @@ impl<R: Runtime> Reactor<R> {
             circ_id,
             unique_id,
             input,
-            forward_foo,
-            backward_foo,
+            forward,
+            backward,
             hop_mgr,
             padding_ctrl,
             padding_event_stream,
@@ -205,7 +206,6 @@ pub(crate) mod test {
     //! <!-- @@ end test lint list maintained by maint/add_warning @@ -->
 
     use super::*;
-    use crate::channel::test::{CodecResult, new_reactor};
     use crate::circuit::reactor::test::{AllowAllStreamsFilter, rmsg_to_ccmsg};
     use crate::circuit::{CircParameters, CircuitRxSender};
     use crate::client::circuit::padding::new_padding;
@@ -214,19 +214,18 @@ pub(crate) mod test {
     use crate::crypto::cell::{InboundRelayLayer, OutboundRelayLayer};
     use crate::fake_mpsc;
     use crate::memquota::SpecificAccount as _;
-    use crate::relay::channel_provider::{ChannelProvider, OutboundChanSender};
+    use crate::relay::channel::test::{DummyChan, DummyChanProvider, working_dummy_channel};
     use crate::stream::flow_ctrl::params::FlowCtrlParameters;
     use crate::stream::incoming::{IncomingStream, IncomingStreamRequestFilter};
 
-    use futures::channel::mpsc::{Receiver, Sender};
     use futures::{AsyncReadExt as _, SinkExt as _, StreamExt as _};
     use tracing_test::traced_test;
 
-    use tor_cell::chancell::{AnyChanCell, ChanCell, ChanCmd, msg as chanmsg};
+    use tor_cell::chancell::{ChanCell, ChanCmd, msg as chanmsg};
     use tor_cell::relaycell::{
         AnyRelayMsgOuter, RelayCellFormat, RelayCmd, StreamId, msg as relaymsg,
     };
-    use tor_linkspec::{EncodedLinkSpec, LinkSpec};
+    use tor_linkspec::{EncodedLinkSpec, HasRelayIds, LinkSpec};
     use tor_protover::{Protocols, named};
     use tor_rtcompat::SpawnExt;
     use tor_rtcompat::{DynTimeProvider, Runtime};
@@ -276,53 +275,6 @@ pub(crate) mod test {
         }
     }
 
-    struct DummyChanProvider<R> {
-        /// A handle to the runtime.
-        runtime: R,
-        /// The outbound channel, shared with the test controller.
-        outbound: Arc<Mutex<Option<DummyChan>>>,
-    }
-
-    impl<R: Runtime> DummyChanProvider<R> {
-        fn new(runtime: R, outbound: Arc<Mutex<Option<DummyChan>>>) -> Self {
-            Self { runtime, outbound }
-        }
-    }
-
-    impl<R: Runtime> ChannelProvider for DummyChanProvider<R> {
-        type BuildSpec = OwnedChanTarget;
-
-        fn get_or_launch(
-            self: Arc<Self>,
-            _reactor_id: UniqId,
-            _target: Self::BuildSpec,
-            tx: OutboundChanSender,
-        ) -> crate::Result<()> {
-            let dummy_chan = working_fake_channel(&self.runtime);
-            let chan = Arc::clone(&dummy_chan.channel);
-            {
-                let mut lock = self.outbound.lock().unwrap();
-                assert!(lock.is_none());
-                *lock = Some(dummy_chan);
-            }
-
-            tx.send(Ok(chan));
-
-            Ok(())
-        }
-    }
-
-    /// Dummy channel, returned by [`working_fake_channel`].
-    struct DummyChan {
-        /// Tor channel output
-        rx: Receiver<AnyChanCell>,
-        /// Tor channel input
-        tx: Sender<CodecResult>,
-        /// A handle to the Channel object, to prevent the channel reactor
-        /// from shutting down prematurely.
-        channel: Arc<Channel>,
-    }
-
     struct ReactorTestCtrl {
         /// The relay circuit handle.
         relay_circ: Arc<RelayCirc>,
@@ -354,7 +306,7 @@ pub(crate) mod test {
         /// Spawn a relay circuit reactor, returning a `ReactorTestCtrl` for
         /// controlling it.
         fn spawn_reactor<R: Runtime>(rt: &R) -> Self {
-            let inbound_chan = working_fake_channel(rt);
+            let inbound_chan = working_dummy_channel(rt);
             let circid = CircId::new(1337).unwrap();
             let unique_id = UniqId::new(8, 17);
             let (padding_ctrl, padding_stream) = new_padding(DynTimeProvider::new(rt.clone()));
@@ -513,16 +465,6 @@ pub(crate) mod test {
         }
     }
 
-    fn working_fake_channel<R: Runtime>(rt: &R) -> DummyChan {
-        let (channel, chan_reactor, rx, tx) = new_reactor(rt.clone());
-        rt.spawn(async {
-            let _ignore = chan_reactor.run().await;
-        })
-        .unwrap();
-
-        DummyChan { tx, rx, channel }
-    }
-
     fn dummy_linkspecs() -> Vec<EncodedLinkSpec> {
         vec![
             LinkSpec::Ed25519Id([43; 32].into()).encode().unwrap(),
@@ -567,6 +509,48 @@ pub(crate) mod test {
             assert!(logs_contain("got EXTEND2 in a RELAY cell?!"));
             assert!(!ctrl.outbound_chan_launched());
             assert_circuit_destroyed(&mut ctrl, DestroyReason::NONE);
+        });
+    }
+
+    #[traced_test]
+    #[test]
+    fn reject_extend2_previous_hop() {
+        tor_rtmock::MockRuntime::test_with_various(|rt| async move {
+            let mut ctrl = ReactorTestCtrl::spawn_reactor(&rt);
+            rt.advance_until_stalled().await;
+
+            // No outbound circuits yet
+            assert!(!ctrl.outbound_chan_launched());
+
+            // Build a linkspec with the identities of the dummy channel
+            let mut linkspecs = ctrl
+                .inbound_chan
+                .channel
+                .target()
+                .identities()
+                .map(|id| LinkSpec::from(id.to_owned()).encode())
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            // Make sure this channel actually has some identities
+            // (i.e. that it's not a client channel or something)
+            assert_eq!(linkspecs.len(), 2);
+
+            // There must be at least one IPv4 OR port address
+            linkspecs.push(
+                LinkSpec::OrPort("127.0.0.1".parse::<IpAddr>().unwrap(), 999)
+                    .encode()
+                    .unwrap(),
+            );
+            let handshake_type = HandshakeType::NTOR_V3;
+            let extend2 = relaymsg::Extend2::new(linkspecs, handshake_type, vec![]).into();
+            ctrl.send_fwd(None, extend2, Recognized::Yes, true).await;
+            rt.advance_until_stalled().await;
+
+            // The reactor handled the EXTEND2 and launched an outbound channel
+            assert!(logs_contain("Cannot extend circuit to previous hop"));
+            assert!(!ctrl.outbound_chan_launched());
+            assert!(ctrl.is_closing());
         });
     }
 

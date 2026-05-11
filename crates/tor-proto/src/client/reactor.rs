@@ -450,7 +450,7 @@ pub(crate) trait MetaCellHandler: Send {
 }
 
 /// A possible successful outcome of giving a message to a [`MsgHandler`](super::msghandler::MsgHandler).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "send-control-msg", visibility::make(pub))]
 #[non_exhaustive]
 pub(crate) enum MetaCellDisposition {
@@ -1110,7 +1110,7 @@ impl Reactor {
                 return Err(ReactorError::Shutdown);
             }
             RunOnceCmdInner::RemoveLeg { leg, reason } => {
-                warn!(tunnel_id = %self.tunnel_id, reason = %reason, "removing circuit leg");
+                debug!(tunnel_id = %self.tunnel_id, reason = %reason, "removing circuit leg");
 
                 let circ = self.circuits.remove(leg)?;
                 let is_conflux_pending = circ.is_conflux_pending();

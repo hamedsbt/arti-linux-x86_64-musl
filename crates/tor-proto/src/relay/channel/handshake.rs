@@ -2,34 +2,33 @@
 
 use futures::SinkExt;
 use futures::io::{AsyncRead, AsyncWrite};
-use futures::stream::{Stream, StreamExt};
 use rand::Rng;
 use safelog::Sensitive;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::{sync::Arc, time::SystemTime};
 use tracing::trace;
 
-use tor_cell::chancell::msg::AnyChanMsg;
-use tor_cell::chancell::{AnyChanCell, ChanMsg, msg};
-use tor_cell::restrict::{RestrictedMsg, restricted_msg};
+use tor_cell::chancell::msg;
+use tor_cell::restrict::restricted_msg;
 use tor_error::internal;
 use tor_linkspec::{ChannelMethod, HasChanMethod, OwnedChanTarget};
 use tor_rtcompat::{CertifiedConn, CoarseInstant, CoarseTimeProvider, SleepProvider, StreamOps};
 
+use crate::Result;
 use crate::channel::handshake::{
-    ChannelBaseHandshake, ChannelInitiatorHandshake, UnverifiedChannel, UnverifiedInitiatorChannel,
-    unauthenticated_clock_skew,
+    AuthLogAction, ChannelBaseHandshake, ChannelInitiatorHandshake, UnverifiedChannel,
+    UnverifiedInitiatorChannel, read_msg, unauthenticated_clock_skew,
 };
-use crate::channel::{ChannelFrame, ChannelType, UniqId, new_frame};
+use crate::channel::{ChannelFrame, ChannelType, ClogDigest, SlogDigest, UniqId, new_frame};
 use crate::memquota::ChannelAccount;
 use crate::peer::PeerAddr;
+use crate::relay::CreateRequestHandler;
 use crate::relay::channel::initiator::UnverifiedInitiatorRelayChannel;
 use crate::relay::channel::responder::{
     MaybeVerifiableRelayResponderChannel, NonVerifiableResponderRelayChannel,
     UnverifiedResponderRelayChannel,
 };
-use crate::relay::channel::{RelayIdentities, build_certs_cell, build_netinfo_cell};
-use crate::{Error, Result};
+use crate::relay::channel::{RelayChannelAuthMaterial, build_certs_cell, build_netinfo_cell};
 
 /// The "Ed25519-SHA256-RFC5705" link authentication which is value "00 03".
 pub(super) static AUTHTYPE_ED25519_SHA256_RFC5705: u16 = 3;
@@ -51,11 +50,13 @@ pub struct RelayInitiatorHandshake<
     /// Logging identifier for this stream.  (Used for logging only.)
     unique_id: UniqId,
     /// Our identity keys needed for authentication.
-    identities: Arc<RelayIdentities>,
+    auth_material: Arc<RelayChannelAuthMaterial>,
     /// The peer we are attempting to connect to.
     target_method: ChannelMethod,
     /// Our advertised addresses. Needed for the NETINFO.
     my_addrs: Vec<IpAddr>,
+    /// Provided to each new channel so that they can handle CREATE* requests.
+    create_request_handler: Arc<CreateRequestHandler>,
 }
 
 /// Implement the base channel handshake trait.
@@ -89,19 +90,21 @@ impl<
     pub(crate) fn new(
         tls: T,
         sleep_prov: S,
-        identities: Arc<RelayIdentities>,
-        my_addrs: Vec<IpAddr>,
-        peer: &OwnedChanTarget,
+        auth_material: Arc<RelayChannelAuthMaterial>,
+        my_addrs: Vec<SocketAddr>,
+        peer_target: &OwnedChanTarget,
         memquota: ChannelAccount,
+        create_request_handler: Arc<CreateRequestHandler>,
     ) -> Self {
         Self {
             framed_tls: new_frame(tls, ChannelType::RelayInitiator),
             unique_id: UniqId::new(),
             sleep_prov,
-            identities,
+            auth_material,
             memquota,
-            my_addrs,
-            target_method: peer.chan_method(),
+            my_addrs: my_addrs.into_iter().map(|a| a.ip()).collect(),
+            target_method: peer_target.chan_method(),
+            create_request_handler,
         }
     }
 
@@ -124,9 +127,8 @@ impl<
         self.set_link_protocol(link_protocol)?;
 
         // Read until we have all the remaining cells from the responder.
-        let (auth_challenge_cell, certs_cell, (netinfo_cell, netinfo_rcvd_at), slog_digest) = self
-            .recv_cells_from_responder(/* take_slog= */ true)
-            .await?;
+        let (auth_challenge_cell, certs_cell, (netinfo_cell, netinfo_rcvd_at), slog_digest) =
+            self.recv_cells_from_responder(AuthLogAction::Take).await?;
 
         // TODO: It would be nice to come up with a better design for getting the SLOG.
         let slog_digest = slog_digest.ok_or(internal!("Asked for SLOG, but `None` returned?"))?;
@@ -159,8 +161,9 @@ impl<
             auth_challenge_cell,
             slog_digest,
             netinfo_cell,
-            identities: self.identities,
+            auth_material: self.auth_material,
             my_addrs: self.my_addrs,
+            create_request_handler: self.create_request_handler,
         })
     }
 }
@@ -187,7 +190,9 @@ pub struct RelayResponderHandshake<
     /// Logging identifier for this stream.  (Used for logging only.)
     unique_id: UniqId,
     /// Our identity keys needed for authentication.
-    identities: Arc<RelayIdentities>,
+    auth_material: Arc<RelayChannelAuthMaterial>,
+    /// Provided to each new channel so that they can handle CREATE* requests.
+    create_request_handler: Arc<CreateRequestHandler>,
 }
 
 /// Implement the base channel handshake trait.
@@ -212,15 +217,16 @@ impl<
     /// Constructor.
     pub(crate) fn new(
         peer_addr: Sensitive<PeerAddr>,
-        my_addrs: Vec<IpAddr>,
+        my_addrs: Vec<SocketAddr>,
         tls: T,
         sleep_prov: S,
-        identities: Arc<RelayIdentities>,
+        auth_material: Arc<RelayChannelAuthMaterial>,
         memquota: ChannelAccount,
+        create_request_handler: Arc<CreateRequestHandler>,
     ) -> Self {
         Self {
             peer_addr,
-            my_addrs,
+            my_addrs: my_addrs.into_iter().map(|a| a.ip()).collect(),
             framed_tls: new_frame(
                 tls,
                 ChannelType::RelayResponder {
@@ -229,8 +235,9 @@ impl<
             ),
             unique_id: UniqId::new(),
             sleep_prov,
-            identities,
+            auth_material,
             memquota,
+            create_request_handler,
         }
     }
 
@@ -296,11 +303,12 @@ impl<
                     netinfo_cell,
                     // TODO(relay): Should probably put that in the match {} and not assume.
                     certs_cell: certs_cell.expect("AUTHENTICATE cell without CERTS cell"),
-                    identities: self.identities,
+                    auth_material: self.auth_material,
                     my_addrs: self.my_addrs,
                     peer_addr: self.peer_addr.into_inner(), // Relay address.
                     clog_digest,
                     slog_digest,
+                    create_request_handler: self.create_request_handler,
                 })
             }
             None => MaybeVerifiableRelayResponderChannel::NonVerifiable(
@@ -309,6 +317,9 @@ impl<
                     netinfo_cell,
                     my_addrs: self.my_addrs,
                     peer_addr: self.peer_addr,
+                    create_request_handler: self.create_request_handler,
+                    our_ed25519_id: self.auth_material.ed_id,
+                    our_rsa_id: self.auth_material.rsa_id,
                 },
             ),
         })
@@ -319,53 +330,12 @@ impl<
     async fn recv_cells_from_initiator(
         &mut self,
     ) -> Result<(
-        Option<(
-            msg::Certs,
-            msg::Authenticate,
-            /* the CLOG digest */ [u8; 32],
-        )>,
+        Option<(msg::Certs, msg::Authenticate, ClogDigest)>,
         (msg::Netinfo, CoarseInstant),
     )> {
         // IMPORTANT: Protocol wise, we MUST only allow one single cell of each type for a valid
         // handshake. Any duplicates lead to a failure.
         // They must arrive in a specific order in order for the CLOG calculation to be valid.
-
-        /// Read a message from the stream.
-        ///
-        /// The `expecting` parameter is used for logging purposes, not filtering.
-        async fn read_msg<T>(
-            stream_id: UniqId,
-            mut stream: impl Stream<Item = Result<AnyChanCell>> + Unpin,
-        ) -> Result<T>
-        where
-            T: RestrictedMsg + TryFrom<AnyChanMsg, Error = AnyChanMsg>,
-        {
-            let Some(cell) = stream.next().await.transpose()? else {
-                // The entire channel has ended, so nothing else to be done.
-                return Err(Error::HandshakeProto("Stream ended unexpectedly".into()));
-            };
-
-            let (id, m) = cell.into_circid_and_msg();
-            trace!(%stream_id, "received a {} cell", m.cmd());
-
-            // TODO: Maybe also check this in the channel handshake codec?
-            if let Some(id) = id {
-                return Err(Error::HandshakeProto(format!(
-                    "Expected no circ ID for {} cell, but received circ ID of {id} instead",
-                    m.cmd(),
-                )));
-            }
-
-            let m = m.try_into().map_err(|m: AnyChanMsg| {
-                Error::HandshakeProto(format!(
-                    "Expected [{}] cell, but received {} cell instead",
-                    tor_basic_utils::iter_join(", ", T::cmds_for_logging().iter()),
-                    m.cmd(),
-                ))
-            })?;
-
-            Ok(m)
-        }
 
         // Note that the `ChannelFrame` already restricts the messages due to its handshake cell
         // handler.
@@ -396,7 +366,8 @@ impl<
             };
 
             // We're the responder, which means that the recv log is the CLOG.
-            let clog_digest = self.framed_tls().codec_mut().take_recv_log_digest()?;
+            let clog_digest =
+                ClogDigest::new(self.framed_tls().codec_mut().take_recv_log_digest()?);
 
             // AUTHENTICATE cell.
             let auth = loop {
@@ -438,12 +409,11 @@ impl<
 
     /// Send all expected cells to the initiator of the channel as the responder.
     ///
-    /// Return the sending times of the [`msg::Versions`] so it can be used for clock skew
-    /// validation, and the SLOG digest to be later used when verifying the initiator's
+    /// Return the SLOG (send log) digest to be later used when verifying the initiator's
     /// AUTHENTICATE cell.
-    async fn send_cells_to_initiator(&mut self) -> Result<[u8; 32]> {
+    async fn send_cells_to_initiator(&mut self) -> Result<SlogDigest> {
         // Send the CERTS message.
-        let certs = build_certs_cell(&self.identities, /* is_responder */ true);
+        let certs = build_certs_cell(&self.auth_material, /* is_responder */ true);
         trace!(channel_id = %self.unique_id, "Sending CERTS as responder cell.");
         self.framed_tls.send(certs.into()).await?;
 
@@ -454,7 +424,7 @@ impl<
         self.framed_tls.send(auth_challenge.into()).await?;
 
         // We're the responder, which means that the send log is the SLOG.
-        let slog_digest = self.framed_tls.codec_mut().take_send_log_digest()?;
+        let slog_digest = SlogDigest::new(self.framed_tls.codec_mut().take_send_log_digest()?);
 
         // Send the NETINFO message.
         let peer_ip = self.peer_addr.netinfo_addr();

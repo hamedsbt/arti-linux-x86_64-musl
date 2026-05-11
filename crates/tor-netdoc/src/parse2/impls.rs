@@ -110,7 +110,6 @@ pub(crate) mod void_impls {
         }
     }
 
-    #[cfg(feature = "parse2")]
     impl ItemObjectParseable for Void {
         fn check_label(_label: &str) -> Result<(), ErrorProblem> {
             Ok(())
@@ -119,15 +118,5 @@ pub(crate) mod void_impls {
         fn from_bytes(_input: &[u8]) -> Result<Self, ErrorProblem> {
             Err(EP::ObjectUnexpected)
         }
-    }
-}
-
-/// Conversion module for `Vec<u8>` as Object with [`ItemValueParseable`]
-pub mod raw_data_object {
-    use super::*;
-
-    /// "Parse" the data
-    pub fn try_from(data: Vec<u8>) -> Result<Vec<u8>, Void> {
-        Ok(data)
     }
 }

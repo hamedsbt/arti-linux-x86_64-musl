@@ -1,6 +1,6 @@
 [package]
 name = "tor-proto"
-version = "0.40.0"
+version = "0.42.0"
 authors = ["The Tor Project, Inc.", "Nick Mathewson <nickm@torproject.org>"]
 edition = "2024"
 rust-version = "1.89"
@@ -21,7 +21,9 @@ full = [
     "hs-service",
     "pt-client",
     "tokio",
+    "rpc",
     "send-control-msg",
+    "stream-ctrl",
     "safelog/full",
     "tor-async-utils/full",
     "tor-basic-utils/full",
@@ -45,13 +47,14 @@ full = [
     "tor-protover/full",
     "tor-relay-crypto/full",
     "web-time-compat/full",
+    "tor-relay-crypto?/full",
+    "tor-rpcbase?/full",
 ]
 
 experimental = [
     "experimental-api",
     "conflux",
     "flowctl-cc",
-    "stream-ctrl",
     "testing",
     "bench",
     "counter-galois-onion",
@@ -69,11 +72,18 @@ hs-common = ["tor-hscrypto"]
 experimental-api = ["__is_experimental"]
 # start_conversation etc.; TODO HS should be renamed
 send-control-msg = []
-stream-ctrl = ["__is_experimental"]
+stream-ctrl = []
 counter-galois-onion = ["__is_experimental", "aes", "ctr", "polyval", "flowctl-cc"]
 circ-padding = ["__is_experimental", "maybenot"]
 circ-padding-manual = ["__is_experimental", "circ-padding"]
-relay = ["tor-cert/x509", "tor-linkspec/decode", "__is_experimental", "flowctl-cc"]
+relay = [
+    "tor-cert/x509",
+    "tor-linkspec/decode",
+    "tor-relay-crypto",
+    "__is_experimental",
+    "flowctl-cc",
+]
+rpc = ["stream-ctrl", "dep:tor-rpcbase", "dep:serde"]
 
 # Enable testing-only APIs.  APIs under this feature are not
 # covered by semver.
@@ -94,7 +104,7 @@ cfg-if = "1.0.0"
 cipher = { version = "0.4.1", features = ["zeroize"] }
 coarsetime = "0.1.20"
 ctr = { version = "0.9", optional = true, features = ["zeroize"] }
-derive-deftly = "~1.6.0"
+derive-deftly = "~1.11.0"
 derive_builder = { version = "0.11.2", package = "derive_builder_fork_arti" }
 derive_more = { version = "2.0.1", features = ["full"] }
 digest = "0.10.0"
@@ -113,33 +123,36 @@ polyval = { version = "0.7", optional = true }
 postage = { version = "0.5.0", default-features = false, features = ["futures-traits"] }
 rand = "0.9.1"
 rand_core = "0.9.3"
-safelog = { path = "../safelog", version = "0.8.0" }
+safelog = { path = "../safelog", version = "0.8.2" }
+serde = { version = "1.0.103", features = ["derive"], optional = true }
 slotmap-careful = { path = "../slotmap-careful", version = "0.7.0" }
 smallvec = { version = "1.10", features = ["const_generics"] }
 static_assertions = "1"
+strum = { version = "0.28.0", features = ["derive"] }
 subtle = "2"
 sync_wrapper = "1.0.2"
 thiserror = "2"
 tokio-crate = { package = "tokio", version = "1.7", optional = true }
 tokio-util = { version = "0.7.0", features = ["compat"], optional = true }
-tor-async-utils = { path = "../tor-async-utils", version = "0.40.0" }
-tor-basic-utils = { path = "../tor-basic-utils", version = "0.40.0" }
-tor-bytes = { path = "../tor-bytes", version = "0.40.0" }
-tor-cell = { path = "../tor-cell", version = "0.40.0", features = ["relay"] }
-tor-cert = { path = "../tor-cert", version = "0.40.0" }
-tor-checkable = { path = "../tor-checkable", version = "0.40.0" }
-tor-config = { path = "../tor-config", version = "0.40.0" }
-tor-error = { path = "../tor-error", version = "0.40.0" }
-tor-hscrypto = { path = "../tor-hscrypto", version = "0.40.0", features = ["memquota-memcost"], optional = true }
-tor-linkspec = { path = "../tor-linkspec", version = "0.40.0" }
-tor-llcrypto = { path = "../tor-llcrypto", version = "0.40.0", features = ["memquota-memcost"] }
-tor-log-ratelim = { path = "../tor-log-ratelim", version = "0.40.0" }
-tor-memquota = { version = "0.40.0", path = "../tor-memquota", default-features = false }
-tor-protover = { version = "0.40.0", path = "../tor-protover" }
-tor-relay-crypto = { version = "0.40.0", path = "../tor-relay-crypto" }
-tor-rtcompat = { path = "../tor-rtcompat", version = "0.40.0" }
-tor-rtmock = { path = "../tor-rtmock", version = "0.40.0" }
-tor-units = { path = "../tor-units", version = "0.40.0", features = ["memquota-memcost"] }
+tor-async-utils = { path = "../tor-async-utils", version = "0.42.0" }
+tor-basic-utils = { path = "../tor-basic-utils", version = "0.42.0" }
+tor-bytes = { path = "../tor-bytes", version = "0.42.0" }
+tor-cell = { path = "../tor-cell", version = "0.42.0", features = ["relay"] }
+tor-cert = { path = "../tor-cert", version = "0.42.0" }
+tor-checkable = { path = "../tor-checkable", version = "0.42.0" }
+tor-config = { path = "../tor-config", version = "0.42.0" }
+tor-error = { path = "../tor-error", version = "0.42.0" }
+tor-hscrypto = { path = "../tor-hscrypto", version = "0.42.0", features = ["memquota-memcost"], optional = true }
+tor-linkspec = { path = "../tor-linkspec", version = "0.42.0" }
+tor-llcrypto = { path = "../tor-llcrypto", version = "0.42.0", features = ["memquota-memcost"] }
+tor-log-ratelim = { path = "../tor-log-ratelim", version = "0.42.0" }
+tor-memquota = { version = "0.42.0", path = "../tor-memquota", default-features = false }
+tor-protover = { version = "0.42.0", path = "../tor-protover" }
+tor-relay-crypto = { version = "0.42.0", path = "../tor-relay-crypto", optional = true }
+tor-rpcbase = { version = "0.42.0", path = "../tor-rpcbase", optional = true }
+tor-rtcompat = { path = "../tor-rtcompat", version = "0.42.0" }
+tor-rtmock = { path = "../tor-rtmock", version = "0.42.0" }
+tor-units = { path = "../tor-units", version = "0.42.0", features = ["memquota-memcost"] }
 tracing = "0.1.36"
 typenum = "1.12"
 visibility = { version = "0.1.0" }
@@ -149,9 +162,6 @@ zeroize = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
-
-[target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))'.dev-dependencies]
-criterion-cycles-per-byte = "0.8.0"
 
 [dev-dependencies]
 assert_matches = "1.5.0"
@@ -163,8 +173,13 @@ itertools = "0.14.0"
 regex = { version = "1", default-features = false, features = ["std"] }
 statrs = "0.18.0"
 tokio-crate = { package = "tokio", version = "1.7", features = ["full"] }
-tor-rtcompat = { path = "../tor-rtcompat", version = "0.40.0", features = ["tokio", "native-tls"] }
+tor-key-forge = { path = "../tor-key-forge", version = "0.42.0" }
+tor-llcrypto = { path = "../tor-llcrypto", version = "0.42.0", features = ["testing"] }
+tor-rtcompat = { path = "../tor-rtcompat", version = "0.42.0", features = ["tokio", "native-tls"] }
 tracing-test = "0.2.4"
+
+[target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))'.dev-dependencies]
+criterion-cycles-per-byte = "0.8.0"
 
 [[bench]]
 name = "client_decrypt"

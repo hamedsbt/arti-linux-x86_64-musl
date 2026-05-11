@@ -7,18 +7,18 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tracing::{debug, instrument, trace};
 
-use safelog::{MaybeSensitive, Sensitive};
+use safelog::MaybeSensitive;
 use tor_cell::chancell::msg;
 use tor_linkspec::{ChannelMethod, OwnedChanTarget};
-use tor_rtcompat::{CoarseTimeProvider, SleepProvider, StreamOps};
+use tor_rtcompat::{CoarseTimeProvider, Runtime, SleepProvider, StreamOps};
 
 use crate::ClockSkew;
 use crate::Result;
 use crate::channel::handshake::{
-    ChannelBaseHandshake, ChannelInitiatorHandshake, UnverifiedChannel, UnverifiedInitiatorChannel,
-    VerifiedChannel, unauthenticated_clock_skew,
+    AuthLogAction, ChannelBaseHandshake, ChannelInitiatorHandshake, UnverifiedChannel,
+    UnverifiedInitiatorChannel, VerifiedChannel, unauthenticated_clock_skew,
 };
-use crate::channel::{Channel, ChannelFrame, ChannelType, Reactor, UniqId, new_frame};
+use crate::channel::{Channel, ChannelFrame, ChannelMode, ChannelType, Reactor, UniqId, new_frame};
 use crate::memquota::ChannelAccount;
 use crate::peer::{PeerAddr, PeerInfo};
 
@@ -119,9 +119,8 @@ impl<
 
         // Receive the relay responder cells. Ignore the AUTH_CHALLENGE cell and SLOG; we don't need
         // them as we are not authenticating with our responder because we are a client.
-        let (_, certs_cell, (netinfo_cell, netinfo_rcvd_at), _) = self
-            .recv_cells_from_responder(/* take_slog= */ false)
-            .await?;
+        let (_auth_chal_cell, certs_cell, (netinfo_cell, netinfo_rcvd_at), _slog) =
+            self.recv_cells_from_responder(AuthLogAction::Leave).await?;
 
         // Get the clock skew.
         let clock_skew = unauthenticated_clock_skew(
@@ -171,9 +170,9 @@ impl<
     /// Validate the certificates and keys in the relay's handshake. As a client, we always verify
     /// but we don't authenticate.
     ///
-    /// 'peer' is the peer that we want to make sure we're connecting to.
+    /// 'peer_target' is the peer that we want to make sure we're connecting to.
     ///
-    /// 'peer_cert' is the x.509 certificate that the peer presented during
+    /// 'peer_tls_cert' is the x.509 certificate that the peer presented during
     /// its TLS handshake (ServerHello).
     ///
     /// 'now' is the time at which to check that certificates are
@@ -185,12 +184,12 @@ impl<
     #[instrument(skip_all, level = "trace")]
     pub fn verify(
         self,
-        peer: &OwnedChanTarget,
-        peer_cert: &[u8],
+        peer_target: &OwnedChanTarget,
+        peer_tls_cert: &[u8],
         now: Option<std::time::SystemTime>,
     ) -> Result<VerifiedClientChannel<T, S>> {
-        let peer_cert_digest = tor_llcrypto::d::Sha256::digest(peer_cert).into();
-        let inner = self.inner.verify(peer, peer_cert_digest, now)?;
+        let peer_cert_digest = tor_llcrypto::d::Sha256::digest(peer_tls_cert).into();
+        let inner = self.inner.verify(peer_target, peer_cert_digest, now)?;
 
         Ok(VerifiedClientChannel {
             inner,
@@ -240,8 +239,11 @@ impl<
     #[instrument(skip_all, level = "trace")]
     pub async fn finish(
         mut self,
-        peer_addr: Sensitive<PeerAddr>,
-    ) -> Result<(Arc<Channel>, Reactor<S>)> {
+        peer_addr: MaybeSensitive<PeerAddr>,
+    ) -> Result<(Arc<Channel>, Reactor<S>)>
+    where
+        S: Runtime,
+    {
         // Send the NETINFO message.
         let netinfo = msg::Netinfo::from_client(peer_addr.netinfo_addr());
         trace!(stream_id = %self.inner.unique_id, "Sending netinfo cell.");
@@ -249,11 +251,60 @@ impl<
 
         // This could be a client Guard so it is sensitive.
         let peer_info = MaybeSensitive::sensitive(PeerInfo::new(
-            peer_addr.into_inner(),
+            peer_addr.inner(),
             self.inner.relay_ids().clone(),
         ));
 
         // Finish the channel to get a reactor.
-        self.inner.finish(&self.netinfo_cell, &[], peer_info).await
+        self.inner
+            .finish(&self.netinfo_cell, &[], peer_info, ChannelMode::Client)
+            .await
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test {
+    #![allow(clippy::unwrap_used)]
+    use tor_linkspec::RelayIds;
+
+    use super::*;
+    use crate::channel::handler::test::MsgBuf;
+    use crate::channel::{ChannelType, new_frame};
+    use crate::util::fake_mq;
+    use tor_cell::chancell::msg::Netinfo;
+
+    #[test]
+    fn test_finish() {
+        tor_rtcompat::test_with_one_runtime!(|rt| async move {
+            let peer_addr = "127.1.1.2:443".parse().unwrap();
+            let mut framed_tls = new_frame(MsgBuf::new(&b""[..]), ChannelType::ClientInitiator);
+            let _ = framed_tls.codec_mut().set_link_version(4);
+            let ver = VerifiedChannel {
+                link_protocol: 4,
+                framed_tls,
+                unique_id: UniqId::new(),
+                target_method: Some(ChannelMethod::Direct(vec![peer_addr])),
+                peer_relay_ids: RelayIds::empty(),
+                peer_rsa_id_digest: [0; 32],
+                clock_skew: ClockSkew::None,
+                sleep_prov: rt,
+                memquota: fake_mq(),
+            };
+
+            let peer_ip = peer_addr.ip();
+            let netinfo = Netinfo::from_client(Some(peer_ip));
+
+            let (_chan, _reactor) = ver
+                .finish(
+                    &netinfo,
+                    &[],
+                    MaybeSensitive::not_sensitive(PeerInfo::EMPTY),
+                    ChannelMode::Client,
+                )
+                .await
+                .unwrap();
+
+            // TODO: check contents of netinfo cell
+        });
     }
 }

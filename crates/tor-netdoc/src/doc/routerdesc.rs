@@ -35,13 +35,16 @@
 use crate::parse::keyword::Keyword;
 use crate::parse::parser::{Section, SectionRules};
 use crate::parse::tokenize::{ItemResult, NetDocReader};
+use crate::parse2::{ArgumentError, ArgumentStream, ItemArgumentParseable};
 use crate::types::family::{RelayFamily, RelayFamilyId};
 use crate::types::misc::*;
 use crate::types::policy::*;
+use crate::types::routerdesc::*;
 use crate::types::version::TorVersion;
 use crate::util::PeekableIterator;
 use crate::{AllowAnnotations, Error, KeywordEncodable, NetdocErrorKind as EK, Result};
 
+use derive_deftly::Deftly;
 use ll::pk::ed25519::Ed25519Identity;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -97,6 +100,10 @@ pub struct RouterAnnotation {
 ///
 /// Before using this type to connect to a relay, you MUST check that
 /// it is valid, using is_expired_at().
+///
+/// # Specification
+///
+/// <https://spec.torproject.org/dir-spec/server-descriptor-format.html>
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct RouterDesc {
@@ -158,7 +165,30 @@ pub struct RouterDesc {
     pub ipv6_policy: Arc<PortPolicy>,
 }
 
+/// Signatures of a [`RouterDesc`].
+///
+/// <https://spec.torproject.org/dir-spec/server-descriptor-format.html#item:router-sig-ed25519>
+#[derive(Clone, Debug, Deftly)]
+#[derive_deftly(NetdocParseableSignatures)]
+#[deftly(netdoc(signatures(hashes_accu = "RouterHashAccu")))]
+#[non_exhaustive]
+pub struct RouterDescSignatures {
+    /// `router-sig-ed25519` --- Ed25519 signature
+    ///
+    /// Ed25519 signature by the Ed25519 signing key on the SHA-256 digest of
+    /// the document prefixed by a magic up until and including the
+    /// `router-sig-ed25519` keyword plus space.
+    pub router_sig_ed25519: RouterSigEd25519,
+
+    /// `router-signature` --- RSA signature
+    ///
+    /// * At end, exactly once.
+    /// * RSA signature of the document, including `router-sig-ed25519`.
+    pub router_signature: RouterSignature,
+}
+
 /// Description of the software a relay is running.
+// TODO: Move this to types/misc.rs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RelayPlatform {
@@ -181,6 +211,14 @@ impl std::str::FromStr for RelayPlatform {
         } else {
             Ok(RelayPlatform::Other(args.to_string()))
         }
+    }
+}
+
+impl ItemArgumentParseable for RelayPlatform {
+    fn from_args<'s>(args: &mut ArgumentStream<'s>) -> std::result::Result<Self, ArgumentError> {
+        args.into_remaining()
+            .parse()
+            .map_err(|_| ArgumentError::Invalid)
     }
 }
 
@@ -558,7 +596,11 @@ impl RouterDesc {
         let (nickname, ipv4addr, orport, dirport) = {
             let rtrline = header.required(ROUTER)?;
             (
-                rtrline.parse_arg::<Nickname>(0)?,
+                rtrline.required_arg(0)?.parse::<Nickname>().map_err(|e| {
+                    EK::BadArgument
+                        .with_msg(e.to_string())
+                        .at_pos(rtrline.pos())
+                })?,
                 Some(rtrline.parse_arg::<net::Ipv4Addr>(1)?),
                 rtrline.parse_arg(2)?,
                 // Skipping socksport.

@@ -53,10 +53,8 @@
 mod util;
 #[macro_use]
 mod derive_common;
-#[cfg(feature = "parse2")]
 #[macro_use]
 pub mod parse2;
-#[cfg(feature = "encode")]
 #[macro_use]
 pub mod encode;
 #[macro_use]
@@ -65,7 +63,7 @@ pub mod doc;
 mod err;
 pub mod types;
 
-#[cfg(all(test, feature = "parse2", feature = "encode"))]
+#[cfg(test)]
 mod test2;
 
 #[doc(hidden)]
@@ -78,8 +76,6 @@ pub use util::batching_split_before;
 
 pub use err::{BuildError, Error, NetdocErrorKind, Pos};
 
-#[cfg(feature = "encode")]
-#[cfg_attr(docsrs, doc(cfg(feature = "encode")))]
 pub use encode::NetdocBuilder;
 
 /// Alias for the Result type returned by most objects in this module.
@@ -123,9 +119,11 @@ pub enum AllowAnnotations {
 /// A type that is represented as a single argument
 /// whose representation is as for the type's `FromStr` and `Display`.
 ///
-/// Implementing this trait enables a blanket impl of `parse2::ItemArgumentParseable`
-/// and `build::ItemArgument`.
-pub trait NormalItemArgument: std::str::FromStr + std::fmt::Display {}
+/// Implementing this trait enables a blanket impl of
+/// [`parse2::ItemArgumentParseable`] (if `FromStr`)
+/// and
+/// [`encode::ItemArgument`] (if `Display`).
+pub trait NormalItemArgument {}
 // TODO: should we implement ItemArgument for, say, tor_llcrypto::pk::rsa::RsaIdentity ?
 // It's not clear whether it's always formatted the same way in all parts of the spec.
 // The Display impl of RsaIdentity adds a `$` which is not supposed to be present

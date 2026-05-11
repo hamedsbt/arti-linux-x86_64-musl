@@ -48,32 +48,33 @@
 //! As with the other tor-netdoc types, I'm deferring those till I know what
 //! they should be.
 
+mod dir_source;
 mod rs;
 
 pub mod md;
-#[cfg(feature = "plain-consensus")]
 pub mod plain;
-#[cfg(feature = "ns-vote")]
+#[cfg(feature = "incomplete")]
 pub mod vote;
 
 #[cfg(feature = "build_docs")]
 mod build;
 
-#[cfg(feature = "parse2")]
-use {
-    crate::parse2::{self, ArgumentStream}, //
-};
+pub use proto_statuses_parse2_encode::ProtoStatusesNetdocParseAccumulator;
 
-#[cfg(feature = "parse2")]
-pub use {
-    parse2_impls::ProtoStatusesNetdocParseAccumulator, //
-};
+#[cfg(feature = "incomplete")]
+use crate::doc::authcert::EncodedAuthCert;
 
 use crate::doc::authcert::{AuthCert, AuthCertKeyIds};
+use crate::encode::{ItemValueEncodable, NetdocEncodable, NetdocEncoder};
 use crate::parse::keyword::Keyword;
 use crate::parse::parser::{Section, SectionRules, SectionRulesBuilder};
 use crate::parse::tokenize::{Item, ItemResult, NetDocReader};
+use crate::parse2::{
+    self, ArgumentStream, ErrorProblem, IsStructural, ItemStream, ItemValueParseable, KeywordRef,
+    NetdocParseable, StopAt,
+};
 use crate::types::misc::*;
+use crate::types::relay_flags::{self, DocRelayFlags};
 use crate::util::PeekableIterator;
 use crate::{Error, KeywordEncodable, NetdocErrorKind as EK, NormalItemArgument, Pos, Result};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -82,8 +83,9 @@ use std::result::Result as StdResult;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{net, result, time};
-use tor_error::{HasKind, internal};
+use tor_error::{Bug, HasKind, bad_api_usage, internal};
 use tor_protover::Protocols;
+use void::ResultVoidExt as _;
 
 use derive_deftly::{Deftly, define_derive_deftly};
 use digest::Digest;
@@ -96,7 +98,7 @@ use serde::{Deserialize, Deserializer};
 
 #[cfg(feature = "build_docs")]
 pub use build::MdConsensusBuilder;
-#[cfg(all(feature = "build_docs", feature = "plain-consensus"))]
+#[cfg(feature = "build_docs")]
 pub use build::PlainConsensusBuilder;
 #[cfg(feature = "build_docs")]
 ns_export_each_flavor! {
@@ -108,20 +110,17 @@ ns_export_each_variety! {
 }
 
 #[deprecated]
-#[cfg(feature = "ns_consensus")]
 pub use PlainConsensus as NsConsensus;
 #[deprecated]
-#[cfg(feature = "ns_consensus")]
 pub use PlainRouterStatus as NsRouterStatus;
 #[deprecated]
-#[cfg(feature = "ns_consensus")]
 pub use UncheckedPlainConsensus as UncheckedNsConsensus;
 #[deprecated]
-#[cfg(feature = "ns_consensus")]
 pub use UnvalidatedPlainConsensus as UnvalidatedNsConsensus;
 
-#[cfg(feature = "ns-vote")]
 pub use rs::{RouterStatusMdDigestsVote, SoftwareVersion};
+
+pub use dir_source::{ConsensusAuthoritySection, DirSource, SupersededAuthorityKey};
 
 /// `publiscation` field in routerstatus entry intro item other than in votes
 ///
@@ -148,8 +147,9 @@ pub struct IgnoredPublicationTimeSp;
 ///
 /// Aggregate of three netdoc preamble fields.
 #[derive(Clone, Debug, Deftly)]
+#[derive_deftly(Constructor, NetdocEncodableFields, NetdocParseableFields)]
 #[derive_deftly(Lifetime)]
-#[cfg_attr(feature = "parse2", derive_deftly(NetdocParseableFields))]
+#[allow(clippy::exhaustive_structs)]
 pub struct Lifetime {
     /// `valid-after` --- Time at which the document becomes valid
     ///
@@ -157,8 +157,9 @@ pub struct Lifetime {
     ///
     /// (You might see a consensus a little while before this time,
     /// since voting tries to finish up before the.)
-    #[cfg_attr(feature = "parse2", deftly(netdoc(single_arg)))]
-    valid_after: Iso8601TimeSp,
+    #[deftly(constructor)]
+    #[deftly(netdoc(single_arg))]
+    pub valid_after: Iso8601TimeSp,
     /// `fresh-until` --- Time after which there is expected to be a better version
     /// of this consensus
     ///
@@ -166,8 +167,9 @@ pub struct Lifetime {
     ///
     /// You can use the consensus after this time, but there is (or is
     /// supposed to be) a better one by this point.
-    #[cfg_attr(feature = "parse2", deftly(netdoc(single_arg)))]
-    fresh_until: Iso8601TimeSp,
+    #[deftly(constructor)]
+    #[deftly(netdoc(single_arg))]
+    pub fresh_until: Iso8601TimeSp,
     /// `valid-until` --- Time after which this consensus is expired.
     ///
     /// <https://spec.torproject.org/dir-spec/consensus-formats.html#item:published>
@@ -175,24 +177,32 @@ pub struct Lifetime {
     /// You should try to get a better consensus after this time,
     /// though it's okay to keep using this one if no more recent one
     /// can be found.
-    #[cfg_attr(feature = "parse2", deftly(netdoc(single_arg)))]
-    valid_until: Iso8601TimeSp,
+    #[deftly(constructor)]
+    #[deftly(netdoc(single_arg))]
+    pub valid_until: Iso8601TimeSp,
+
+    #[doc(hidden)]
+    #[deftly(netdoc(skip))]
+    pub __non_exhaustive: (),
 }
 
 define_derive_deftly! {
     /// Bespoke derive for `Lifetime`, for `new` and accessors
     Lifetime:
 
+    ${defcond FIELD not(approx_equal($fname, __non_exhaustive))}
+
     impl Lifetime {
         /// Construct a new Lifetime.
         pub fn new(
-            $( $fname: time::SystemTime, )
+            $( ${when FIELD} $fname: time::SystemTime, )
         ) -> Result<Self> {
             // Make this now because otherwise literal `valid_after` here in the body
             // has the wrong span - the compiler refuses to look at the argument.
             // But we can refer to the field names.
             let self_ = Lifetime {
-                $( $fname: $fname.into(), )
+                $( ${when FIELD} $fname: $fname.into(), )
+                __non_exhaustive: (),
             };
             if self_.valid_after < self_.fresh_until && self_.fresh_until < self_.valid_until {
                 Ok(self_)
@@ -201,6 +211,8 @@ define_derive_deftly! {
             }
         }
       $(
+        ${when FIELD}
+
         ${fattrs doc}
         pub fn $fname(&self) -> time::SystemTime {
             *self.$fname
@@ -247,8 +259,8 @@ impl NormalItemArgument for ConsensusMethod {}
 /// <https://spec.torproject.org/dir-spec/consensus-formats.html#item:consensus-methods>
 ///
 /// There is also [`consensus_methods_comma_separated`] for `m` lines in votes.
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
-#[cfg_attr(feature = "parse2", derive(Deftly), derive_deftly(ItemValueParseable))]
+#[derive(Debug, Clone, Default, Eq, PartialEq, Deftly)]
+#[derive_deftly(ItemValueEncodable, ItemValueParseable)]
 #[non_exhaustive]
 pub struct ConsensusMethods {
     /// Consensus methods.
@@ -259,7 +271,6 @@ pub struct ConsensusMethods {
 ///
 /// As found in an `m` item in a vote:
 /// <https://spec.torproject.org/dir-spec/consensus-formats.html#item:m>
-#[cfg(feature = "parse2")]
 pub mod consensus_methods_comma_separated {
     use super::*;
     use parse2::ArgumentError as AE;
@@ -293,6 +304,16 @@ pub mod consensus_methods_comma_separated {
 /// The same syntax is also used, and this type used for parsing, in various other places,
 /// for example routerstatus entry `w` items (bandwidth weights):
 /// <https://spec.torproject.org/dir-spec/consensus-formats.html#item:w>
+//
+// TODO DIRAUTH torspec#401 Replace `String` with a suitable newtype
+// Currently:
+//  - Our parser allows any keyword that makes it into a netdoc argument,
+//    but it splits on the *first* `=` so a `NetParams<i32>` cannot parse a keyword with a `=`.
+//  - We provide constructors that allow any `String`, even ones containing space, `=`,
+//    newline, etc.
+//  - Encoding throws `Bug` if the resulting document will be clearly garbage,
+//    forbidding `=`, whitespace, and controls.  If the supplied keywords are bizarre,
+//    it may generate surprising documents (eg, containing exciting Unicode).
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct NetParams<T> {
     /// Map from keys to values.
@@ -498,6 +519,10 @@ impl ConsensusFlavor {
     }
 }
 
+define_directory_signature_hash_algo! {
+    #[derive_deftly_adhoc] // TODO DIRAUTH; suppresses complaints about attrs used only in poc
+}
+
 /// The signature of a single directory authority on a networkstatus document.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -506,7 +531,7 @@ pub struct Signature {
     ///
     /// Currently sha1 and sh256 are recognized.  Here we only support
     /// sha256.
-    pub digestname: String,
+    pub digest_algo: KeywordOrString<DirectorySignatureHashAlgo>,
     /// Fingerprints of the keys for the authority that made
     /// this signature.
     pub key_ids: AuthCertKeyIds,
@@ -537,8 +562,7 @@ pub struct SharedRandVal([u8; 32]);
 /// along with meta-information about that value.
 #[derive(Debug, Clone, Deftly)]
 #[non_exhaustive]
-#[cfg_attr(feature = "parse2", derive_deftly(ItemValueParseable))]
-#[cfg_attr(feature = "encode", derive_deftly(ItemValueEncodable))]
+#[derive_deftly(ItemValueEncodable, ItemValueParseable)]
 pub struct SharedRandStatus {
     /// How many authorities revealed shares that contributed to this value.
     pub n_reveals: u8,
@@ -554,28 +578,6 @@ pub struct SharedRandStatus {
     ///
     /// (This is added per proposal 342, assuming that gets accepted.)
     pub timestamp: Option<Iso8601TimeNoSp>,
-}
-
-/// Description of an authority's identity and address.
-///
-/// (Corresponds to a dir-source line.)
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct DirSource {
-    /// human-readable nickname for this authority.
-    pub nickname: String,
-    /// Fingerprint for the _authority_ identity key of this
-    /// authority.
-    ///
-    /// This is the same key as the one that signs the authority's
-    /// certificates.
-    pub identity: RsaIdentity,
-    /// IP address for the authority
-    pub ip: net::IpAddr,
-    /// HTTP directory port for this authority
-    pub dir_port: u16,
-    /// OR port for this authority.
-    pub or_port: u16,
 }
 
 /// Recognized weight fields on a single relay in a consensus
@@ -599,17 +601,174 @@ impl RelayWeight {
     }
 }
 
-/// All information about a single authority, as represented in a consensus
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct ConsensusVoterInfo {
-    /// Contents of the dirsource line about an authority
+/// Authority entry in a consensus - deprecated compatibility type alias
+#[deprecated = "renamed to ConsensusAuthorityEntry"]
+pub type ConsensusVoterInfo = ConsensusAuthorityEntry;
+
+/// Authority entry in a plain consensus - type alias provided for consistency
+pub type PlainAuthorityEntry = ConsensusAuthorityEntry;
+/// Authority entry in an md consensus - type alias provided for consistency
+pub type MdAuthorityEntry = ConsensusAuthorityEntry;
+
+/// An authority entry as found in a consensus
+///
+/// <https://spec.torproject.org/dir-spec/consensus-formats.html#section:authority-entry>
+///
+/// See also [`VoteAuthorityEntry`]
+//
+// We don't use the `each_variety` system for this because:
+//  1. That avoids separating the two consensus authority entry types, which are identical
+//  2. The only common fields are `dir-source` and `contact`, so there is little duplication
+#[derive(Debug, Clone, Deftly)]
+#[derive_deftly(Constructor, NetdocEncodable, NetdocParseable)]
+#[allow(clippy::exhaustive_structs)]
+pub struct ConsensusAuthorityEntry {
+    /// Contents of the `dir-source` line about an authority
+    #[deftly(constructor)]
     pub dir_source: DirSource,
+
     /// Human-readable contact information about the authority
-    pub contact: String,
+    //
+    // If more non-intro fields get added that are the same in votes and cosensuses,
+    // consider using each_variety.rs or breaking those fields out into
+    // `AuthorityEntryCommon` implementing `NetdocParseableFields`, or something.
+    #[deftly(constructor)]
+    pub contact: ContactInfo,
+
     /// Digest of the vote that the authority cast to contribute to
     /// this consensus.
-    pub vote_digest: Vec<u8>,
+    ///
+    /// This is not a fixed-length, fixed-algorithm field.
+    /// Bizarrely, the algorithm is supposed to be inferred from the length!
+    /// <https://spec.torproject.org/dir-spec/consensus-formats.html#item:vote-digest>
+    #[deftly(netdoc(single_arg))]
+    #[deftly(constructor)]
+    pub vote_digest: B16U,
+
+    #[doc(hidden)]
+    #[deftly(netdoc(skip))]
+    pub __non_exhaustive: (),
+}
+
+/// An authority entry as found in a vote
+///
+/// <https://spec.torproject.org/dir-spec/consensus-formats.html#section:authority-entry>
+///
+/// See also [`ConsensusAuthorityEntry`]
+///
+/// TODO DIRAUTH not all fields are here yet.
+// They have individual comments, below.
+#[derive(Debug, Clone, Deftly)]
+#[derive_deftly(Constructor, NetdocEncodable, NetdocParseable)]
+#[allow(clippy::exhaustive_structs)]
+pub struct VoteAuthorityEntry {
+    /// Contents of the `dir-source` line about an authority
+    #[deftly(constructor)]
+    pub dir_source: DirSource,
+
+    /// Human-readable contact information about the authority
+    #[deftly(constructor)]
+    pub contact: ContactInfo,
+
+    // TODO DIRAUTH missing field legacy-dir-key
+    // TODO DIRAUTH missing field shared-rand-participate
+    // TODO DIRAUTH missing field shared-rand-commit
+    // TODO DIRAUTH missing field shared-rand-previous-value
+    // TODO DIRAUTH missing field shared-rand-current-value
+    //
+    #[doc(hidden)]
+    #[deftly(netdoc(skip))]
+    pub __non_exhaustive: (),
+}
+
+// For `ConsensusAuthoritySection`, see `dir_source.rs`.
+
+define_derive_deftly! {
+    /// Ad-hoc derive, `impl NetdocParseable for VoteAuthoritySection`
+    ///
+    /// We can't derive from `VoteAuthoritySection` with the normal macros, because
+    /// it's not a document, with its own intro item.  It's just a collection of sub-documents.
+    /// The netdoc derive macros don't have support for that - and it would be a fairly
+    /// confusing thing to support because you'd end up with nested multiplicities and a whole
+    /// variety of "intro item keywords" that were keywords for arbitrary sub-documents.
+    ///
+    /// Instead, we do that ad-hoc here.  It's less confusing because we don't need to
+    /// worry about multiplicity, and because we know what only the outer document is
+    /// that will contain this.
+    VoteAuthoritySection:
+
+    ${defcond F_NORMAL not(fmeta(netdoc(skip)))}
+
+    #[cfg(feature = "incomplete")] // needs EncodedAuthCert, otherwise complete
+    impl NetdocParseable for VoteAuthoritySection {
+        fn doctype_for_error() -> &'static str {
+            "vote.authority.section"
+        }
+        fn is_intro_item_keyword(kw: KeywordRef<'_>) -> bool {
+            VoteAuthorityEntry::is_intro_item_keyword(kw)
+        }
+        fn is_structural_keyword(kw: KeywordRef<'_>) -> Option<IsStructural> {
+          $(
+            ${when F_NORMAL}
+            if let y @ Some(_) = $ftype::is_structural_keyword(kw) {
+                return y;
+            }
+          )
+            None
+        }
+        fn from_items<'s>(
+            input: &mut ItemStream<'s>,
+            stop_outer: stop_at!(),
+        ) -> StdResult<Self, ErrorProblem> {
+            let stop_inner = stop_outer
+              $(
+                ${when F_NORMAL}
+                | StopAt($ftype::is_intro_item_keyword)
+              )
+            ;
+            Ok(VoteAuthoritySection { $(
+                ${when F_NORMAL}
+                $fname: NetdocParseable::from_items(input, stop_inner)?,
+            )
+                __non_exhaustive: (),
+            })
+        }
+    }
+
+    #[cfg(feature = "incomplete")]
+    impl NetdocEncodable for VoteAuthoritySection {
+        fn encode_unsigned(&self, out: &mut NetdocEncoder) -> StdResult<(), Bug> {
+          $(
+            ${when F_NORMAL}
+            self.$fname.encode_unsigned(out)?;
+          )
+          Ok(())
+        }
+    }
+}
+
+/// An authority section in a vote
+///
+/// <https://spec.torproject.org/dir-spec/consensus-formats.html#section:authority>
+//
+// We have split this out to help encapsulate vote/consensus-specific
+// information in a forthcoming overall network status document type.
+#[derive(Deftly, Clone, Debug)]
+#[derive_deftly(VoteAuthoritySection, Constructor)]
+#[allow(clippy::exhaustive_structs)]
+#[cfg(feature = "incomplete")] // needs EncodedAuthCert, otherwise complete
+pub struct VoteAuthoritySection {
+    /// Authority entry
+    #[deftly(constructor)]
+    pub authority: VoteAuthorityEntry,
+
+    /// Authority key certificate
+    #[deftly(constructor)]
+    pub cert: EncodedAuthCert,
+
+    #[doc(hidden)]
+    #[deftly(netdoc(skip))]
+    pub __non_exhaustive: (),
 }
 
 /// The signed footer of a consensus netstatus.
@@ -636,17 +795,14 @@ pub type UnvalidatedMdConsensus = md::UnvalidatedConsensus;
 /// and timeliness.
 pub type UncheckedMdConsensus = md::UncheckedConsensus;
 
-#[cfg(feature = "plain-consensus")]
 /// A consensus document that lists relays along with their
 /// router descriptor documents.
 pub type PlainConsensus = plain::Consensus;
 
-#[cfg(feature = "plain-consensus")]
 /// An PlainConsensus that has been parsed and checked for timeliness,
 /// but not for signatures.
 pub type UnvalidatedPlainConsensus = plain::UnvalidatedConsensus;
 
-#[cfg(feature = "plain-consensus")]
 /// An PlainConsensus that has been parsed but not checked for signatures
 /// and timeliness.
 pub type UncheckedPlainConsensus = plain::UncheckedConsensus;
@@ -982,8 +1138,19 @@ impl DirSource {
                     .at_pos(item.pos()),
             );
         }
-        let nickname = item.required_arg(0)?.to_string();
-        let identity = item.parse_arg::<Fingerprint>(1)?.into();
+        let nickname = item
+            .required_arg(0)?
+            .parse()
+            .map_err(|e: InvalidNickname| {
+                EK::BadArgument.at_pos(item.pos()).with_msg(e.to_string())
+            })?;
+        let identity = item.parse_arg(1)?;
+        let hostname = item
+            .required_arg(2)?
+            .parse()
+            .map_err(|e: InvalidInternetHost| {
+                EK::BadArgument.at_pos(item.pos()).with_msg(e.to_string())
+            })?;
         let ip = item.parse_arg(3)?;
         let dir_port = item.parse_arg(4)?;
         let or_port = item.parse_arg(5)?;
@@ -991,16 +1158,18 @@ impl DirSource {
         Ok(DirSource {
             nickname,
             identity,
+            hostname,
             ip,
             dir_port,
             or_port,
+            __non_exhaustive: (),
         })
     }
 }
 
-impl ConsensusVoterInfo {
-    /// Parse a single ConsensusVoterInfo from a voter info section.
-    fn from_section(sec: &Section<'_, NetstatusKwd>) -> Result<ConsensusVoterInfo> {
+impl ConsensusAuthorityEntry {
+    /// Parse a single ConsensusAuthorityEntry from a voter info section.
+    fn from_section(sec: &Section<'_, NetstatusKwd>) -> Result<ConsensusAuthorityEntry> {
         use NetstatusKwd::*;
         // this unwrap should be safe because if there is not at least one
         // token in the section, the section is unparsable.
@@ -1015,14 +1184,28 @@ impl ConsensusVoterInfo {
         }
         let dir_source = DirSource::from_item(sec.required(DIR_SOURCE)?)?;
 
-        let contact = sec.required(CONTACT)?.args_as_str().to_string();
+        let contact = sec.required(CONTACT)?;
+        // Ideally we would parse_args_as_str but that requires us to
+        // impl From<InvalidContactInfo> for crate::Error which is wrong
+        // because many it's a footgun which lets you just write ? here
+        // resulting in lack of position information.
+        // (This is a general problem with the error handling in crate::parse.)
+        let contact = contact
+            .args_as_str()
+            .parse()
+            .map_err(|err: InvalidContactInfo| {
+                EK::BadArgument
+                    .with_msg(err.to_string())
+                    .at_pos(contact.pos())
+            })?;
 
-        let vote_digest = sec.required(VOTE_DIGEST)?.parse_arg::<B16>(0)?.into();
+        let vote_digest = sec.required(VOTE_DIGEST)?.parse_arg::<B16U>(0)?;
 
-        Ok(ConsensusVoterInfo {
+        Ok(ConsensusAuthorityEntry {
             dir_source,
             contact,
             vote_digest,
+            __non_exhaustive: (),
         })
     }
 }
@@ -1068,16 +1251,111 @@ impl RelayWeight {
     }
 }
 
-/// `parse2` impls for types in this module
+/// `parse2` impls for types in this modulea
 ///
-/// Separate module to save on repeated `cfg` and for a separate namespace.
-#[cfg(feature = "parse2")]
+/// Separate module for a separate namespace.
 mod parse2_impls {
     use super::*;
-    use parse2::ArgumentError as AE;
-    use parse2::ErrorProblem as EP;
-    use parse2::{ArgumentStream, ItemArgumentParseable, ItemValueParseable};
-    use parse2::{KeywordRef, NetdocParseableFields, UnparsedItem};
+    pub(super) use parse2::{
+        ArgumentError as AE, ArgumentStream, ErrorProblem as EP, ItemArgumentParseable,
+        ItemValueParseable, NetdocParseableFields, UnparsedItem,
+    };
+    use std::result::Result;
+
+    impl ItemValueParseable for NetParams<i32> {
+        fn from_unparsed(item: parse2::UnparsedItem<'_>) -> Result<Self, EP> {
+            item.check_no_object()?;
+            item.args_copy()
+                .into_remaining()
+                .parse()
+                .map_err(item.invalid_argument_handler("parameters"))
+        }
+    }
+
+    impl ItemValueParseable for RelayWeight {
+        fn from_unparsed(item: parse2::UnparsedItem<'_>) -> Result<Self, EP> {
+            item.check_no_object()?;
+            (|| {
+                let params = item.args_copy().into_remaining().parse()?;
+                Self::from_net_params(&params)
+            })()
+            .map_err(item.invalid_argument_handler("weights"))
+        }
+    }
+
+    impl ItemValueParseable for rs::SoftwareVersion {
+        fn from_unparsed(mut item: parse2::UnparsedItem<'_>) -> Result<Self, EP> {
+            item.check_no_object()?;
+            item.args_mut()
+                .into_remaining()
+                .parse()
+                .map_err(item.invalid_argument_handler("version"))
+        }
+    }
+
+    impl ItemArgumentParseable for IgnoredPublicationTimeSp {
+        fn from_args(a: &mut ArgumentStream) -> Result<IgnoredPublicationTimeSp, AE> {
+            let mut next_arg = || a.next().ok_or(AE::Missing);
+            let _: &str = next_arg()?;
+            let _: &str = next_arg()?;
+            Ok(IgnoredPublicationTimeSp)
+        }
+    }
+}
+
+/// `encode` impls for types in this modulea
+///
+/// Separate module for a separate namespace.
+mod encode_impls {
+    use super::*;
+    use std::result::Result;
+    pub(crate) use {
+        crate::encode::{ItemEncoder, ItemValueEncodable, NetdocEncodableFields},
+        tor_error::Bug,
+    };
+
+    impl ItemValueEncodable for NetParams<i32> {
+        fn write_item_value_onto(&self, mut out: ItemEncoder) -> Result<(), Bug> {
+            for (k, v) in self.iter().collect::<BTreeSet<_>>() {
+                if k.is_empty()
+                    || k.chars()
+                        .any(|c| c.is_whitespace() || c.is_control() || c == '=')
+                {
+                    // TODO torspec#401 see TODO in NetParams<T> definition
+                    return Err(bad_api_usage!(
+                        "tried to encode NetParms with unreasonable keyword {k:?}"
+                    ));
+                }
+                out.args_raw_string(&format_args!("{k}={v}"));
+            }
+            Ok(())
+        }
+    }
+}
+
+impl Footer {
+    /// Parse a directory footer from a footer section.
+    fn from_section(sec: &Section<'_, NetstatusKwd>) -> Result<Footer> {
+        use NetstatusKwd::*;
+        sec.required(DIRECTORY_FOOTER)?;
+
+        let weights = sec
+            .maybe(BANDWIDTH_WEIGHTS)
+            .args_as_str()
+            .unwrap_or("")
+            .parse()?;
+
+        Ok(Footer { weights })
+    }
+}
+
+/// `ProtoStatuses` parsing and encoding
+///
+/// Separate module for separate namespace
+mod proto_statuses_parse2_encode {
+    use super::encode_impls::*;
+    use super::parse2_impls::*;
+    use super::*;
     use paste::paste;
     use std::result::Result;
 
@@ -1130,6 +1408,17 @@ mod parse2_impls {
                 Ok(out)
             }
         }
+
+        impl NetdocEncodableFields for ProtoStatuses {
+            fn encode_fields(&self, out: &mut NetdocEncoder) -> Result<(), Bug> {
+              $(
+                self.$cr.$rr.write_item_value_onto(
+                    out.item(stringify!([<$rr _ $cr _protocols>]))
+                )?;
+              )*
+                Ok(())
+            }
+        }
     } } }
 
     impl_proto_statuses! {
@@ -1137,62 +1426,6 @@ mod parse2_impls {
         required relay;
         recommended client;
         recommended relay;
-    }
-
-    impl ItemValueParseable for NetParams<i32> {
-        fn from_unparsed(item: parse2::UnparsedItem<'_>) -> Result<Self, EP> {
-            item.check_no_object()?;
-            item.args_copy()
-                .into_remaining()
-                .parse()
-                .map_err(item.invalid_argument_handler("parameters"))
-        }
-    }
-
-    impl ItemValueParseable for RelayWeight {
-        fn from_unparsed(item: parse2::UnparsedItem<'_>) -> Result<Self, EP> {
-            item.check_no_object()?;
-            (|| {
-                let params = item.args_copy().into_remaining().parse()?;
-                Self::from_net_params(&params)
-            })()
-            .map_err(item.invalid_argument_handler("weights"))
-        }
-    }
-
-    impl ItemValueParseable for rs::SoftwareVersion {
-        fn from_unparsed(mut item: parse2::UnparsedItem<'_>) -> Result<Self, EP> {
-            item.check_no_object()?;
-            item.args_mut()
-                .into_remaining()
-                .parse()
-                .map_err(item.invalid_argument_handler("version"))
-        }
-    }
-
-    impl ItemArgumentParseable for IgnoredPublicationTimeSp {
-        fn from_args(a: &mut ArgumentStream) -> Result<IgnoredPublicationTimeSp, AE> {
-            let mut next_arg = || a.next().ok_or(AE::Missing);
-            let _: &str = next_arg()?;
-            let _: &str = next_arg()?;
-            Ok(IgnoredPublicationTimeSp)
-        }
-    }
-}
-
-impl Footer {
-    /// Parse a directory footer from a footer section.
-    fn from_section(sec: &Section<'_, NetstatusKwd>) -> Result<Footer> {
-        use NetstatusKwd::*;
-        sec.required(DIRECTORY_FOOTER)?;
-
-        let weights = sec
-            .maybe(BANDWIDTH_WEIGHTS)
-            .args_as_str()
-            .unwrap_or("")
-            .parse()?;
-
-        Ok(Footer { weights })
     }
 }
 
@@ -1219,7 +1452,7 @@ impl Signature {
             .at_pos(item.pos()));
         }
 
-        let (alg, id_fp, sk_fp) = if item.n_args() > 2 {
+        let (digest_algo, id_fp, sk_fp) = if item.n_args() > 2 {
             (
                 item.required_arg(0)?,
                 item.required_arg(1)?,
@@ -1229,7 +1462,7 @@ impl Signature {
             ("sha1", item.required_arg(0)?, item.required_arg(1)?)
         };
 
-        let digestname = alg.to_string();
+        let digest_algo = digest_algo.to_string().parse().void_unwrap();
         let id_fingerprint = id_fp.parse::<Fingerprint>()?.into();
         let sk_fingerprint = sk_fp.parse::<Fingerprint>()?.into();
         let key_ids = AuthCertKeyIds {
@@ -1239,7 +1472,7 @@ impl Signature {
         let signature = item.obj("SIGNATURE")?;
 
         Ok(Signature {
-            digestname,
+            digest_algo,
             key_ids,
             signature,
         })
@@ -1338,9 +1571,12 @@ impl SignatureGroup {
                 continue;
             }
 
-            let d: Option<&[u8]> = match sig.digestname.as_ref() {
-                "sha256" => self.sha256.as_ref().map(|a| &a[..]),
-                "sha1" => self.sha1.as_ref().map(|a| &a[..]),
+            use DirectorySignatureHashAlgo as DSHA;
+            use KeywordOrString as KOS;
+
+            let d: Option<&[u8]> = match sig.digest_algo {
+                KOS::Known(DSHA::Sha256) => self.sha256.as_ref().map(|a| &a[..]),
+                KOS::Known(DSHA::Sha1) => self.sha1.as_ref().map(|a| &a[..]),
                 _ => None, // We don't know how to find this digest.
             };
             if d.is_none() {
@@ -1380,7 +1616,7 @@ mod test {
     //! <!-- @@ end test lint list maintained by maint/add_warning @@ -->
     use super::*;
     use hex_literal::hex;
-    #[cfg(all(feature = "ns-vote", feature = "parse2"))]
+    #[cfg(feature = "incomplete")]
     use {
         crate::parse2::{NetdocUnverified as _, ParseInput, parse_netdoc},
         std::fs,
@@ -1389,9 +1625,7 @@ mod test {
     const CERTS: &str = include_str!("../../testdata/authcerts2.txt");
     const CONSENSUS: &str = include_str!("../../testdata/mdconsensus1.txt");
 
-    #[cfg(feature = "plain-consensus")]
     const PLAIN_CERTS: &str = include_str!("../../testdata2/cached-certs");
-    #[cfg(feature = "plain-consensus")]
     const PLAIN_CONSENSUS: &str = include_str!("../../testdata2/cached-consensus");
 
     fn read_bad(fname: &str) -> String {
@@ -1472,7 +1706,6 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "plain-consensus")]
     fn parse_and_validate_ns() -> Result<()> {
         use tor_checkable::{SelfSigned, Timebound};
         let mut certs = Vec::new();
@@ -1498,12 +1731,12 @@ mod test {
     }
 
     #[test]
-    #[cfg(all(feature = "ns-vote", feature = "parse2"))]
+    #[cfg(feature = "incomplete")]
     fn parse2_vote() -> anyhow::Result<()> {
         let file = "testdata2/v3-status-votes--1";
         let text = fs::read_to_string(file)?;
 
-        // TODO replace the poc struct here when we have parsing of proper whole votes
+        // TODO DIRAUTH replace the poc struct here when we have parsing of proper whole votes
         use crate::parse2::poc::netstatus::NetworkStatusUnverifiedVote;
 
         let input = ParseInput::new(&text, file);
@@ -1615,6 +1848,17 @@ mod test {
 
         let p = "Hello=Goodbye Fred=7".parse::<NetParams<u32>>();
         assert!(p.is_err());
+
+        for bad_kw in ["What=The", "", "\n", "\0"] {
+            let p = [(bad_kw, 42)].into_iter().collect::<NetParams<i32>>();
+            let mut d = NetdocEncoder::new();
+            let d = (|| {
+                let i = d.item("bad-psrams");
+                p.write_item_value_onto(i)?;
+                d.finish()
+            })();
+            let _: tor_error::Bug = d.expect_err(bad_kw);
+        }
     }
 
     #[test]

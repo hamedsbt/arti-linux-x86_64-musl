@@ -102,7 +102,7 @@ define_derive_deftly_module! {
               }
               F_NORMAL {
                         $LET_SELECTOR
-                        for item in selector.iter_ordered(&self.$fname) {
+                        for item in selector.${paste_spanned $fname iter_ordered}(&self.$fname) {
                             $ENCODE_ITEM_VALUE
                         }
               }
@@ -179,7 +179,7 @@ define_derive_deftly! {
     ///
     $DOC_DEBUG_PLACEHOLDER
     ///
-    /// # **`#[deftly(netdoc(doctype_for_error = "EXPRESSION"))]`**:
+    /// # **`#[deftly(netdoc(doctype_for_error = EXPRESSION))]`**:
     ///
     ///   Ignored.  (The encoder does not report errors this way.)
     ///
@@ -199,7 +199,7 @@ define_derive_deftly! {
     ///   instead of `ItemValueEncodable`,
     ///   and is encoded as if `(FIELD_TYPE,)` had been written.
     ///
-    /// * **`#[deftly(netdoc(with = "MODULE"))]`**:
+    /// * **`#[deftly(netdoc(with = MODULE))]`**:
     ///
     ///   Instead of `ItemValueEncodable`, the item is parsed with
     ///   `MODULE::write_item_value_onto`,
@@ -238,10 +238,10 @@ define_derive_deftly! {
     /// # Example
     ///
     /// TODO NETDOC ENCODE provide an example when signatures are implemented.
-    export NetdocEncodable beta_deftly, for struct, expect items:
+    export NetdocEncodable beta_deftly, for struct, meta_quoted rigorous, expect items:
 
     impl<$tgens> $P::NetdocEncodable for $ttype {
-        fn encode_unsigned(&self, out: &mut $P::NetdocEncoder) -> Result<(), $P::Bug> {
+        fn encode_unsigned(&self, out: &mut $P::NetdocEncoder) -> $P::Result<(), $P::Bug> {
             use $P::*;
 
             $FIELD_ORDERING_CHECK
@@ -265,10 +265,10 @@ define_derive_deftly! {
     ///  * Derives [`NetdocEncodableFields`]
     $DOC_NETDOC_FIELDS_DERIVE_SUPPORTED
     ///
-    export NetdocEncodableFields beta_deftly, for struct, expect items:
+    export NetdocEncodableFields beta_deftly, for struct, meta_quoted rigorous, expect items:
 
     impl<$tgens> $P::NetdocEncodableFields for $ttype {
-        fn encode_fields(&self, out: &mut $P::NetdocEncoder) -> Result<(), $P::Bug> {
+        fn encode_fields(&self, out: &mut $P::NetdocEncoder) -> $P::Result<(), $P::Bug> {
             use $P::*;
 
             $ENCODE_ITEMS_BODY
@@ -342,7 +342,7 @@ define_derive_deftly! {
     ///    Sets the expected label for an Object.
     ///    If not supplied, uses [`ItemObjectEncodable::label`].
     ///
-    ///  * **`#[deftly(netdoc(with = "MODULE")]**:
+    ///  * **`#[deftly(netdoc(with = MODULE)]**:
     ///
     ///    Instead of `ItemArgument`, the argument is encoded with `MODULE::write_arg_onto`,
     ///    which must have the same signature as [`ItemArgument::write_arg_onto`].
@@ -353,17 +353,16 @@ define_derive_deftly! {
     ///    instead of `tor_netdoc::Writeable::write_onto`.
     ///    LABEL must also be specified unless the object also implements `ItemObjectEncodable`.
     ///
-    ///  * **`#[deftly(netdoc(sig_hash = "HASH_METHOD"))]**:
+    ///  * **`#[deftly(netdoc(sig_hash = HASH_METHOD))]**:
     ///
     ///    TODO NETDOC ENCODE.  Encoding of signed documents is not yet implemented.
-    export ItemValueEncodable beta_deftly, for struct, expect items:
+    ///
+    ///  * **`#[deftly(netdoc(skip))]**:
+    ///
+    ///    Do not encode this field.
+    export ItemValueEncodable beta_deftly, for struct, meta_quoted rigorous, expect items:
 
     ${define P { $crate::encode }}
-
-    ${define LET_SELECTOR {
-                    let selector = MultiplicitySelector::<$ftype>::default();
-                    let selector = selector.selector();
-    }}
 
     ${define BUG_CONTEXT {
         // We use .map_err() rather than .bug_context() so that we nail down the error type
@@ -398,7 +397,8 @@ define_derive_deftly! {
                 ${select1
                   F_NORMAL {
                             let _ = &rest_must_come_last_marker;
-                            $LET_SELECTOR
+                            let selector = MultiplicitySelector::<$ftype>::default();
+                            let selector = selector.selector();
                       ${if not(fmeta(netdoc(with))) {
                             selector.${paste_spanned $fname check_item_argument_encodable}();
                       }}
@@ -427,6 +427,8 @@ define_derive_deftly! {
                             // We do this one later, in case it's not last in the struct.
                             // It consumes `out`.
                   }
+                  F_SKIP {
+                  }
                 }
                         } // per-field local variables scope
               }}
@@ -439,11 +441,17 @@ define_derive_deftly! {
               ${for fields {
                 ${when F_OBJECT}
 
-                        $LET_SELECTOR
-                        if let Some(object) = selector.as_option(&self.$fname) {
+                        let selector = MultiplicitySelector::<$ftype>::default();
+                        if let Some(object) = selector
+                            .${paste_spanned $fname as_option}(&self.$fname)
+                        {
                 ${define CHECK_OBJECT_ENCODABLE {
                             selector.${paste_spanned $fname check_item_object_encodable}();
                 }}
+                            // This is, sort of, a recapitulation of `ItemEncoder::object`.
+                            // We can't conveniently just call that because we want to support
+                            // overriding the label, even when we're using ItemObjectEncodable.
+
                             // Bind to `label`
                             let label =
                 ${fmeta(netdoc(object(label))) as str, default {
@@ -464,9 +472,9 @@ define_derive_deftly! {
                                 .map_err(into_internal!("failed to encode byte array!"))
                                 .$BUG_CONTEXT?;
 
-                            out.object(label, data);
+                            out.object_bytes(label, data);
 
-                        } // if let Some(field)
+                        } // if let Some(object)
               }}
 
                         Ok(())

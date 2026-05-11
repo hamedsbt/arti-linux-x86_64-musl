@@ -77,7 +77,7 @@ use void::{ResultVoidErrExt, Void};
 
 #[cfg(feature = "relay")]
 use {
-    async_trait::async_trait, safelog::Sensitive,
+    async_trait::async_trait, safelog::Sensitive, tor_proto::relay::CreateRequestHandler,
     tor_proto::relay::channel_provider::ChannelProvider,
 };
 
@@ -241,8 +241,8 @@ impl<R: Runtime> ChanMgr<R> {
             transport::DefaultTransport::new(runtime.clone(), config.cfg.outbound_proxy.clone());
         cfg_if::cfg_if! {
             if #[cfg(feature = "relay")] {
-                let builder = if let Some(identities) = &config.identities {
-                    builder::ChanBuilder::new_relay(runtime.clone(), transport, identities.clone(), config.my_addrs)?
+                let builder = if let Some(auth_material) = &config.auth_material {
+                    builder::ChanBuilder::new_relay(runtime.clone(), transport, auth_material.clone(), config.my_addrs, None)?
                 } else {
                     // Yes, clients can have the "relay" feature enabled (unit tests).
                     builder::ChanBuilder::new_client(runtime.clone(), transport)
@@ -411,16 +411,51 @@ impl<R: Runtime> ChanMgr<R> {
         self.mgr.with_mut_builder(|f| f.replace_ptmgr(ptmgr));
     }
 
-    /// Replace the relay identities used for building new channels.
+    /// Replace the relay auth material used for building new channels.
     ///
-    /// This rebuilds the internal channel builder with the provided `identities`, which includes a
+    /// This rebuilds the internal channel builder with the provided `auth_material`, which includes a
     /// new TLS cert and key. Existing channels are not affected, only newly created channels will
-    /// use the new identities.
+    /// use the new keys.
     #[cfg(feature = "relay")]
-    pub fn set_relay_identities(&self, identities: Arc<tor_proto::RelayIdentities>) -> Result<()> {
+    pub fn set_relay_auth_material(
+        &self,
+        auth_material: Arc<tor_proto::RelayChannelAuthMaterial>,
+    ) -> Result<()> {
         let mut result = Ok(());
         self.mgr.with_mut_builder(|f| {
-            match f.default_factory().rebuild_with_identities(identities) {
+            match f
+                .default_factory()
+                .rebuild_with_auth_material(auth_material)
+            {
+                Ok(b) => f.replace_default_factory(Arc::new(b)),
+                Err(e) => result = Err(e),
+            }
+        });
+        result
+    }
+
+    /// This will be used to handle CREATE* requests on channels.
+    ///
+    /// This handler will only be used for new channels, not existing channels.
+    ///
+    /// This will *not* be updated in any way by the channel manager,
+    /// for example by a netdir update or when any keys change.
+    /// The caller must handle this.
+    /// The idea is that the channel manager shouldn't need to deal with circuit-specific stuff.
+    ///
+    /// It's expected to only ever call this once.
+    /// Ideally it would be an `Option` in the constructor,
+    /// but we don't want conditionally-compiled constructor arguments,
+    /// and the [`CreateRequestHandler`] requires a [`dyn ChannelProvider`]
+    /// which is typically this [`ChanMgr`] itself.
+    #[cfg(feature = "relay")]
+    pub fn set_create_request_handler(&self, handler: Arc<CreateRequestHandler>) -> Result<()> {
+        let mut result = Ok(());
+        self.mgr.with_mut_builder(|f| {
+            match f
+                .default_factory()
+                .rebuild_with_create_request_handler(handler)
+            {
                 Ok(b) => f.replace_default_factory(Arc::new(b)),
                 Err(e) => result = Err(e),
             }

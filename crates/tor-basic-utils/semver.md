@@ -1,2 +1,2 @@
-REMOVED: BinaryHeapExt
-REMOVED: IoErrorExt
+BREAKING: Removed flatten().
+
