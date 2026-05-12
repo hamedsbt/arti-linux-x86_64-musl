@@ -1,3 +1,5 @@
+msrv = "1.91"
+
 disallowed-types = [
     { path = "futures::channel::oneshot::Sender", reason = "Use tor_async_utils::oneshot to avoid bug with select macro" },
     { path = "futures::channel::oneshot::Receiver", reason = "Use tor_async_utils::oneshot to avoid bug with select macro" },
