@@ -15,15 +15,16 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  # ---------- Linux MUSL builds (existing) ----------
+  build-musl:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: aarch64-unknown-linux-musl
-            name: arti-aarch64-musl
-            docker_tag: aarch64-musl-nightly   # known working tag
+            name: arti-linux-aarch64-musl
+            docker_tag: aarch64-musl-nightly
 
     steps:
       - uses: actions/checkout@v4
@@ -43,8 +44,50 @@ jobs:
           name: ${{ matrix.name }}
           path: target/${{ matrix.target }}/release/arti
 
+  # ---------- Android builds (ARMv7 + ARM64) ----------
+  build-android:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: armv7-linux-androideabi
+            name: arti-android-armv7
+            ndk_arch: arm
+          - target: aarch64-linux-android
+            name: arti-android-arm64
+            ndk_arch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup Android NDK
+        uses: android-actions/setup-android@v3
+        with:
+          ndk-version: r26d
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build with cargo-ndk
+        run: |
+          cargo ndk --target ${{ matrix.target }} --platform 30 \
+            build --release -p arti
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: target/${{ matrix.target }}/release/arti
+
+  # ---------- Release ----------
   release:
-    needs: build
+    needs: [build-musl, build-android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -55,15 +98,14 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Rename binary
+      - name: List and verify files
         run: |
-          mv dist/arti dist/arti-aarch64-musl
-          chmod +x dist/arti-aarch64-musl
-          file dist/arti-aarch64-musl
+          find dist -type f -exec file {} \;
+          chmod +x dist/* || true
 
       - name: Create Release and Upload
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: dist/arti-aarch64-musl
+          files: dist/*
           generate_release_notes: true
