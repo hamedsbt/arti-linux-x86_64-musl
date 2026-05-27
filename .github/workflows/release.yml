@@ -56,7 +56,7 @@ jobs:
           make -j$(nproc)
           sudo make install
 
-      - name: Build OpenSSL (static, aarch64-musl)
+      - name: Build OpenSSL (static, aarch64-musl, musl‑compatible)
         run: |
           cd /tmp
           wget -q https://www.openssl.org/source/openssl-3.0.13.tar.gz
@@ -65,14 +65,16 @@ jobs:
           CC=aarch64-linux-gnu-gcc \
           AR=aarch64-linux-gnu-ar \
           RANLIB=aarch64-linux-gnu-ranlib \
+          CFLAGS="-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0" \
           ./Configure linux-aarch64 \
             no-shared \
+            no-async \
             --prefix=/usr/local/aarch64-musl \
             --openssldir=/usr/local/aarch64-musl/ssl
           make -j$(nproc)
           sudo make install
 
-      - name: Set environment variables for the build
+      - name: Set environment variables
         run: |
           echo "OPENSSL_DIR=/usr/local/aarch64-musl" >> $GITHUB_ENV
           echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
@@ -87,20 +89,20 @@ jobs:
       - name: Install cargo-zigbuild
         uses: taiki-e/install-action@cargo-zigbuild
 
-      - name: Build arti (default features, fully static)
+      - name: Build arti (default features)
         env:
           CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
         run: |
           cargo zigbuild --release --target ${{ matrix.target }} -p arti
 
-      - name: Package binary
+      - name: Package
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/arti dist/${{ matrix.name }}
           chmod +x dist/${{ matrix.name }}
           file dist/${{ matrix.name }}
-          ldd dist/${{ matrix.name }} || echo "Fully static binary – no dynamic deps"
+          ldd dist/${{ matrix.name }} || echo "Fully static binary"
 
       - uses: actions/upload-artifact@v4
         with:
