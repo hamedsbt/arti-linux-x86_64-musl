@@ -47,22 +47,24 @@ jobs:
       - name: Install cargo-zigbuild
         uses: taiki-e/install-action@cargo-zigbuild
 
-      - name: Build Arti binary only
+      - name: Build Arti (rustls + static SQLite)
         env:
           CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+          SQLITE3_STATIC: 1
+          RUSTFLAGS: "-C target-feature=-crt-static"  # optional, helps with musl
         run: |
-          # Build ONLY the arti binary, not the whole workspace
-          cargo zigbuild --release --target ${{ matrix.target }} -p arti
+          cargo zigbuild --release --target ${{ matrix.target }} -p arti \
+            --no-default-features \
+            --features arti-client,rustls,static-sqlite3
 
       - name: Package
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/arti dist/${{ matrix.name }}
           chmod +x dist/${{ matrix.name }}
-          # Verify binary info
           file dist/${{ matrix.name }}
-          ldd dist/${{ matrix.name }} || echo "Static binary (no dynamic dependencies)"
+          ldd dist/${{ matrix.name }} || echo "Fully static binary"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -82,14 +84,11 @@ jobs:
           merge-multiple: true
 
       - name: List files
-        run: |
-          echo "FILES:"
-          find dist -type f
+        run: find dist -type f
 
       - name: Create Release and Upload Binary
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: |
-            dist/arti-aarch64-musl
+          files: dist/arti-aarch64-musl
           generate_release_notes: true
