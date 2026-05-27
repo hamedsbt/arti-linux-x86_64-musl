@@ -39,7 +39,31 @@ jobs:
       - name: Install cross-compilation toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu perl
+          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu make perl
+
+      - name: Build OpenSSL for aarch64-musl
+        run: |
+          # Download and extract OpenSSL source
+          wget https://www.openssl.org/source/openssl-3.0.13.tar.gz
+          tar xzf openssl-3.0.13.tar.gz
+          cd openssl-3.0.13
+          
+          # Configure for aarch64-linux-musl
+          CC=aarch64-linux-gnu-gcc \
+          AR=aarch64-linux-gnu-ar \
+          RANLIB=aarch64-linux-gnu-ranlib \
+          ./Configure linux-aarch64 \
+            no-shared \
+            --prefix=/usr/local/aarch64-linux-musl \
+            --openssldir=/usr/local/aarch64-linux-musl/ssl
+          
+          # Build and install
+          make -j$(nproc)
+          sudo make install
+          
+          # Set environment variables for later steps
+          echo "OPENSSL_DIR=/usr/local/aarch64-linux-musl" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/local/aarch64-linux-musl/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -47,12 +71,13 @@ jobs:
       - name: Install cargo-zigbuild
         uses: taiki-e/install-action@cargo-zigbuild
 
-      - name: Build (vendored OpenSSL)
+      - name: Build
         env:
           CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-          OPENSSL_SYS_VENDOR: 1
+          OPENSSL_DIR: /usr/local/aarch64-linux-musl
           OPENSSL_STATIC: 1
+          PKG_CONFIG_ALLOW_CROSS: 1
         run: cargo zigbuild --release --target ${{ matrix.target }}
 
       - name: Package
