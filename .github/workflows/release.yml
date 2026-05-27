@@ -23,6 +23,7 @@ jobs:
         include:
           - target: aarch64-unknown-linux-musl
             name: arti-aarch64-musl
+            docker_tag: aarch64-musl-nightly   # known working tag
 
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +34,7 @@ jobs:
             -v ${{ github.workspace }}:/volume \
             -w /volume \
             -e CARGO_NET_GIT_FETCH_WITH_CLI=true \
-            blackdex/rust-musl:stable \
+            blackdex/rust-musl:${{ matrix.docker_tag }} \
             cargo build --release --target ${{ matrix.target }} -p arti
 
       - name: Upload artifact
