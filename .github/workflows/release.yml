@@ -16,27 +16,27 @@ permissions:
 
 jobs:
   build:
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
             name: arti-aarch64-musl
-
-    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build for ${{ matrix.target }}
-        uses: houseabsolute/actions-rust-cross@v1
-        with:
-          target: ${{ matrix.target }}
-          args: "--release -p arti"
-          strip: true
+      - name: Build in blackdex/rust-musl container
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/volume \
+            -w /volume \
+            -e CARGO_NET_GIT_FETCH_WITH_CLI=true \
+            blackdex/rust-musl:stable \
+            cargo build --release --target ${{ matrix.target }} -p arti
 
-      - name: Upload Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
@@ -54,10 +54,11 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Rename Binary (optional)
+      - name: Rename binary
         run: |
           mv dist/arti dist/arti-aarch64-musl
-          ls -la dist/
+          chmod +x dist/arti-aarch64-musl
+          file dist/arti-aarch64-musl
 
       - name: Create Release and Upload
         uses: softprops/action-gh-release@v2
