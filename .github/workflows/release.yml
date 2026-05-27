@@ -25,7 +25,7 @@ jobs:
         include:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            name: arti-linux-aarch64-musl
+            name: arti-aarch64-musl
 
     runs-on: ${{ matrix.os }}
 
@@ -39,31 +39,7 @@ jobs:
       - name: Install cross-compilation toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu make perl
-
-      - name: Build OpenSSL for aarch64-musl
-        run: |
-          # Download and extract OpenSSL source
-          wget https://www.openssl.org/source/openssl-3.0.13.tar.gz
-          tar xzf openssl-3.0.13.tar.gz
-          cd openssl-3.0.13
-          
-          # Configure for aarch64-linux-musl
-          CC=aarch64-linux-gnu-gcc \
-          AR=aarch64-linux-gnu-ar \
-          RANLIB=aarch64-linux-gnu-ranlib \
-          ./Configure linux-aarch64 \
-            no-shared \
-            --prefix=/usr/local/aarch64-linux-musl \
-            --openssldir=/usr/local/aarch64-linux-musl/ssl
-          
-          # Build and install
-          make -j$(nproc)
-          sudo make install
-          
-          # Set environment variables for later steps
-          echo "OPENSSL_DIR=/usr/local/aarch64-linux-musl" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/local/aarch64-linux-musl/lib/pkgconfig" >> $GITHUB_ENV
+          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -71,20 +47,22 @@ jobs:
       - name: Install cargo-zigbuild
         uses: taiki-e/install-action@cargo-zigbuild
 
-      - name: Build
+      - name: Build Arti binary only
         env:
           CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-          OPENSSL_DIR: /usr/local/aarch64-linux-musl
-          OPENSSL_STATIC: 1
-          PKG_CONFIG_ALLOW_CROSS: 1
-        run: cargo zigbuild --release --target ${{ matrix.target }}
+        run: |
+          # Build ONLY the arti binary, not the whole workspace
+          cargo zigbuild --release --target ${{ matrix.target }} -p arti
 
       - name: Package
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/arti dist/${{ matrix.name }}
           chmod +x dist/${{ matrix.name }}
+          # Verify binary info
+          file dist/${{ matrix.name }}
+          ldd dist/${{ matrix.name }} || echo "Static binary (no dynamic dependencies)"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -113,5 +91,5 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            dist/arti-linux-aarch64-musl
+            dist/arti-aarch64-musl
           generate_release_notes: true
