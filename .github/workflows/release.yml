@@ -2,13 +2,10 @@ name: release
 
 on:
   push:
-    branches:
-      - main
-    tags:
-      - 'v*'
+    branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 env:
@@ -36,10 +33,53 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation toolchain
+      - name: Install cross‑compilation tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
+          sudo apt-get install -y \
+            musl-tools gcc-aarch64-linux-gnu \
+            make perl wget
+
+      - name: Build SQLite (static, aarch64-musl)
+        run: |
+          cd /tmp
+          wget -q https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz
+          tar xzf sqlite-autoconf-3460100.tar.gz
+          cd sqlite-autoconf-3460100
+          CC=aarch64-linux-gnu-gcc \
+          AR=aarch64-linux-gnu-ar \
+          RANLIB=aarch64-linux-gnu-ranlib \
+          ./configure \
+            --host=aarch64-linux-musl \
+            --prefix=/usr/local/aarch64-musl \
+            --enable-static --disable-shared
+          make -j$(nproc)
+          sudo make install
+
+      - name: Build OpenSSL (static, aarch64-musl)
+        run: |
+          cd /tmp
+          wget -q https://www.openssl.org/source/openssl-3.0.13.tar.gz
+          tar xzf openssl-3.0.13.tar.gz
+          cd openssl-3.0.13
+          CC=aarch64-linux-gnu-gcc \
+          AR=aarch64-linux-gnu-ar \
+          RANLIB=aarch64-linux-gnu-ranlib \
+          ./Configure linux-aarch64 \
+            no-shared \
+            --prefix=/usr/local/aarch64-musl \
+            --openssldir=/usr/local/aarch64-musl/ssl
+          make -j$(nproc)
+          sudo make install
+
+      - name: Set environment variables for the build
+        run: |
+          echo "OPENSSL_DIR=/usr/local/aarch64-musl" >> $GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
+          echo "SQLITE3_LIB_DIR=/usr/local/aarch64-musl/lib" >> $GITHUB_ENV
+          echo "SQLITE3_INCLUDE_DIR=/usr/local/aarch64-musl/include" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/local/aarch64-musl/lib/pkgconfig" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -47,24 +87,20 @@ jobs:
       - name: Install cargo-zigbuild
         uses: taiki-e/install-action@cargo-zigbuild
 
-      - name: Build Arti (rustls + static SQLite)
+      - name: Build arti (default features, fully static)
         env:
           CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-          SQLITE3_STATIC: 1
-          RUSTFLAGS: "-C target-feature=-crt-static"  # optional, helps with musl
         run: |
-          cargo zigbuild --release --target ${{ matrix.target }} -p arti \
-            --no-default-features \
-            --features arti-client,rustls,static-sqlite3
+          cargo zigbuild --release --target ${{ matrix.target }} -p arti
 
-      - name: Package
+      - name: Package binary
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/arti dist/${{ matrix.name }}
           chmod +x dist/${{ matrix.name }}
           file dist/${{ matrix.name }}
-          ldd dist/${{ matrix.name }} || echo "Fully static binary"
+          ldd dist/${{ matrix.name }} || echo "Fully static binary – no dynamic deps"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -76,17 +112,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-
       - name: List files
         run: find dist -type f
-
-      - name: Create Release and Upload Binary
+      - name: Create Release and Upload
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
