@@ -55,9 +55,11 @@ jobs:
           - target: armv7-linux-androideabi
             name: arti-android-armv7
             api: 30
+            openssl_arch: android-arm
           - target: aarch64-linux-android
             name: arti-android-arm64
             api: 30
+            openssl_arch: android-arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -72,15 +74,42 @@ jobs:
         with:
           ndk-version: r26d
 
+      - name: Build OpenSSL for Android
+        run: |
+          cd /tmp
+          wget https://www.openssl.org/source/openssl-3.0.13.tar.gz
+          tar xzf openssl-3.0.13.tar.gz
+          cd openssl-3.0.13
+          
+          export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          export AR=llvm-ar
+          export RANLIB=llvm-ranlib
+          
+          # Set the appropriate CC for each architecture
+          if [ "${{ matrix.target }}" = "armv7-linux-androideabi" ]; then
+            export CC=armv7a-linux-androideabi${{ matrix.api }}-clang
+          else
+            export CC=aarch64-linux-android${{ matrix.api }}-clang
+          fi
+          
+          ./Configure ${{ matrix.openssl_arch }} \
+            no-shared \
+            --prefix=$ANDROID_NDK_HOME/sysroot/usr \
+            --openssldir=$ANDROID_NDK_HOME/sysroot/usr/ssl
+          
+          make -j$(nproc)
+          make install
+          
+          echo "OPENSSL_DIR=$ANDROID_NDK_HOME/sysroot/usr" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
-      - name: Build with rustls (no OpenSSL dependency)
+      - name: Build with cargo-ndk (default features)
         run: |
           cargo ndk --target ${{ matrix.target }} --platform ${{ matrix.api }} \
-            build --release -p arti \
-            --no-default-features \
-            --features=arti-client,rustls,static-sqlite3,tokio,native-certs
+            build --release -p arti
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -105,7 +134,7 @@ jobs:
           cd dist
           chmod +x * || true
           
-          # Rename files to have clean names without path issues
+          # Rename files to have clean names
           for f in *; do
             case "$f" in
               *"arti-linux-aarch64-musl"*)
