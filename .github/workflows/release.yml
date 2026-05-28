@@ -54,11 +54,9 @@ jobs:
         include:
           - target: armv7-linux-androideabi
             name: arti-android-armv7
-            ndk_arch: arm
             api: 30
           - target: aarch64-linux-android
             name: arti-android-arm64
-            ndk_arch: arm64
             api: 30
 
     steps:
@@ -77,10 +75,12 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
-      - name: Build with cargo-ndk (full features)
+      - name: Build with rustls (no OpenSSL dependency)
         run: |
           cargo ndk --target ${{ matrix.target }} --platform ${{ matrix.api }} \
-            build --release -p arti --features=full
+            build --release -p arti \
+            --no-default-features \
+            --features=arti-client,rustls,static-sqlite3,tokio,native-certs
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -102,18 +102,26 @@ jobs:
 
       - name: Prepare binaries
         run: |
-          chmod +x dist/* || true
-          # Rename to include platform in name
-          for f in dist/*; do
-            if [[ "$f" == *"arti-linux-aarch64-musl"* ]]; then
-              mv "$f" dist/arti-linux-aarch64-musl
-            elif [[ "$f" == *"arti-android-armv7"* ]]; then
-              mv "$f" dist/arti-android-armv7
-            elif [[ "$f" == *"arti-android-arm64"* ]]; then
-              mv "$f" dist/arti-android-arm64
-            fi
+          cd dist
+          chmod +x * || true
+          
+          # Rename files to have clean names without path issues
+          for f in *; do
+            case "$f" in
+              *"arti-linux-aarch64-musl"*)
+                mv "$f" arti-linux-aarch64-musl
+                ;;
+              *"arti-android-armv7"*)
+                mv "$f" arti-android-armv7
+                ;;
+              *"arti-android-arm64"*)
+                mv "$f" arti-android-arm64
+                ;;
+            esac
           done
-          ls -la dist/
+          
+          ls -la
+          file * || true
 
       - name: Create Release and Upload
         uses: softprops/action-gh-release@v2
