@@ -1,9 +1,4 @@
 name: release
-
-env:
-  BUILD_AARCH64_MUSL: false
-  BUILD_ANDROID_ARM7: true
-  BUILD_ANDROID_ARM8: false
   
 on:
   push:
@@ -29,7 +24,6 @@ jobs:
           - target: aarch64-unknown-linux-musl
             name: arti-linux-aarch64-musl
             docker_tag: aarch64-musl-nightly
-            skip: env.BUILD_AARCH64_MUSL == false
 
     steps:
       - uses: actions/checkout@v4
@@ -63,13 +57,11 @@ jobs:
             api: 30
             openssl_arch: android-arm
             ndk_triple: armv7a-linux-androideabi
-            skip: env.BUILD_ANDROID_ARM7 == false
           - target: aarch64-linux-android
             name: arti-android-arm64
             api: 30
             openssl_arch: android-arm64
             ndk_triple: aarch64-linux-android
-            skip: env.BUILD_ANDROID_ARM7 == false
 
     steps:
       - uses: actions/checkout@v4
