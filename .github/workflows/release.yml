@@ -1,5 +1,10 @@
 name: release
 
+env:
+  BUILD_AARCH64_MUSL: false
+  BUILD_ANDROID_ARM7: true
+  BUILD_ANDROID_ARM8: false
+  
 on:
   push:
     branches:
@@ -18,12 +23,13 @@ jobs:
   build-musl:
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - target: aarch64-unknown-linux-musl
             name: arti-linux-aarch64-musl
             docker_tag: aarch64-musl-nightly
+            skip: env.BUILD_AARCH64_MUSL == false
 
     steps:
       - uses: actions/checkout@v4
@@ -49,17 +55,21 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - target: armv7-linux-androideabi
             name: arti-android-armv7
             api: 30
             openssl_arch: android-arm
+            ndk_triple: armv7a-linux-androideabi
+            skip: env.BUILD_ANDROID_ARM7 == false
           - target: aarch64-linux-android
             name: arti-android-arm64
             api: 30
             openssl_arch: android-arm64
+            ndk_triple: aarch64-linux-android
+            skip: env.BUILD_ANDROID_ARM7 == false
 
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +84,35 @@ jobs:
         with:
           ndk-version: r26d
 
+      - name: Get NDK path
+        run: |
+          echo "NDK_PATH=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+          echo "TOOLCHAIN_PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
+
+      - name: Build SQLite for Android
+        run: |
+          cd /tmp
+          wget https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz
+          tar xzf sqlite-autoconf-3460100.tar.gz
+          cd sqlite-autoconf-3460100
+          
+          export PATH=$TOOLCHAIN_PATH:$PATH
+          export CC=${{ matrix.ndk_triple }}${{ matrix.api }}-clang
+          export AR=llvm-ar
+          export RANLIB=llvm-ranlib
+          
+          ./configure \
+            --host=${{ matrix.ndk_triple }} \
+            --prefix=$NDK_PATH/sysroot/usr \
+            --enable-static \
+            --disable-shared
+          
+          make -j$(nproc)
+          make install
+          
+          echo "SQLITE3_LIB_DIR=$NDK_PATH/sysroot/usr/lib" >> $GITHUB_ENV
+          echo "SQLITE3_INCLUDE_DIR=$NDK_PATH/sysroot/usr/include" >> $GITHUB_ENV
+
       - name: Build OpenSSL for Android
         run: |
           cd /tmp
@@ -81,32 +120,29 @@ jobs:
           tar xzf openssl-3.0.13.tar.gz
           cd openssl-3.0.13
           
-          export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          export PATH=$TOOLCHAIN_PATH:$PATH
           export AR=llvm-ar
           export RANLIB=llvm-ranlib
-          
-          # Set the appropriate CC for each architecture
-          if [ "${{ matrix.target }}" = "armv7-linux-androideabi" ]; then
-            export CC=armv7a-linux-androideabi${{ matrix.api }}-clang
-          else
-            export CC=aarch64-linux-android${{ matrix.api }}-clang
-          fi
+          export CC=${{ matrix.ndk_triple }}${{ matrix.api }}-clang
           
           ./Configure ${{ matrix.openssl_arch }} \
             no-shared \
-            --prefix=$ANDROID_NDK_HOME/sysroot/usr \
-            --openssldir=$ANDROID_NDK_HOME/sysroot/usr/ssl
+            --prefix=$NDK_PATH/sysroot/usr \
+            --openssldir=$NDK_PATH/sysroot/usr/ssl
           
           make -j$(nproc)
           make install
           
-          echo "OPENSSL_DIR=$ANDROID_NDK_HOME/sysroot/usr" >> $GITHUB_ENV
+          echo "OPENSSL_DIR=$NDK_PATH/sysroot/usr" >> $GITHUB_ENV
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
-      - name: Build with cargo-ndk (default features)
+      - name: Build with cargo-ndk
+        env:
+          OPENSSL_STATIC: 1
+          SQLITE3_STATIC: 1
         run: |
           cargo ndk --target ${{ matrix.target }} --platform ${{ matrix.api }} \
             build --release -p arti
